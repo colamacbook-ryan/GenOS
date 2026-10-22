@@ -1,0 +1,24 @@
+{
+  "package": "@gen/chassis-kernel",
+  "name": "Kernel & Plugin Manager",
+  "version": "2.2.0",
+  "layer": "chassis",
+  "entry": null,
+  "description": "Nạp, bật/tắt nóng, cách ly lỗi và circuit breaker cho mọi plugin.",
+  "permissions": [],
+  "events": {
+    "subscribe": [],
+    "publish": []
+  },
+  "settings_schema": {},
+  "sandbox": {
+    "mode": "inprocess",
+    "memory_mb": 512,
+    "timeout_s": 30,
+    "net": "internal"
+  },
+  "dependencies": {},
+  "load_order": 1,
+  "removable": false,
+  "can_disable": false
+}

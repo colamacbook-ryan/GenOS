@@ -1,0 +1,46 @@
+/* ── Tài khoản của tôi (v0.1.19) ───────────────────────────────────────── */
+.acct-grid {
+  display: grid; gap: 16px; align-items: start;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+  max-width: 1080px;
+}
+.acct-sessions { grid-column: 1 / -1; }
+.acct-form { display: flex; flex-direction: column; gap: 14px; }
+.acct-form__error { font-size: 11px; color: var(--color-bad); margin-top: -6px; }
+.acct-form__error:empty { display: none; }
+.acct-form__actions { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.login-card .acct-form__actions { align-items: stretch; }
+.acct-force { width: min(420px, 100%); }
+.acct-force .screen-desc code { padding: 1px 5px; border-radius: 4px; background: var(--color-neutral-900, rgba(0,0,0,.3)); color: var(--color-accent-300); }
+
+.acct-session-list { list-style: none; margin: 0; padding: 0; }
+.acct-session {
+  display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+  border-bottom: 1px solid var(--color-divider);
+}
+.acct-session:last-child { border-bottom: none; }
+.acct-session__icon {
+  width: 30px; height: 30px; flex: none; display: grid; place-items: center;
+  border-radius: var(--radius-md); border: 1px solid var(--color-neutral-800); color: var(--color-neutral-400);
+}
+.acct-session[data-current] .acct-session__icon { color: var(--color-accent-300); border-color: var(--color-accent-800); }
+.acct-session__main { flex: 1; min-width: 0; }
+.acct-session__title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; color: var(--color-text); }
+.acct-session__meta {
+  margin-top: 3px; font-size: 10.5px; color: var(--color-neutral-500); font-family: var(--font-mono);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+@media (max-width: 560px) {
+  .acct-session__meta { white-space: normal; }
+}
+
+/* v0.1.22 — Trợ giúp / Giới thiệu (Đợt B3) */
+.help .summary { grid-template-columns: 110px minmax(0, 1fr); }
+.help-text { margin: 0 0 10px; font-size: 12.5px; line-height: 1.6; color: var(--color-neutral-300); }
+.help-examples { margin: 0 0 12px; padding-left: 18px; font-size: 12px; line-height: 1.8; color: var(--color-neutral-400); }
+.help-link { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
+.help-cmds { list-style: none; margin: 0; padding: 0; }
+.help-cmds li { display: flex; flex-direction: column; gap: 4px; padding: 10px 16px; border-top: 1px solid var(--color-divider); font-size: 12px; color: var(--color-neutral-400); }
+.help-cmds li:first-child { border-top: 0; }
+.help-cmds code { align-self: flex-start; padding: 3px 8px; border-radius: 5px; background: var(--color-neutral-900, rgba(0,0,0,.3)); color: var(--color-accent-300); font-size: 12px; }
+.help-inline-icon { display: inline-flex; vertical-align: -2px; color: var(--color-accent-300); }

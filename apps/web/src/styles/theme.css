@@ -1,0 +1,61 @@
+/* v0.1.23 (Đợt B7) — giao diện sáng/tối.
+ *
+ * Mặc định (và `data-theme="dark"`) dùng nguyên bộ Nocturne tối ở packages/tokens/tokens.css — thiết kế gốc không
+ * đổi một điểm ảnh. `data-theme="light"` (đặt trên <html> bởi src/lib/theme.ts, hoặc sớm hơn bởi đoạn script trong
+ * index.html để không nháy) ghi đè CÙNG các biến đó bằng bảng màu sáng; mọi component chỉ đọc biến nên tự đổi theo.
+ * Thang neutral/accent đảo chiều giữ đúng vai trò: số nhỏ = gần màu chữ, số lớn = gần màu nền.
+ */
+:root[data-theme='light'] {
+  color-scheme: light;
+  --color-bg: #f5f6fa;
+  --rail-bg: #eceef5;
+  --color-surface: #ffffff;
+  --surface-raised: #fafbfe;
+  --row-hover: #eceef4;
+  --nav-active: #e0e3f0;
+  --nav-hover: #e7e9f2;
+  --color-text: #1b1d27;
+  --color-divider: rgba(27, 29, 39, 0.14);
+
+  --color-neutral-100: #1b1d27;
+  --color-neutral-200: #2a2d3a;
+  --color-neutral-300: #3b3f4f;
+  --color-neutral-400: #50546a;
+  --color-neutral-500: #62667a;
+  --color-neutral-600: #858a9d;
+  --color-neutral-700: #a4a8b8; /* chỉ icon/caret/viền — như bản tối */
+  --color-neutral-800: #d1d4df;
+  --color-neutral-900: #e8eaf1;
+
+  --color-accent: #6a5dc4;
+  --color-accent-2: #7a73b8;
+  --color-accent-100: #211d38;
+  --color-accent-200: #332c5c;
+  --color-accent-300: #4f4591;
+  --color-accent-400: #5b50a8;
+  --color-accent-500: #6a5dc4;
+  --color-accent-600: #8b80d6;
+  --color-accent-700: #b1a8f0;
+  --color-accent-800: #d3cdfa;
+  --color-accent-900: #ece9fe;
+
+  --color-ok: oklch(0.5 0.12 162);
+  --color-warn: oklch(0.58 0.13 70);
+  --color-bad: oklch(0.53 0.19 24);
+  --color-ok-tint: oklch(0.6 0.12 162 / 0.14);
+  --color-warn-tint: oklch(0.75 0.13 82 / 0.22);
+  --color-bad-tint: oklch(0.62 0.19 24 / 0.13);
+  --color-warn-icon: oklch(0.6 0.13 75);
+  --color-domain-business: oklch(0.5 0.12 162);
+  --color-domain-tech: #5b50a8;
+
+  --shadow-sm: 0 0 0 1px #d1d4df;
+  --shadow-md: 0 0 0 1px #d1d4df, 0 6px 18px rgba(20, 22, 40, 0.12);
+  --shadow-lg: 0 0 0 1px #b8bccb, 0 16px 40px rgba(20, 22, 40, 0.18);
+  --glow-accent: 0 0 14px -6px var(--color-accent);
+  --rule: #d6d9e4;
+  --rule-nav-children: #d6d9e4;
+  --scrollbar-thumb: #c4c8d5;
+}
+
+:root[data-theme='dark'] { color-scheme: dark; }

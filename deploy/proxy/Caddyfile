@@ -1,0 +1,41 @@
+# Cổng duy nhất ra ngoài: 8443 (HTTPS, chứng chỉ nội bộ). api/web/db/redis chỉ nằm trong mạng compose.
+{
+	auto_https disable_redirects
+	# Trình duyệt mở bằng IP (vd https://192.168.1.20:8443 — `genh remote lan` không --name) KHÔNG gửi SNI; thiếu dòng
+	# này certmagic lấy IP cục bộ của kết nối (IP container 172.x) để chọn chứng chỉ ⇒ không khớp, bắt tay TLS hỏng.
+	default_sni {$GH_SITE_ADDRESS:localhost}
+}
+
+# Giữ `localhost`: genh gọi proxy bằng https://localhost:<cổng> (ops.ProxyHost — ready, tự cập nhật, trực canh).
+# GH_SITE_ADDRESS là tên Tailscale/Cloudflare/LAN để Caddy khớp Host khi đi qua proxy ngoài (genh remote ghi vào .env).
+localhost:8443, {$GH_SITE_ADDRESS:127.0.0.1}:8443 {
+	tls internal
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		# `?`: api tự đặt SAMEORIGIN cho riêng /system/offsite/portable (khung tải cùng gốc đọc được trang lỗi, F-12).
+		?X-Frame-Options "DENY"
+		Referrer-Policy "same-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		# Chỉ đặt khi upstream CHƯA có (`?`): giữ CSP riêng của tệp tài liệu từ api (sandbox / chặn mã, F-5).
+		?Content-Security-Policy "default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' wss://{http.request.hostport}; frame-ancestors 'none'"
+		-Server
+	}
+
+	handle /api/* {
+		reverse_proxy api:8000 {
+			# Caddy không tin proxy nào ⇒ tự ghi đè X-Forwarded-For bằng IP kết nối (cổng 127.0.0.1: IP gateway chung
+			# cả tổ chức). Chép nguyên XFF khách gửi sang header riêng (ghi đè giá trị khách tự đặt) để api lấy IP
+			# thật do tailscaled/cloudflared nối vào — api CHỈ tin khi GH_BIND_ADDR=127.0.0.1 (gh/auth/deps.py).
+			header_up X-Gh-Upstream-Xff {http.request.header.X-Forwarded-For}
+		}
+	}
+	handle {
+		# Bỏ CSP của nginx (web) để trình duyệt chỉ nhận MỘT CSP — của Caddy (lớp quyết định, có wss://host).
+		reverse_proxy web:8080 {
+			header_down -Content-Security-Policy
+		}
+	}
+}

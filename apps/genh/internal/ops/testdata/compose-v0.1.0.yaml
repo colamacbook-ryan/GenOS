@@ -1,0 +1,138 @@
+# Gen-Harness — `docker compose -f deploy/compose.yaml --env-file .env up -d` (hoặc `make up`).
+# Chỉ proxy mở cổng ra ngoài (8443). Bí mật: khoá master nằm ở ./secrets/gh_master_key (Docker secret).
+name: gen-harness
+
+x-app-env: &app-env
+  GH_ENV: ${GH_ENV:-production}
+  GH_PUBLIC_URL: ${GH_PUBLIC_URL:-https://localhost:8443}
+  GH_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-gh}:${POSTGRES_PASSWORD:?đặt POSTGRES_PASSWORD trong .env}@db:5432/${POSTGRES_DB:-gen_harness}
+  GH_REDIS_URL: redis://redis:6379/0
+  GH_MASTER_KEY_FILE: /run/secrets/gh_master_key
+  GH_BRIDGE_KEY_FILE: /run/secrets/gh_bridge_key
+  GH_SETUP_TOKEN: ${GH_SETUP_TOKEN:-}
+
+services:
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports: ["${GH_PORT:-8443}:8443"]
+    environment:
+      GH_SITE_ADDRESS: ${GH_SITE_ADDRESS:-localhost}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      api: { condition: service_healthy }
+      web: { condition: service_healthy }
+
+  web:
+    build: { context: .., dockerfile: apps/web/Dockerfile }
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+
+  migrate:
+    build: { context: .., dockerfile: deploy/images/api.Dockerfile }
+    command: ["alembic", "upgrade", "heads"]
+    environment: *app-env
+    secrets: [gh_master_key]
+    depends_on:
+      db: { condition: service_healthy }
+    restart: "no"
+
+  api:
+    build: { context: .., dockerfile: deploy/images/api.Dockerfile }
+    restart: unless-stopped
+    environment: *app-env
+    secrets: [gh_master_key, gh_bridge_key]
+    volumes:
+      - agy_state:/var/lib/gh/agy
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+
+  worker:
+    build: { context: .., dockerfile: deploy/images/api.Dockerfile }
+    command: ["arq", "gh.worker.WorkerSettings"]
+    restart: unless-stopped
+    environment: *app-env
+    secrets: [gh_master_key, gh_bridge_key]
+    volumes:
+      - agy_state:/var/lib/gh/agy
+    healthcheck:
+      test: ["CMD", "arq", "--check", "gh.worker.WorkerSettings"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+
+  bridge:
+    build: { context: .., dockerfile: deploy/images/bridge.Dockerfile }
+    restart: unless-stopped
+    environment:
+      GH_REDIS_URL: redis://redis:6379/0
+      GH_BRIDGE_KEY_FILE: /run/secrets/gh_bridge_key
+    # Bridge chỉ nhận khoá bridge (ký permit, mã hoá phiên khi truyền) — không bao giờ nhận khoá master.
+    secrets: [gh_bridge_key]
+    depends_on:
+      redis: { condition: service_healthy }
+
+  db:
+    build: { context: .., dockerfile: deploy/images/db.Dockerfile }
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-gh}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?đặt POSTGRES_PASSWORD trong .env}
+      POSTGRES_DB: ${POSTGRES_DB:-gen_harness}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  objects:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-gh}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?đặt MINIO_ROOT_PASSWORD trong .env}
+    volumes:
+      - object_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+secrets:
+  gh_master_key:
+    file: ../secrets/gh_master_key
+  gh_bridge_key:
+    file: ../secrets/gh_bridge_key
+
+volumes:
+  caddy_data:
+  pg_data:
+  redis_data:
+  object_data:
+  agy_state:

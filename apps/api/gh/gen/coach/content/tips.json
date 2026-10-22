@@ -1,0 +1,86 @@
+[
+  {
+    "key": "telegram_briefing",
+    "topic": "telegram",
+    "when": [
+      "boss.telegram.done",
+      "!telegram.briefing_on"
+    ],
+    "title": "Nhận bản tin sáng chiều trên điện thoại",
+    "body": "Telegram đã nối nhưng bản tin đang tắt. Sếp vào Kết nối › Telegram, bấm Đổi token/chat_id, bật “Gửi bản tin 07:30/17:30” rồi Lưu, em sẽ gửi tóm tắt sáng chiều tới điện thoại.",
+    "try": {
+      "label": "Thử ngay",
+      "target": "system.channels.telegram"
+    }
+  },
+  {
+    "key": "hub_kho_write",
+    "topic": "hub",
+    "when": [
+      "boss.hub.done",
+      "hub.kho_write_missing"
+    ],
+    "title": "Cho Gen ghi vào Kho dữ liệu",
+    "body": "Gen-hub đã nối nhưng chưa cấp quyền ghi Kho. Sếp tick kho_create, kho_update cho token ở Gen-hub rồi bấm Kiểm tra, em sẽ đề xuất ghi Phiên vào Kho. Em chỉ ghi khi Sếp bấm Xác nhận và nhập mã PIN.",
+    "try": {
+      "label": "Thử ngay",
+      "target": "boss_checks.row.kho_write"
+    }
+  },
+  {
+    "key": "memory_empty",
+    "topic": "memory",
+    "when": [
+      "model.bound",
+      "memory.empty"
+    ],
+    "title": "Dặn Gen nhớ sở thích của Sếp",
+    "body": "Gen nhớ còn trống. Sếp nhắn em “nhớ giúp em” kèm một quy ước, ví dụ gọi khách là anh hoặc chị, em sẽ đề xuất thẻ Ghi nhớ. Sếp bấm Xác nhận ghi nhớ thì em đọc quy ước đó mỗi khi trả lời và soạn Bản tin.",
+    "try": {
+      "label": "Thử ngay",
+      "target": "system.brain.memory"
+    }
+  },
+  {
+    "key": "ai_budget",
+    "topic": "ai_cost",
+    "when": [
+      "api_key.present",
+      "!ai_budget.set"
+    ],
+    "title": "Đặt trần chi phí AI mỗi ngày",
+    "body": "Sếp đã có khoá API nhưng chưa đặt trần chi phí. Vào Cài đặt › Bộ não AI, nhập “Trần chi phí mỗi ngày (₫)” rồi bấm Lưu trần. Vượt trần thì em báo chuông, em không tự dừng.",
+    "try": {
+      "label": "Thử ngay",
+      "target": "system.ai_cost"
+    }
+  },
+  {
+    "key": "facebook_reply",
+    "topic": "facebook",
+    "when": [
+      "boss.facebook.done",
+      "!boss.facebook_reply.done"
+    ],
+    "title": "Thử cho Gen trả lời bình luận Facebook",
+    "body": "Facebook đã nối, Sếp thử một lần để chắc em trả lời được bình luận. Sếp nhờ em đọc Facebook, rồi nhờ trả lời một bình luận trên bài của chính Sếp. Em chỉ gửi khi Sếp bấm Xác nhận và nhập mã PIN.",
+    "try": {
+      "label": "Thử ngay",
+      "target": "boss_checks.row.facebook_reply"
+    }
+  },
+  {
+    "key": "offsite_unset",
+    "topic": "offsite",
+    "when": [
+      "backup.scheduled",
+      "!offsite.chosen"
+    ],
+    "title": "Chép bản sao ra ổ ngoài",
+    "body": "Sao lưu mới nằm trong máy chủ, ổ hỏng là mất cả hai nên em khuyên Sếp chép thêm ra ổ ngoài. Sếp cắm ổ USB hoặc NAS vào máy chủ, vào Cài đặt › Sao lưu & cập nhật rồi bấm Chọn nơi lưu bản sao ngoài máy. Từ đó mỗi Chủ nhật máy chủ tự chép dữ liệu ra ổ đó.",
+    "try": {
+      "label": "Thử ngay",
+      "target": "system.offsite.choose"
+    }
+  }
+]

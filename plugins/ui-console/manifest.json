@@ -1,0 +1,26 @@
+{
+  "package": "@gen/ui-console",
+  "name": "Web Console",
+  "version": "2.2.0",
+  "layer": "ui",
+  "entry": null,
+  "description": "Giao diện điều hành Gen-Harness.",
+  "permissions": [],
+  "events": {
+    "subscribe": [],
+    "publish": []
+  },
+  "settings_schema": {},
+  "sandbox": {
+    "mode": "inprocess",
+    "memory_mb": 128,
+    "timeout_s": 30,
+    "net": "internal"
+  },
+  "dependencies": {
+    "@gen/chassis-auth": "^2.2.0"
+  },
+  "load_order": 7,
+  "removable": false,
+  "can_disable": false
+}

@@ -1,0 +1,106 @@
+/* v0.1.59 (G4) — màn Quan hệ (/owner/quan-he) + hồ sơ sống. Qua lính gác thiết kế (apps/web/test/unit/design-guard-v0159.test.ts):
+ * chỉ var(--token) cho màu, chữ chỉ 12 / 14 / 18 / 28px (var(--fs-*)), hai độ đậm (var(--fw-400) / var(--fw-600)), không chữ hoa toàn bộ,
+ * media chỉ (min-width: 760px) / (min-width: 1024px), vùng chạm ≥ 44px (var(--tap)), không cuộn ngang ở 390px. Mobile-first.
+ * Thành phần chung (Card, DataTable, Badge, chip lọc, nút `kit-btn`) nằm ở packages/ui/src/owner-kit.css. */
+
+.rel { min-width: 0; }
+.rel-card { min-width: 0; }
+.rel-side { align-self: start; min-width: 0; }
+
+/* ── Đầu danh sách: số lớn + câu ngắn, rồi nút lọc ── */
+.rel-head { display: flex; flex-direction: column; gap: var(--sp-3); padding: var(--kit-pad); }
+.rel-head__line { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-1) var(--sp-2); margin: 0; min-width: 0; }
+.rel-head__n { font-size: var(--fs-28); line-height: var(--lh-28); font-weight: var(--fw-600); font-variant-numeric: tabular-nums; }
+.rel-head__t { font-size: var(--fs-14); line-height: var(--lh-14); color: var(--text-2); }
+.rel-head__d { flex-basis: 100%; font-size: var(--fs-14); line-height: var(--lh-14); color: var(--text-3); }
+.rel-body { min-width: 0; }
+.rel-body .owner-empty { padding: var(--sp-2) var(--kit-pad) var(--sp-3); }
+.rel-foot {
+  margin: 0; padding: var(--sp-3) var(--kit-pad); border-top: 1px solid var(--border);
+  font-size: var(--fs-12); line-height: var(--lh-12); color: var(--text-3);
+}
+
+/* ── Bảng / danh sách xếp chồng ── */
+.rel-table { min-width: 0; }
+/* Bảng 8/12 cột khá hẹp: bớt đệm ngang, giữ số/ngày trên một dòng, tên khách có chỗ tối thiểu; hai nút xếp dọc trong ô hành động. */
+.rel .rel-table .kit-table th, .rel .rel-table .kit-table td { padding-left: var(--sp-2); padding-right: var(--sp-2); }
+.rel .rel-table .kit-table th:first-child, .rel .rel-table .kit-table td:first-child { padding-left: var(--kit-pad); }
+.rel .rel-table .kit-table th:last-child, .rel .rel-table .kit-table td:last-child { padding-right: var(--kit-pad); }
+.rel .rel-table--care .kit-table td { white-space: nowrap; }
+.rel .rel-table--care .kit-table td:first-child { white-space: normal; min-width: 168px; }
+.rel .rel-table .kit-table .rel-actions { flex-direction: column; align-items: stretch; justify-content: flex-start; }
+.rel .rel-table .kit-table .rel-remind { align-items: stretch; }
+.rel .rel-table .kit-table .rel-remind .kit-btn { width: 100%; }
+.rel-name { display: flex; flex-direction: column; gap: var(--sp-1); min-width: 0; }
+.rel-name__main { font-weight: var(--fw-600); overflow-wrap: anywhere; }
+.rel-name__sub { font-size: var(--fs-12); line-height: var(--lh-12); font-weight: var(--fw-400); color: var(--text-3); overflow-wrap: anywhere; }
+.rel-heat { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-1) var(--sp-2); }
+.rel-heat__v { font-weight: var(--fw-600); font-variant-numeric: tabular-nums; }
+.rel-heat__t { display: inline-flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-12); line-height: var(--lh-12); color: var(--text-3); white-space: nowrap; }
+.rel-muted { color: var(--text-3); }
+.rel-actions { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: flex-end; gap: var(--sp-2); min-width: 0; }
+.rel-remind { display: inline-flex; flex-direction: column; align-items: flex-start; gap: var(--sp-1); min-width: 0; }
+.rel-note { font-size: var(--fs-12); line-height: var(--lh-12); color: var(--text-3); overflow-wrap: anywhere; }
+.rel-note a { color: var(--accent-ink); font-weight: var(--fw-600); }
+.rel-note--bad { color: var(--bad-ink); flex-basis: 100%; }
+.rel-note .inline-error { font-size: var(--fs-12); line-height: var(--lh-12); }
+.rel-bridges__link { margin: 0; padding: var(--sp-1) var(--kit-pad) var(--sp-3); border-top: 1px solid var(--border); }
+
+/* Điện thoại: hai nút của dòng xếp chồng nằm cạnh nhau, cao ≥ 44px */
+.rel .kit-list .kit-row { flex-wrap: wrap; }
+.rel .kit-list .kit-row__main { flex-basis: 100%; }
+.rel .kit-list .kit-row__actions { flex-basis: 100%; padding: 0 var(--kit-pad) var(--sp-3); }
+.rel .kit-list .rel-actions { justify-content: flex-start; }
+.rel .kit-row__k { flex: none; white-space: nowrap; }
+.rel .kit-row__pair { min-width: 0; }
+
+/* ── Hồ sơ sống ── */
+.rel-panel { display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0; padding: var(--kit-pad); color: var(--text); }
+.rel-panel__head { display: flex; align-items: center; gap: var(--sp-3); min-width: 0; }
+.rel-panel__avatar { flex: none; }
+.rel-panel__who { display: flex; flex-direction: column; gap: var(--sp-1); min-width: 0; }
+.rel-panel__name { margin: 0; font-size: var(--fs-18); line-height: var(--lh-18); font-weight: var(--fw-600); overflow-wrap: anywhere; }
+.rel-panel__sub { font-size: var(--fs-12); line-height: var(--lh-12); color: var(--text-3); overflow-wrap: anywhere; }
+.rel-panel__skel { display: flex; flex-direction: column; gap: var(--sp-2); }
+.rel-panel__actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--sp-2); }
+.rel-panel__full { align-self: flex-start; }
+.rel-sheet .kit-sheet__body { padding: 0; }
+.rel-sheet__body { background: transparent; }
+
+.rel-scores { display: flex; flex-direction: column; gap: var(--sp-2); margin: 0; padding: 0; list-style: none; }
+/* Khung hồ sơ hẹp (cột 4/12 ở 1024px ≈ 220px): nhãn giữ tối thiểu ~7rem rồi số + xu hướng xuống dòng, không bị ép
+ * thành chữ dọc từng ký tự (lính gác bố cục `chu-bi-ep`). */
+.rel-score {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-3);
+  min-height: var(--tap); padding: var(--sp-2) var(--sp-3); background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-8);
+}
+.rel-score__label { flex: 1 1 7rem; min-width: 0; color: var(--text-2); overflow-wrap: anywhere; }
+.rel-score__value { flex: none; font-size: var(--fs-18); line-height: var(--lh-18); font-weight: var(--fw-600); font-variant-numeric: tabular-nums; }
+.rel-score__trend {
+  flex: none; display: inline-flex; align-items: center; justify-content: flex-end; gap: var(--sp-1); min-width: 88px;
+  font-size: var(--fs-12); line-height: var(--lh-12); color: var(--text-3); white-space: nowrap;
+}
+.rel-score[data-tone='ok'] .rel-score__trend { color: var(--ok-ink); }
+.rel-score[data-tone='warn'] .rel-score__trend { color: var(--warn-ink); }
+
+.rel-section { display: flex; flex-direction: column; gap: var(--sp-2); min-width: 0; }
+.rel-section__title { margin: 0; font-size: var(--fs-14); line-height: var(--lh-14); font-weight: var(--fw-600); }
+.rel-bullets { display: flex; flex-direction: column; gap: var(--sp-2); margin: 0; padding: 0 0 0 var(--sp-3); }
+.rel-bullets li { overflow-wrap: anywhere; }
+.rel-timeline { display: flex; flex-direction: column; gap: var(--sp-2); margin: 0; padding: 0; list-style: none; }
+.rel-timeline li { display: grid; grid-template-columns: var(--sp-6) minmax(0, 1fr); gap: var(--sp-2); overflow-wrap: anywhere; }
+.rel-timeline__at { font-size: var(--fs-12); line-height: var(--lh-14); color: var(--text-3); }
+.rel-facts { display: flex; flex-direction: column; gap: var(--sp-2); margin: 0; }
+/* Khung hẹp: giá trị (dd) giữ tối thiểu ~7rem, không đủ chỗ thì xuống dòng dưới nhãn thay vì bị ép còn vài ký tự một dòng. */
+.rel-fact { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: var(--sp-1) var(--sp-3); min-width: 0; }
+.rel-fact dt { flex: none; color: var(--text-3); }
+.rel-fact dd { flex: 1 1 7rem; display: flex; flex-direction: column; align-items: flex-end; margin: 0; min-width: 0; text-align: right; overflow-wrap: anywhere; }
+.rel-note-text { margin: 0; overflow-wrap: anywhere; }
+
+@media (min-width: 760px) {
+  .rel-head__d { flex-basis: auto; }
+  .rel-head__d::before { content: '· '; }
+}
+@media (min-width: 1024px) {
+  .rel-panel { padding: var(--sp-4); }
+}

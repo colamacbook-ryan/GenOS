@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="vi"><head><meta charset="utf-8"><title>Hội thoại (trang mẫu)</title></head>
+<body>
+  <!-- Trang MẪU tự viết cho test — không phải HTML thật của Facebook. Không tải gì từ ngoài. -->
+  <div role="main">
+    <h1>Shop Mai</h1>
+    <div id="rows">
+      <div role="row">Mai em giao hàng nhé anh</div>
+    </div>
+    <div contenteditable="true" role="textbox" aria-label="Aa" style="border:1px solid #888;min-height:24px"></div>
+  </div>
+  <script>
+    const box = document.querySelector('[role="textbox"]');
+    box.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      const text = box.innerText.trim();
+      if (!text) return;
+      const r = document.createElement('div');
+      r.setAttribute('role', 'row');
+      r.textContent = text;
+      document.getElementById('rows').appendChild(r);
+      box.innerText = '';
+    });
+  </script>
+</body></html>

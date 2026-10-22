@@ -1,0 +1,557 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  pull_request:
+  # v0.1.33 (F-9) — release.yml gọi lại CHÍNH workflow này thành job `ci` và đưa vào `needs` của bước phát
+  # hành: bản thử (prerelease) chỉ được tạo khi toàn bộ CI ở đây xanh trên đúng commit sắp phát hành.
+  workflow_call:
+    inputs:
+      from_release:
+        type: boolean
+        required: false
+        default: false
+        description: "true khi release.yml gọi"
+
+# Bẫy F-9 bước 5: khi được gọi qua workflow_call, context `github` là của workflow GỌI (release.yml: event
+# push, ref main) → nhóm cũ `ci-${{ github.ref }}` trùng với lượt CI do chính lần push main đó kích hoạt ⇒
+# hai bên huỷ lẫn nhau (Release mất job `ci`, cổng phát hành không bao giờ xanh). Ngoài ra concurrency với
+# cancel-in-progress=false vẫn chỉ giữ MỘT lượt chờ (lượt chờ cũ bị huỷ khi có lượt mới), nên lượt gọi từ
+# Release phải có nhóm riêng theo sha + run_id và không huỷ ai. Khi push/PR, `inputs` rỗng ⇒ hành vi cũ:
+# nhóm theo workflow + event + ref, lượt mới huỷ lượt cũ.
+concurrency:
+  group: ${{ inputs.from_release && format('ci-release-{0}-{1}', github.sha, github.run_id) || format('ci-{0}-{1}-{2}', github.workflow, github.event_name, github.ref) }}
+  cancel-in-progress: ${{ !inputs.from_release }}
+
+# v0.1.48 (F-71): quyền tối thiểu cho mọi job; job nào cần hơn thì nâng cục bộ (hiện chưa có).
+permissions:
+  contents: read
+
+jobs:
+  # ── version ──────────────────────────────────────────────────────────────
+  # Kiểm nhanh tệp VERSION ở gốc repo đúng định dạng — job meta của
+  # release.yml đọc CHÍNH tệp này để tự phát hành khi merge vào main (xem
+  # docs/handoff/05-installer.md mục "Phát hành"); VERSION sai định dạng
+  # phải fail ngay ở PR, không để tới lúc release.yml chạy trên main mới
+  # phát hiện.
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Kiểm VERSION đúng định dạng vMAJOR.MINOR.PATCH[-PRERELEASE]
+        run: |
+          set -euo pipefail
+          if [ ! -f VERSION ]; then
+            echo "::error::thiếu tệp VERSION ở gốc repo" >&2
+            exit 1
+          fi
+          version="$(tr -d '[:space:]' <VERSION)"
+          if ! printf '%s' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "::error::VERSION không đúng định dạng vMAJOR.MINOR.PATCH[-PRERELEASE]: '$version'" >&2
+            exit 1
+          fi
+          echo "VERSION hợp lệ: $version"
+      # v0.1.33 (F-9) — cổng phát hành: script bất biến do gói cong-phat-hanh tạo, kiểm các điều kiện để một
+      # bản chỉ thành bản thử (prerelease) rồi mới được nâng thành bản chính thức (latest) sau E2E cài thật.
+      - name: Kiểm cổng phát hành
+        run: python3 .github/scripts/check_release_gate.py
+      # v0.1.48 (F-44) — bản nhúng trong genh (compose, Caddyfile, seccomp) phải khớp deploy/. Lệch ⇒ CI đỏ (không continue-on-error).
+      - name: Bản nhúng genh khớp deploy/ (compose, Caddyfile, seccomp — F-44)
+        run: python3 .github/scripts/check_embedded_sync.py
+      # v0.1.48 (F-71/F-36) — action ghim SHA, permissions tối thiểu, không ảnh :latest, services có digest.
+      - name: Vệ sinh workflow (F-71/F-36)
+        run: python3 .github/scripts/check_workflow_hygiene.py
+      - name: Test script kiểm cổng phát hành (gỡ từng mắt xích → phải bắt được)
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
+
+  # ── renovate-config ──────────────────────────────────────────────────────
+  # v0.1.48 (sửa sau review): kiểm renovate.json TÁCH khỏi job version. `npx renovate` tải hàng trăm gói npm không
+  # lockfile, nên npm trục trặc không được chặn cổng phát hành: job này KHÔNG chạy khi release.yml gọi (from_release) và
+  # chỉ tải renovate khi renovate.json đổi so với nhánh gốc (PR) / lần đẩy trước (push). ci-ok nhận success hoặc skipped.
+  renovate-config:
+    if: ${{ !inputs.from_release }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with: { fetch-depth: 0 }
+      - name: renovate.json có đổi không
+        id: diff
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          base=""
+          if [ -n "$BASE_REF" ]; then
+            base="origin/$BASE_REF"
+          elif [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
+            && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            base="$BEFORE"
+          fi
+          # Không xác định được mốc so (nhánh mới, push ép…) ⇒ coi như có đổi, kiểm luôn cho chắc.
+          if [ -z "$base" ] || ! git diff --quiet "$base" HEAD -- renovate.json; then
+            echo "changed=true" >>"$GITHUB_OUTPUT"
+            echo "renovate.json đổi so với ${base:-<không rõ mốc>} — kiểm bằng renovate-config-validator."
+          else
+            echo "changed=false" >>"$GITHUB_OUTPUT"
+            echo "renovate.json không đổi so với $base — bỏ qua (không tải renovate)."
+          fi
+      # Node 24: renovate (engines ^24.11).
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        if: steps.diff.outputs.changed == 'true'
+        with: { node-version: "24" }
+      # --no-global: kiểm như cấu hình REPO (mặc định validator coi tệp truyền vào là cấu hình global self-hosted).
+      - name: renovate.json hợp lệ (cấu hình repo)
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          NPM_CONFIG_FETCH_RETRIES: "5"
+          NPM_CONFIG_FETCH_RETRY_MINTIMEOUT: "20000"
+          NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: "120000"
+          NPM_CONFIG_UPDATE_NOTIFIER: "false"
+          NPM_CONFIG_FUND: "false"
+        run: npx --yes --package renovate@44.132.5 -- renovate-config-validator --strict --no-global renovate.json
+
+  api:
+    runs-on: ubuntu-latest
+    # Hai lượt pytest đầy đủ (superuser + gh_app) + build image db + e2e thật rút gọn (v0.1.35, F-14) — chặn treo
+    # vô hạn nếu test kẹt. v0.1.55 thêm ~500 ca (hồ sơ mặc định, Jev, Mặt tiền) ⇒ hai lượt NỐI TIẾP ≈ 47–50 phút, cổng
+    # phát hành v0.1.55 bị huỷ ở phút 48 (run 38075952803); nâng lên 75. v0.1.57: hai lượt chạy SONG SONG trong cùng job
+    # (xem bước "Test song song") ⇒ giữ nguyên tên job `api` (có thể là required check) và timeout 75 làm biên an toàn.
+    # v0.1.66: bộ test ~3400 ca/lượt, Release v0.1.66 quá giờ bước 65' trên runner chậm (run 39072973796) ⇒ job 110', bước 100'.
+    timeout-minutes: 110
+    services:
+      redis:
+        image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+        ports: ["6379:6379"]
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: PostgreSQL 16 + pgvector + pg_partman (cùng image với compose)
+        run: |
+          docker build -f deploy/images/db.Dockerfile -t gh-db .
+          docker run -d --name db -p 5432:5432 -e POSTGRES_PASSWORD=postgres gh-db
+          for _ in $(seq 1 30); do docker exec db pg_isready -U postgres && break; sleep 2; done
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with: { python-version: "3.11", version: "0.12.23" }
+      # v0.1.48 (F-19) — CI cài đúng theo uv.lock: lock lệch pyproject ⇒ đỏ ngay, không âm thầm giải lại phiên bản.
+      - name: uv.lock khớp pyproject.toml
+        working-directory: apps/api
+        run: |
+          uv lock --check || { echo "::error::uv.lock lệch pyproject.toml — chạy \`uv lock\` rồi commit" >&2; exit 1; }
+      - name: Cài phụ thuộc (uv sync --frozen)
+        working-directory: apps/api
+        run: uv sync --frozen --extra dev
+      - name: Lint + typecheck
+        working-directory: apps/api
+        run: .venv/bin/ruff check gh tests && .venv/bin/mypy gh
+      # v0.1.33 (F-13) — tests/conftest.py và container migrate chạy `alembic upgrade heads` (số nhiều) nên tự
+      # nó che lỗi nhiều head (thứ tự migrate không xác định, gh/bundle.py so revision sai). `alembic heads` chỉ
+      # đọc thư mục migrations, không chạy env.py ⇒ không cần DB. Chốt chặn thứ hai: tests/test_migrations_heads.py.
+      - name: Kiểm alembic chỉ có đúng 1 head
+        working-directory: apps/api
+        run: |
+          set -euo pipefail
+          heads="$(.venv/bin/alembic heads)"
+          echo "$heads"
+          n=$(printf '%s\n' "$heads" | grep -c '(head)' || true)
+          [ "$n" -eq 1 ] || { echo "::error::alembic có $n head — phải gộp bằng 'alembic merge' để chỉ còn 1" >&2; exit 1; }
+      # v0.1.48 (F-13) — quét bảo mật (báo cáo, không chặn): kết quả vào step summary, không làm job đỏ.
+      - name: Quét bảo mật pip-audit (apps/api, uv.lock) — báo cáo, không chặn
+        continue-on-error: true
+        run: |
+          (cd apps/api && uv export --frozen --no-dev --no-hashes --no-emit-project -o /tmp/req-api.txt)
+          uvx --from pip-audit==2.10.1 pip-audit -r /tmp/req-api.txt --no-deps --disable-pip -f json -o pip-audit-api.json || true
+          python3 .github/scripts/scan_summary.py --kind pip-audit --title 'pip-audit (apps/api, uv.lock)' pip-audit-api.json >> "$GITHUB_STEP_SUMMARY"
+      # v0.1.57 — hai lượt pytest ĐẦY ĐỦ chạy SONG SONG trong cùng job (trước đây nối tiếp, ≈ 2× thời gian):
+      #   · lượt 1: superuser `postgres` (mặc định);
+      #   · lượt 2 (v0.1.33, F-13): TOÀN BỘ bộ test dưới role ứng dụng gh_app (không superuser, không BYPASSRLS —
+      #     migration 0014), giống `make api-test-app-role`, để GRANT còn thiếu lộ ra ở CI chứ không phải trên máy Owner.
+      # Hai lượt dùng CHUNG một Postgres + một Redis nhưng KHÔNG chung trạng thái: CSDL mẫu riêng (GH_TEST_TEMPLATE;
+      # tên DB từng test có hậu tố ngẫu nhiên), DB Redis riêng (GH_TEST_REDIS) và DB Redis browser riêng
+      # (GH_TEST_BROWSER_REDIS). Bước migrate CSDL mẫu được xếp hàng bằng khoá tư vấn Postgres (tests/conftest.py) vì
+      # `ALTER ROLE gh_app` của migration 0014 dùng chung cả cụm. Mỗi lượt ghi log riêng; lỗi ⇒ in danh sách ca hỏng +
+      # phần đuôi log của lượt đó; log đầy đủ lên artifact. Chờ CẢ HAI lượt xong (không dừng sớm) để một lần chạy lộ hết lỗi.
+      - name: Test song song (superuser + role gh_app; Postgres + Redis thật)
+        # Quá 100 phút ⇒ bước tự thất bại (failure) chứ không đợi job 110' bị huỷ ⇒ bước lưu log phía dưới vẫn chạy được.
+        timeout-minutes: 100
+        working-directory: apps/api
+        env:
+          GH_TEST_PG: postgresql://postgres:postgres@localhost:5432
+        run: |
+          set -uo pipefail
+          logdir="$RUNNER_TEMP/pytest-logs"
+          mkdir -p "$logdir"
+          GH_TEST_REDIS=redis://localhost:6379/15 GH_TEST_BROWSER_REDIS=redis://localhost:6379/13 \
+            .venv/bin/pytest -q >"$logdir/superuser.log" 2>&1 &
+          pid_su=$!
+          GH_TEST_APP_ROLE=1 GH_TEST_TEMPLATE=gh_test_template_app \
+            GH_TEST_REDIS=redis://localhost:6379/14 GH_TEST_BROWSER_REDIS=redis://localhost:6379/12 \
+            .venv/bin/pytest -q >"$logdir/app-role.log" 2>&1 &
+          pid_app=$!
+          # Nhịp tim 5 phút/lần: dòng tiến độ cuối của từng lượt, để log job không im lặng hàng chục phút. Ngủ từng
+          # nhịp 5 giây (không `sleep 300` một lần) để tiến trình mồ côi sau `kill` chết ngay, không giữ stdout của bước.
+          (
+            n=0
+            while kill -0 "$pid_su" 2>/dev/null || kill -0 "$pid_app" 2>/dev/null; do
+              sleep 5
+              n=$((n + 5))
+              if [ $((n % 300)) -eq 0 ]; then
+                for lane in superuser app-role; do
+                  echo "[nhịp tim] $lane: $(tail -n 1 "$logdir/$lane.log" | tail -c 160)"
+                done
+              fi
+            done
+          ) &
+          pid_beat=$!
+          rc_su=0; rc_app=0
+          wait "$pid_su" || rc_su=$?
+          wait "$pid_app" || rc_app=$?
+          kill "$pid_beat" 2>/dev/null || true
+          fail=0
+          for lane in superuser app-role; do
+            if [ "$lane" = superuser ]; then rc=$rc_su; else rc=$rc_app; fi
+            echo "::group::pytest lượt $lane (mã thoát $rc)"
+            if [ "$rc" -eq 0 ]; then
+              tail -n 3 "$logdir/$lane.log"
+            else
+              fail=1
+              grep -E '^(FAILED|ERROR) ' "$logdir/$lane.log" | head -n 60 || true
+              echo "----- đuôi log lượt $lane -----"
+              tail -n 120 "$logdir/$lane.log"
+            fi
+            echo "::endgroup::"
+            if [ "$rc" -ne 0 ]; then
+              echo "::error::pytest lượt $lane đỏ (mã $rc) — xem nhóm log trên và artifact pytest-logs."
+            fi
+          done
+          exit "$fail"
+      # failure() || cancelled(): lượt treo tới biên timeout job (75') bị huỷ chứ không "failure" ⇒ vẫn phải lên artifact.
+      - name: Lưu log pytest khi lỗi
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: pytest-logs-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/pytest-logs
+          retention-days: 7
+          if-no-files-found: ignore
+      # v0.1.35 (F-14) — e2e THẬT rút gọn: api + worker thật trên đúng Postgres (image gh-db) + Redis của job này,
+      # bridge giả + model giả, Chromium thật bấm 4 luồng giao/gán (Hộp thư, Vụ việc, BOT nhóm, Gen đề xuất). Bắt lỗi
+      # kiểu "mock xanh, máy thật hỏng" (id viết cứng, hợp đồng API lệch) — xem docs/reports/phase-5-e2e-live.md.
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with: { node-version: "22", cache: npm }
+      - name: Cài phụ thuộc web (npm ci ở gốc repo)
+        run: npm ci --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000
+      - name: Phiên bản Playwright (khoá cache trình duyệt)
+        id: pw
+        run: echo "version=$(node -p "require('./package-lock.json').packages['node_modules/@playwright/test'].version")" >> "$GITHUB_OUTPUT"
+      - name: Cache trình duyệt Playwright
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: ms-playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
+      - name: Cài Chromium cho Playwright
+        working-directory: apps/web
+        run: npx playwright install --with-deps chromium
+      - name: Công cụ CSDL/Redis cho e2e thật (psql, redis-cli)
+        run: |
+          set -euo pipefail
+          pkgs=()
+          command -v psql >/dev/null || pkgs+=(postgresql-client)
+          command -v redis-cli >/dev/null || pkgs+=(redis-tools)
+          if [ "${#pkgs[@]}" -gt 0 ]; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq "${pkgs[@]}"
+          fi
+          psql --version && redis-cli --version
+      - name: E2E thật rút gọn (4 luồng giao/gán + Gen)
+        working-directory: apps/web
+        timeout-minutes: 8
+        env:
+          LIVE_SPECS: live-ci
+          GH_LIVE_PG: postgresql://postgres:postgres@localhost:5432
+        run: bash e2e-live/run.sh
+      - name: Lưu ảnh + vết e2e thật khi lỗi
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: e2e-live-${{ github.run_attempt }}
+          path: |
+            apps/web/test-results/live-shots
+            apps/web/test-results/live
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # v0.1.29 — browser-worker (apps/browser): Chromium thật trên TRANG MẪU (không gọi facebook.com), Redis thật.
+  browser:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+        ports: ["6379:6379"]
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with: { python-version: "3.11", version: "0.12.23" }
+      - name: uv.lock khớp pyproject.toml
+        working-directory: apps/browser
+        run: |
+          uv lock --check || { echo "::error::uv.lock lệch pyproject.toml — chạy \`uv lock\` rồi commit" >&2; exit 1; }
+      - name: Cài phụ thuộc (uv sync --frozen) + Chromium của Playwright
+        working-directory: apps/browser
+        run: |
+          uv sync --frozen --extra dev
+          .venv/bin/playwright install --with-deps chromium
+      - name: Lint + typecheck
+        working-directory: apps/browser
+        run: .venv/bin/ruff check ghb tests && .venv/bin/mypy ghb
+      - name: Quét bảo mật pip-audit (apps/browser, uv.lock) — báo cáo, không chặn
+        continue-on-error: true
+        run: |
+          (cd apps/browser && uv export --frozen --no-dev --no-hashes --no-emit-project -o /tmp/req-browser.txt)
+          uvx --from pip-audit==2.10.1 pip-audit -r /tmp/req-browser.txt --no-deps --disable-pip -f json -o pip-audit-browser.json || true
+          python3 .github/scripts/scan_summary.py --kind pip-audit --title 'pip-audit (apps/browser, uv.lock)' pip-audit-browser.json >> "$GITHUB_STEP_SUMMARY"
+      - name: Cho phép user namespace không đặc quyền (Ubuntu 24.04 chặn bằng AppArmor — F-85)
+        # Máy Fedora của Sếp không chặn; runner Ubuntu 24.04 chặn mặc định. Không bật được thì `|| true` rồi test
+        # GH_BROWSER_SANDBOX_REQUIRED=1 đỏ — đó là mục đích (không giả xanh).
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Test (Chromium + Redis thật, trang mẫu)
+        working-directory: apps/browser
+        env:
+          GH_TEST_REDIS: redis://localhost:6379/14
+          GH_BROWSER_TESTS_REQUIRED: "1"
+          GH_BROWSER_SANDBOX_REQUIRED: "1"
+        run: .venv/bin/pytest -q
+
+  web:
+    runs-on: ubuntu-latest
+    # Playwright (mock) gồm cả so ảnh với thiết kế (visual.spec.ts) — chặn treo vô hạn nếu dev server kẹt.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with: { node-version: "22", cache: npm }
+      - run: npm ci --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000
+      # v0.1.48 (F-13) — quét bảo mật (báo cáo, không chặn): npm audit cho workspace gốc (web) và apps/bridge.
+      - name: Quét bảo mật npm audit (web + bridge) — báo cáo, không chặn
+        continue-on-error: true
+        run: |
+          npm audit --omit=dev --json > npm-audit-web.json || true
+          (cd apps/bridge && npm audit --omit=dev --json > ../../npm-audit-bridge.json || true)
+          python3 .github/scripts/scan_summary.py --kind npm-audit --title 'npm audit (web, workspace gốc)' npm-audit-web.json >> "$GITHUB_STEP_SUMMARY"
+          python3 .github/scripts/scan_summary.py --kind npm-audit --title 'npm audit (apps/bridge)' npm-audit-bridge.json >> "$GITHUB_STEP_SUMMARY"
+      - run: npm run -w apps/web lint
+      # v0.1.35 (F-1) — script do gói f1 tạo: chặn id giả viết cứng (vd 'u-lan', 'agent-tls') lọt lại vào mã web.
+      - name: Cấm ID giả viết cứng trong apps/web/src (F-1)
+        run: python3 .github/scripts/check_no_fake_ids.py apps/web/src
+      # v0.1.56 — repo công khai, bản phát hành đi tới Owner khác: mã giao đi không được mang địa chỉ Gen-hub / tên riêng của Sếp.
+      # v0.1.57 — quy tắc CHUNG (email phải là example.test/example.com/noreply; địa chỉ `/mcp` phải là <…> hoặc example.*)
+      # nằm trong repo; mẫu RIÊNG (tên miền, tên gọi, email của Sếp) KHÔNG nằm trong repo mà lấy từ secret
+      # GH_PERSONAL_PATTERNS (mỗi dòng một regex). Secret trống (chưa đặt, hoặc PR từ fork) ⇒ chỉ chạy quy tắc chung + cảnh báo.
+      - name: Chống lộ thông tin riêng của Sếp
+        env:
+          GH_PERSONAL_PATTERNS: ${{ secrets.GH_PERSONAL_PATTERNS }}
+        run: python3 .github/scripts/check_no_personal_info.py
+      # v0.1.61 (lưới L5) — thuật ngữ chuẩn của CLAUDE.md (Kho dữ liệu, mã PIN, khoá, API & Model…): chữ cấm mới trong chuỗi
+      # hiển thị làm hỏng CI; hiện trạng nằm trong baseline của terms.json và chỉ được giảm. Route-crawl (lưới L4) chạy trong
+      # job RIÊNG `crawl` (timeout riêng, không kéo job web quá 30 phút), dùng chung terms.json.
+      - name: Kiểm thuật ngữ chuẩn (check_terms.py)
+        run: python3 .github/scripts/check_terms.py
+      - run: npm run -w apps/web typecheck
+      - run: npm run -w apps/web test
+      - run: npm run -w apps/web build
+      - run: npm run -w apps/bridge test
+      # v0.1.33 (F-13) — bộ e2e mock (apps/web/e2e) trước đây chỉ chạy tay. playwright.config.ts tự dựng
+      # `vite --mode mock`; GitHub đặt CI=true ⇒ không dùng lại server có sẵn.
+      - name: Cài Chromium cho Playwright
+        working-directory: apps/web
+        run: npx playwright install --with-deps chromium
+      - name: Playwright (mock)
+        env:
+          E2E_SKIP_CRAWL: "1"     # route-crawl (lưới L4) chạy ở job `crawl` riêng
+        run: npm run -w apps/web test:e2e
+      - name: Lưu báo cáo Playwright khi lỗi
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: playwright-report-${{ github.run_attempt }}
+          path: |
+            apps/web/playwright-report
+            apps/web/test-results
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # v0.1.61 (lưới L4, A13) — Route-crawl duyệt MỌI route ở 390 và 1440px (2 test, mỗi test tối đa 10 phút). Tách khỏi job `web` để:
+  # (1) bộ Playwright cũ (~17 phút của 30) không bị cộng thêm và mất báo cáo khi chạm trần thời gian;
+  # (2) crawl chậm/lỗi có timeout riêng và báo cáo riêng. "MỚI" (vượt baseline) làm đỏ; "DƯ" (baseline cao hơn thực tế) chỉ cảnh báo.
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with: { node-version: "22", cache: npm }
+      - run: npm ci --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000
+      - name: Cài Chromium cho Playwright
+        working-directory: apps/web
+        run: npx playwright install --with-deps chromium
+      - name: Route-crawl (mock)
+        working-directory: apps/web
+        run: npx playwright test e2e/route-crawl-v016x.spec.ts
+      - name: Lưu báo cáo route-crawl khi lỗi
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: crawl-report-${{ github.run_attempt }}
+          path: |
+            apps/web/playwright-report
+            apps/web/test-results
+          retention-days: 7
+          if-no-files-found: ignore
+
+  images:
+    runs-on: ubuntu-latest
+    needs: [api, web, browser, crawl]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Build image api/worker, bridge, web, db, browser
+        run: |
+          # v0.1.48 (F-36) — lỗi mạng tạm thời (kéo ảnh gốc/gói) thì thử lại đúng 1 lần.
+          build() { docker build "$@" || { echo '::warning::build lỗi lần 1 — thử lại sau 30 giây'; sleep 30; docker build "$@"; }; }
+          build --build-arg VERSION="$(tr -d '[:space:]' < VERSION)" -f deploy/images/api.Dockerfile -t gh-api .
+          build -f deploy/images/browser.Dockerfile -t gh-browser .
+          build -f deploy/images/bridge.Dockerfile -t gh-bridge .
+          build -f apps/web/Dockerfile -t gh-web .
+          build -f deploy/images/db.Dockerfile -t gh-db .
+      # v0.1.48 (F-19) — bản build tái lập: gói Python trong ảnh api/browser phải KHỚP uv.lock và hai lần build
+      # (lần 2 --no-cache) phải ra cùng tổ hợp gói. Hợp đồng ảnh: `python`/`python3` trên PATH là venv /opt/venv.
+      - name: 'Tái lập: gói trong ảnh khớp uv.lock qua 2 lần build (F-19)'
+        run: |
+          set -euo pipefail
+          build() { docker build "$@" || { echo '::warning::build lỗi lần 1 — thử lại sau 30 giây'; sleep 30; docker build "$@"; }; }
+          FREEZE_PY='import importlib.metadata as m; print("\n".join(sorted(d.metadata["Name"]+"=="+d.version for d in m.distributions())))'
+          VER="$(tr -d '[:space:]' < VERSION)"
+          docker run --rm --entrypoint python gh-api -c "$FREEZE_PY" > /tmp/freeze-api-1.txt
+          build --no-cache --build-arg VERSION="$VER" -f deploy/images/api.Dockerfile -t gh-api-2 .
+          docker run --rm --entrypoint python gh-api-2 -c "$FREEZE_PY" > /tmp/freeze-api-2.txt
+          python3 .github/scripts/check_image_lock.py --lock apps/api/uv.lock --project gen-harness-api /tmp/freeze-api-1.txt /tmp/freeze-api-2.txt
+          docker run --rm --entrypoint python3 gh-browser -c "$FREEZE_PY" > /tmp/freeze-browser-1.txt
+          build --no-cache -f deploy/images/browser.Dockerfile -t gh-browser-2 .
+          docker run --rm --entrypoint python3 gh-browser-2 -c "$FREEZE_PY" > /tmp/freeze-browser-2.txt
+          python3 .github/scripts/check_image_lock.py --lock apps/browser/uv.lock --project gen-harness-browser /tmp/freeze-browser-1.txt /tmp/freeze-browser-2.txt
+      # Gói R (rà soát v0.1.62) — uv dùng lại wheel `gen-harness-api` cũ từ cache khi pyproject không đổi ⇒ ảnh chạy mã cũ.
+      # Băm mọi *.py của gói `gh` đã cài trong ảnh phải KHỚP băm mã nguồn trong repo (cùng bản sắp xếp C, tránh lệch locale).
+      - name: 'Ảnh api chạy đúng mã gh của commit này (không dùng lại wheel cũ từ cache)'
+        run: |
+          set -euo pipefail
+          hash_py() { find . -name '*.py' -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum; }
+          want="$(cd apps/api/gh && hash_py)"
+          got="$(docker run --rm -w / --entrypoint sh gh-api -c "$(declare -f hash_py); cd /opt/venv/lib/python3.11/site-packages/gh && hash_py")"
+          [ "$want" = "$got" ] || { echo "repo : $want"; echo "ảnh  : $got"; echo '::error::gói gh trong ảnh gh-api KHÁC mã nguồn của commit (wheel cũ từ cache?)'; exit 1; }
+      # v0.1.48 (sửa sau review F-36) — uv không tự sinh .pyc như pip: thiếu UV_COMPILE_BYTECODE=1 thì mọi tiến trình python
+      # (api, worker, migrate, `python -m gh.backup`…) dịch lại cả cây thư viện mỗi lần khởi động. Chạy import chính bằng
+      # đúng user của ảnh (browser: rootfs chỉ-đọc như compose); `python -v` cho biết module nạp từ .pyc hay dịch lại từ .py.
+      - name: 'Ảnh api/browser có sẵn .pyc trong /opt/venv (không dịch lại lúc chạy)'
+        run: |
+          set -euo pipefail
+          for img in gh-api gh-browser; do
+            echo "── $img: .pyc mẫu trong /opt/venv ──"
+            docker run --rm --entrypoint sh "$img" -c 'find /opt/venv -name "*.pyc" | head -n 3'
+          done
+          docker run --rm --entrypoint python gh-api -v -c 'import gh.main' 2>/tmp/pyv-api.txt >/dev/null \
+            || { tail -n 40 /tmp/pyv-api.txt; echo '::error::import gh.main trong ảnh gh-api lỗi'; exit 1; }
+          python3 .github/scripts/check_bytecode.py --title gh-api --prefix /opt/venv/ /tmp/pyv-api.txt
+          docker run --rm --read-only --tmpfs /tmp --entrypoint python3 gh-browser -v -c 'import ghb.worker, ghb.egress' 2>/tmp/pyv-browser.txt >/dev/null \
+            || { tail -n 40 /tmp/pyv-browser.txt; echo '::error::import ghb.worker trong ảnh gh-browser lỗi'; exit 1; }
+          python3 .github/scripts/check_bytecode.py --title gh-browser --prefix /opt/venv/ /tmp/pyv-browser.txt
+      - name: Sandbox Chromium bật trong container browser với đúng tuỳ chọn bảo mật như compose (F-85)
+        run: |
+          set -euo pipefail
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          python3 -c "import json;d=json.load(open('deploy/browser/chromium-seccomp.json'));assert d['defaultAction']"
+          out="$(docker run --rm --init --user pwuser --cap-drop ALL \
+            --security-opt no-new-privileges:true --security-opt "seccomp=$PWD/deploy/browser/chromium-seccomp.json" \
+            --read-only --tmpfs /tmp:size=768m --shm-size 256m \
+            -e GH_BROWSER_SANDBOX=auto -e GH_BROWSER_HEADLESS=0 \
+            gh-browser xvfb-run -a python3 -m ghb.sandbox --probe)"
+          echo "$out"
+          echo "$out" | tail -n 1 | python3 -c "
+          import json,sys
+          r=json.loads(sys.stdin.read())
+          assert r['enabled'] is True, 'Chromium trong container browser KHÔNG bật được sandbox: %s' % r
+          print('OK: sandbox bật trong container (không root, cap_drop ALL, seccomp riêng)')"
+      - name: Ảnh api mang đúng phiên bản (v0.1.36 F-46)
+        run: |
+          want="$(tr -d '[:space:]' < VERSION)"
+          got="$(docker run --rm --entrypoint python gh-api -c 'import gh;print(gh.__version__)')"
+          label="$(docker inspect gh-api --format '{{ index .Config.Labels "org.opencontainers.image.version" }}')"
+          echo "VERSION=$want gh.__version__=$got label=$label"
+          if [ "$got" != "$want" ]; then echo "::error::gh.__version__ trong ảnh là '$got', VERSION là '$want'"; exit 1; fi
+          if [ "$label" != "$want" ]; then echo "::error::LABEL org.opencontainers.image.version là '$label', VERSION là '$want'"; exit 1; fi
+      - name: Kiểm tra compose
+        run: |
+          cp .env.example .env && mkdir -p secrets
+          python3 -c "import os,base64;print(base64.b64encode(os.urandom(32)).decode())" > secrets/gh_master_key
+          python3 -c "import os,base64;print(base64.b64encode(os.urandom(32)).decode())" > secrets/gh_bridge_key
+          python3 -c "import os,base64;print(base64.b64encode(os.urandom(32)).decode())" > secrets/gh_browser_key
+          python3 -c "import os,base64;print(base64.b64encode(os.urandom(32)).decode())" > secrets/gh_agy_key
+          docker run --rm --entrypoint agy gh-api --version
+          docker run --rm --init --read-only --tmpfs /tmp --cap-drop ALL gh-browser python3 -c "import ghb.worker, ghb.egress"
+          docker compose -f deploy/compose.yaml --env-file .env config -q
+      - name: Cổng proxy mặc định chỉ nghe 127.0.0.1 (v0.1.46 F-27)
+        run: |
+          set -euo pipefail
+          # Dùng .env do bước "Kiểm tra compose" tạo; GH_BIND_ADDR lấy từ môi trường (không có trong .env.example).
+          got="$(env -u GH_BIND_ADDR docker compose -f deploy/compose.yaml --env-file .env config --format json | jq -r '.services.proxy.ports[0].host_ip')"
+          echo "host_ip mặc định: $got"
+          [ "$got" = "127.0.0.1" ] || { echo "::error::cổng proxy mặc định phải là 127.0.0.1 (đang '$got') — kiểm GH_BIND_ADDR trong deploy/compose.yaml" >&2; exit 1; }
+          got="$(GH_BIND_ADDR=0.0.0.0 docker compose -f deploy/compose.yaml --env-file .env config --format json | jq -r '.services.proxy.ports[0].host_ip')"
+          echo "host_ip với GH_BIND_ADDR=0.0.0.0: $got"
+          [ "$got" = "0.0.0.0" ] || { echo "::error::GH_BIND_ADDR=0.0.0.0 phải cho host_ip 0.0.0.0 (đang '$got')" >&2; exit 1; }
+      - name: Caddyfile hợp lệ với 3 giá trị GH_SITE_ADDRESS (v0.1.46 F-27)
+        run: |
+          set -euo pipefail
+          # v0.1.48 (F-19): ảnh proxy lấy từ compose (đã ghim digest), không viết cứng ở đây.
+          img="$(docker compose -f deploy/compose.yaml --env-file .env config --format json | jq -r .services.proxy.image)"
+          echo "ảnh proxy: $img"
+          validate() {
+            docker run --rm "$@" -v "$PWD/deploy/proxy/Caddyfile:/etc/caddy/Caddyfile:ro" "$img" \
+              caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile
+          }
+          echo "== GH_SITE_ADDRESS chưa đặt (mặc định 127.0.0.1)"
+          validate
+          for addr in gen-harness.tail1234.ts.net 192.168.1.20; do
+            echo "== GH_SITE_ADDRESS=$addr"
+            validate -e "GH_SITE_ADDRESS=$addr"
+          done
+
+  # ── ci-ok ────────────────────────────────────────────────────────────────
+  # v0.1.33 (F-9/F-13) — job tổng: required check DUY NHẤT của branch protection. Luôn chạy (if: always(),
+  # không lọc đường dẫn) để PR chỉ sửa tài liệu không kẹt "Expected — waiting"; đỏ khi BẤT KỲ job nào phía
+  # trên failure/cancelled/skipped (skipped tính là đỏ: job bị bỏ qua vì job trước nó hỏng thì không được
+  # coi là xanh). Thêm job mới vào ci.yml thì nhớ thêm vào `needs` dưới đây.
+  ci-ok:
+    name: ci-ok
+    runs-on: ubuntu-latest
+    needs: [version, api, browser, web, crawl, images, renovate-config]
+    if: always()
+    steps:
+      - name: Tổng hợp kết quả các job CI
+        env:
+          R_VERSION: ${{ needs.version.result }}
+          R_API: ${{ needs.api.result }}
+          R_BROWSER: ${{ needs.browser.result }}
+          R_WEB: ${{ needs.web.result }}
+          R_CRAWL: ${{ needs.crawl.result }}
+          R_IMAGES: ${{ needs.images.result }}
+          R_RENOVATE: ${{ needs.renovate-config.result }}
+          # renovate-config được phép skipped (không chạy khi release.yml gọi); mọi job khác phải success.
+          NOT_GREEN: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || needs.version.result == 'skipped' || needs.api.result == 'skipped' || needs.browser.result == 'skipped' || needs.web.result == 'skipped' || needs.crawl.result == 'skipped' || needs.images.result == 'skipped' }}
+        run: |
+          echo "version=$R_VERSION api=$R_API browser=$R_BROWSER web=$R_WEB crawl=$R_CRAWL images=$R_IMAGES renovate-config=$R_RENOVATE"
+          if [ "$NOT_GREEN" = "true" ]; then
+            echo "::error::CI chưa xanh: có job failure/cancelled/skipped (xem dòng 'version=… api=…' của bước này) — mở job đỏ, sửa lỗi rồi đẩy lại hoặc bấm Re-run." >&2
+            exit 1
+          fi
+          echo "Tất cả job CI xanh."

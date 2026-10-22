@@ -1,0 +1,677 @@
+name: Release
+
+# Hai cách kích hoạt:
+#   1. Push tag "v*" (tay, hiếm dùng) — version = chính tag đó.
+#   2. Push vào main (đường chính từ v0.1.4) — job meta đọc tệp VERSION ở
+#      gốc repo; nếu tag đó CHƯA tồn tại trên remote thì phát hành, còn nếu
+#      đã có rồi (merge PR không đổi VERSION) thì job meta trả skip=true và
+#      MỌI job khác bỏ qua — không publish lại/tạo Release trùng.
+#   workflow_dispatch: chạy tay từ Actions tab khi cần (vd. tag thủ công đã
+#   xoá nhầm) — cùng logic đọc VERSION như push main.
+#
+# Vì sao main-push không còn "vô tình publish mỗi lần push code" (lo ngại
+# cũ ghi ở đây trước v0.1.4): version chỉ đổi khi PR đổi tệp VERSION — PR
+# không đổi VERSION thì tag cũ vẫn tồn tại → meta.skip=true → không job nào
+# chạy tiếp. Xem docs/handoff/05-installer.md mục "Phát hành".
+#
+# CỔNG PHÁT HÀNH (v0.1.33, F-9/F-13) — luồng mới:
+#   CI xanh → bản thử (prerelease) → E2E (e2e-install.yml) → nâng thành bản
+#   chính thức (promote).
+#   1. Job `ci` gọi lại ci.yml (from_release: true) trên ĐÚNG commit sắp phát
+#      hành; job release chờ nó — CI đỏ thì không có Release nào được tạo.
+#      build-images/build-genh vẫn chạy song song với ci cho nhanh (ảnh chỉ
+#      đẩy tag `:<version>` + `:sha-<commit>` và được dùng theo digest, không
+#      ai dùng tới khi chưa có Release; KHÔNG có tag `:latest` — máy Owner
+#      dùng digest ghim trong compose.release.yaml, v0.1.48 F-36).
+#   2. Release tạo ra LUÔN là bản thử (prerelease, make_latest=false): máy
+#      Boss (install.sh /releases/latest/download, genh tự cập nhật qua
+#      /releases/latest) CHƯA thấy bản này.
+#   3. e2e-install.yml (workflow_run sau Release) cài thật ĐÚNG tag vừa tạo;
+#      e2e-install + e2e-upgrade xanh thì job `promote` mới nâng tag đó thành
+#      bản chính thức (latest). E2E đỏ → bản thử nằm yên, máy Owner không đổi.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  # ── meta ─────────────────────────────────────────────────────────────────
+  # Nguồn duy nhất cho: owner viết thường (GHCR bắt buộc tên ảnh chữ thường
+  # — github.repository_owner có thể có chữ hoa), phiên bản phát hành, và
+  # có nên bỏ qua cả workflow hay không (skip).
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      owner_lower: ${{ steps.vars.outputs.owner_lower }}
+      version: ${{ steps.vars.outputs.version }}
+      skip: ${{ steps.vars.outputs.skip }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - id: vars
+        run: |
+          set -euo pipefail
+          echo "owner_lower=$(printf '%s' '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >>"$GITHUB_OUTPUT"
+
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            version="${{ github.ref_name }}"
+            echo "kích hoạt bằng tag đẩy tay: version=$version"
+          else
+            if [ ! -f VERSION ]; then
+              echo "::error::thiếu tệp VERSION ở gốc repo — không biết phát hành phiên bản nào" >&2
+              exit 1
+            fi
+            version="$(tr -d '[:space:]' <VERSION)"
+            echo "kích hoạt bằng push/dispatch trên nhánh — đọc VERSION: version=$version"
+          fi
+
+          if ! printf '%s' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "::error::VERSION/tag không đúng định dạng vMAJOR.MINOR.PATCH[-PRERELEASE]: '$version'" >&2
+            exit 1
+          fi
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+
+          skip=false
+          if [ "${{ github.ref_type }}" != "tag" ]; then
+            if git ls-remote --exit-code --tags origin "refs/tags/$version" >/dev/null 2>&1; then
+              echo "tag $version đã tồn tại trên remote — VERSION chưa được PR nào tăng, bỏ qua phát hành"
+              skip=true
+            fi
+          fi
+          echo "skip=$skip" >>"$GITHUB_OUTPUT"
+
+  # ── ci ───────────────────────────────────────────────────────────────────
+  # Chạy lại toàn bộ ci.yml trên ĐÚNG commit sắp phát hành (github.sha của
+  # lượt Release này) — không dựa vào lượt CI của PR (có thể chạy trên commit
+  # merge khác, hoặc đã bị huỷ vì cancel-in-progress). from_release: true để
+  # ci.yml dùng nhóm concurrency riêng theo run_id, không bị lượt CI của
+  # push main huỷ ngang (hợp đồng với ci.yml: on.workflow_call.inputs.from_release).
+  # Job release bên dưới needs job này → CI đỏ thì KHÔNG tạo Release.
+  ci:
+    name: CI (ci.yml, đúng commit sắp phát hành)
+    needs: meta
+    if: needs.meta.outputs.skip != 'true'
+    uses: ./.github/workflows/ci.yml
+    with:
+      from_release: true
+    # secrets: inherit ⇒ lượt CI của cổng phát hành cũng có GH_PERSONAL_PATTERNS (lớp quét mẫu riêng của check_no_personal_info).
+    secrets: inherit
+    permissions:
+      contents: read
+
+  # ── verify-docker-pins ─────────────────────────────────────────────────
+  # apps/genh/internal/runtime/bootstrap_linux.go ghim cứng SHA-256 của
+  # docker-<version>.tgz / docker-rootless-extras-<version>.tgz (Docker
+  # KHÔNG phát hành SHA256SUMS — đã xác minh 404, xem comment ở
+  # dockerStaticChecksums) — job này tải lại đúng 4 tệp đó (2 kiến trúc x 2
+  # gói) từ download.docker.com và so với checksum ghim trong mã nguồn,
+  # fail sớm nếu Docker từng thay nội dung tệp mà không đổi tên/version.
+  # v0.1.33 — ma trận trình cài (installer-matrix.yml: go vet + go test genh
+  # trên Ubuntu 22.04/24.04, macOS 14, Windows 2022) trên đúng commit sắp
+  # phát hành; job release chờ job tổng của nó — đỏ thì không có Release.
+  installer:
+    name: Installer matrix (installer-matrix.yml, đúng commit sắp phát hành)
+    needs: meta
+    if: needs.meta.outputs.skip != 'true'
+    uses: ./.github/workflows/installer-matrix.yml
+    with:
+      from_release: true
+    permissions:
+      contents: read
+
+  verify-docker-pins:
+    name: kiểm checksum Docker tĩnh đã ghim (bootstrap_linux.go)
+    runs-on: ubuntu-latest
+    needs: meta
+    if: needs.meta.outputs.skip != 'true'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: "1.24.0"
+
+      - name: Đọc dockerStaticVersion + dockerStaticChecksums qua chính mã Go
+        # Không parse bootstrap_linux.go bằng awk/grep (giòn, dễ lệch nếu
+        # đổi định dạng) — biên dịch một main.go tạm, import thẳng
+        # internal/runtime, gọi DockerVersion()/PinnedChecksums() (2 hàm
+        # export riêng cho CI) rồi in JSON. Xoá file tạm ngay sau khi chạy
+        # xong, không commit vào repo.
+        working-directory: apps/genh
+        run: |
+          set -euo pipefail
+          cat >ci_verify_docker_pins.go <<'EOF'
+          package main
+
+          import (
+          	"encoding/json"
+          	"os"
+
+          	rt "github.com/Genesis-ryan-84-0567536339/gen-harness/apps/genh/internal/runtime"
+          )
+
+          func main() {
+          	out := map[string]any{
+          		"version": rt.DockerVersion(),
+          		"pins":    rt.PinnedChecksums(),
+          	}
+          	if err := json.NewEncoder(os.Stdout).Encode(out); err != nil {
+          		panic(err)
+          	}
+          }
+          EOF
+          trap 'rm -f ci_verify_docker_pins.go' EXIT
+          go run ./ci_verify_docker_pins.go >../../pins.json
+          cat ../../pins.json
+
+      - name: Tải lại từng tệp thật từ download.docker.com và so sha256
+        run: |
+          set -euo pipefail
+          python3 - "$PWD/pins.json" <<'EOF'
+          import hashlib
+          import json
+          import sys
+          import urllib.request
+
+          with open(sys.argv[1]) as f:
+              data = json.load(f)
+
+          version = data["version"]
+          pins = data["pins"]
+          print(f"dockerStaticVersion = {version}")
+
+          fail = False
+          for arch, table in pins.items():
+              for name, want in table.items():
+                  url = f"https://download.docker.com/linux/static/stable/{arch}/{name}"
+                  print(f"tải {url}")
+                  h = hashlib.sha256()
+                  with urllib.request.urlopen(url) as resp:
+                      for chunk in iter(lambda: resp.read(1 << 20), b""):
+                          h.update(chunk)
+                  got = h.hexdigest()
+                  if got != want:
+                      print(f"::error::sha256 lệch cho {arch}/{name} — ghim: {want}, thật: {got} (Docker có thể đã thay nội dung tệp)")
+                      fail = True
+                  else:
+                      print(f"ok: {arch}/{name} khớp {want}")
+
+          sys.exit(1 if fail else 0)
+          EOF
+
+  # ── build-genh ───────────────────────────────────────────────────────────
+  # 6 nền tảng đúng docs/handoff/05-installer.md. Tên file PHẢI khớp CHÍNH
+  # XÁC những gì install.sh (asset="genh-${os}-${arch}") và install.ps1
+  # ($asset = "genh-windows-${arch}.exe") mong đợi — đọc kỹ 2 script đó
+  # trước khi đổi bảng dưới đây.
+  #
+  # Phụ thuộc job pin-compose (không chỉ meta) vì bước "Ghim compose.yaml đã
+  # publish vào binary" bên dưới cần deploy/compose.release.yaml — build-genh
+  # PHẢI chạy SAU khi ảnh đã build+push xong và digest đã biết, nếu không
+  # binary sẽ nhúng compose.yaml cũ (build: cục bộ) thay vì bản đã ghim.
+  build-genh:
+    name: build genh (${{ matrix.goos }}/${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    needs: [meta, pin-compose]
+    if: needs.meta.outputs.skip != 'true'
+    concurrency:
+      group: release-${{ needs.meta.outputs.version }}-build-genh-${{ matrix.goos }}-${{ matrix.goarch }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            asset: genh-linux-amd64
+          - goos: linux
+            goarch: arm64
+            asset: genh-linux-arm64
+          - goos: darwin
+            goarch: amd64
+            asset: genh-darwin-amd64
+          - goos: darwin
+            goarch: arm64
+            asset: genh-darwin-arm64
+          - goos: windows
+            goarch: amd64
+            asset: genh-windows-amd64.exe
+          - goos: windows
+            goarch: arm64
+            asset: genh-windows-arm64.exe
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Tải compose.release.yaml (đã ghim digest ở job pin-compose)
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: compose-release
+          path: pinned
+
+      - name: Ghim compose.yaml đã publish vào binary (go:embed)
+        run: |
+          set -euo pipefail
+          cp pinned/compose.release.yaml apps/genh/internal/compose/embedded_compose.yaml
+          echo "đã ghi đè embedded_compose.yaml bằng compose.release.yaml (digest thật):"
+          grep '^\s*image:' apps/genh/internal/compose/embedded_compose.yaml || true
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          # Đúng phiên bản Go trong apps/genh/go.mod (go 1.24.0) — không tự
+          # chọn version khác.
+          go-version: "1.24.0"
+
+      - name: Build genh
+        working-directory: apps/genh
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          mkdir -p "${{ github.workspace }}/dist"
+          # ldflags đúng như comment trong apps/genh/cmd/genh/main.go:
+          #   go build -ldflags "-X main.version=v2.2.0"
+          # (-s -w chỉ để giảm kích thước binary phát hành, không đổi hành vi)
+          go build -trimpath -ldflags "-s -w -X main.version=${{ needs.meta.outputs.version }}" \
+            -o "${{ github.workspace }}/dist/${{ matrix.asset }}" ./cmd/genh
+
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: genh-bin-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+          retention-days: 14
+
+  # ── build-images ─────────────────────────────────────────────────────────
+  # Chỉ 5 ảnh cần build+push: api (dùng CHUNG cho api/migrate/worker — cả 3
+  # service này build từ CÙNG deploy/images/api.Dockerfile, xem
+  # deploy/compose.yaml — không build trùng), web, bridge, db, browser (chung
+  # cho browser/browser-egress, v0.1.29). proxy/redis
+  # ĐÃ có "image:" cố định sẵn (caddy:2-alpine, redis:7-alpine) nên không cần
+  # build ở đây — Bước 3 của genh pull thẳng từ Docker Hub.
+  # Chỉ đẩy tag `:<version>` + `:sha-<commit>` (không có `:latest` — v0.1.48 F-36): job này chạy SONG SONG
+  # với ci, trước E2E, và máy Owner dùng digest ghim trong compose.release.yaml của đúng bản build theo
+  # phiên bản, nên không cần tag trôi nổi. Build thử lại 1 lần (lỗi mạng tạm thời) và dùng cache gha theo dịch vụ.
+  build-images:
+    name: build+push ảnh ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    # Chặn treo vô hạn (mặc định GitHub là 6 giờ): build bình thường < 10 phút.
+    timeout-minutes: 30
+    needs: meta
+    if: needs.meta.outputs.skip != 'true'
+    concurrency:
+      group: release-${{ needs.meta.outputs.version }}-build-images-${{ matrix.service }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: api
+            dockerfile: deploy/images/api.Dockerfile
+          - service: web
+            dockerfile: apps/web/Dockerfile
+          - service: bridge
+            dockerfile: deploy/images/bridge.Dockerfile
+          - service: db
+            dockerfile: deploy/images/db.Dockerfile
+          # v0.1.29: browser-worker + browser-egress (chung một ảnh; gốc Playwright ghim digest trong Dockerfile).
+          - service: browser
+            dockerfile: deploy/images/browser.Dockerfile
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Sửa sau review v0.1.48: ảnh nền ghim digest ⇒ khoá cache tầng apt (api, db) không bao giờ đổi, cache gha mode=max
+      # sẽ dùng lại gói apt cũ mãi và lỡ bản vá bảo mật Debian/PGDG. Truyền tuần ISO làm ARG APT_REFRESH ⇒ tầng apt dựng
+      # lại ít nhất mỗi tuần (ảnh không có ARG này bỏ qua).
+      - name: Tuần làm mới gói apt (APT_REFRESH)
+        run: echo "APT_REFRESH=$(date -u +%G-W%V)" >>"$GITHUB_ENV"
+
+      - name: Build + push (linux/amd64, linux/arm64)
+        id: build1
+        continue-on-error: true
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          # context: repo GỐC — deploy/compose.yaml dùng "context: .." vì
+          # bản thân nó nằm trong deploy/; ở đây build từ repo root nên
+          # context là "." (checkout đã đặt ta ở gốc repo).
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          # v0.1.36 (F-46): api.Dockerfile ghi phiên bản vào ảnh (ENV GH_VERSION + LABEL); ảnh khác bỏ qua ARG này.
+          # APT_REFRESH: chỉ api/db có tầng apt; ảnh khác bỏ qua.
+          build-args: |
+            VERSION=${{ needs.meta.outputs.version }}
+            APT_REFRESH=${{ env.APT_REFRESH }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ needs.meta.outputs.owner_lower }}/gen-harness-${{ matrix.service }}:${{ needs.meta.outputs.version }}
+            ${{ env.REGISTRY }}/${{ needs.meta.outputs.owner_lower }}/gen-harness-${{ matrix.service }}:sha-${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+      - name: Chờ 30 giây trước khi build lại (lần 1 lỗi)
+        if: steps.build1.outcome == 'failure'
+        run: |
+          echo "::warning::build ảnh ${{ matrix.service }} lỗi lần 1 (thường là mạng tạm thời) — thử lại sau 30 giây"
+          sleep 30
+
+      - name: Build lại lần 2 (lần 1 lỗi mạng tạm thời)
+        if: steps.build1.outcome == 'failure'
+        id: build2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          # context: repo GỐC — deploy/compose.yaml dùng "context: .." vì
+          # bản thân nó nằm trong deploy/; ở đây build từ repo root nên
+          # context là "." (checkout đã đặt ta ở gốc repo).
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          # v0.1.36 (F-46): api.Dockerfile ghi phiên bản vào ảnh (ENV GH_VERSION + LABEL); ảnh khác bỏ qua ARG này.
+          # APT_REFRESH: chỉ api/db có tầng apt; ảnh khác bỏ qua.
+          build-args: |
+            VERSION=${{ needs.meta.outputs.version }}
+            APT_REFRESH=${{ env.APT_REFRESH }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ needs.meta.outputs.owner_lower }}/gen-harness-${{ matrix.service }}:${{ needs.meta.outputs.version }}
+            ${{ env.REGISTRY }}/${{ needs.meta.outputs.owner_lower }}/gen-harness-${{ matrix.service }}:sha-${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+      - name: Lưu digest để job pin-compose ghim vào compose.release.yaml
+        env:
+          DIGEST: ${{ steps.build1.outputs.digest || steps.build2.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DIGEST" ]; then
+            echo "::error::build ảnh ${{ matrix.service }} không ra digest sau 2 lần thử — mở log hai bước Build, sửa lỗi build (không phải lỗi mạng) rồi chạy lại workflow." >&2
+            exit 1
+          fi
+          mkdir -p digest-out
+          printf '%s' "$DIGEST" >"digest-out/${{ matrix.service }}.digest"
+
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: image-digest-${{ matrix.service }}
+          path: digest-out/${{ matrix.service }}.digest
+          retention-days: 14
+
+  # ── pin-compose ──────────────────────────────────────────────────────────
+  # Sinh deploy/compose.release.yaml với "image: ...@sha256:<digest thật>"
+  # thay cho "build:" của web/migrate/api/worker/bridge/db/browser/browser-egress.
+  #
+  # Job build-genh (chạy SAU job này — xem needs) copy file này đè lên
+  # apps/genh/internal/compose/embedded_compose.yaml rồi mới `go build`, nhờ
+  # go:embed (apps/genh/internal/compose/embed.go) mà binary genh phát hành
+  # thật sự MANG THEO đúng compose.yaml đã ghim digest — Locate() rơi về
+  # dùng bản nhúng này khi máy Owner không có checkout repo nào. File cũng
+  # được đính kèm GitHub Release riêng (job release) để tiện xem/tải tay.
+  pin-compose:
+    name: sinh compose.yaml phát hành (ghim digest)
+    runs-on: ubuntu-latest
+    needs: [meta, build-images]
+    if: needs.meta.outputs.skip != 'true'
+    concurrency:
+      group: release-${{ needs.meta.outputs.version }}-pin-compose
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: image-digest-*
+          path: digests
+          merge-multiple: true
+
+      - name: Ghim digest vào compose.yaml
+        run: |
+          set -euo pipefail
+          OWNER="${{ needs.meta.outputs.owner_lower }}"
+          api_digest=$(cat digests/api.digest)
+          web_digest=$(cat digests/web.digest)
+          bridge_digest=$(cat digests/bridge.digest)
+          db_digest=$(cat digests/db.digest)
+          browser_digest=$(cat digests/browser.digest)
+          chmod +x deploy/scripts/pin-compose-images.sh
+          deploy/scripts/pin-compose-images.sh deploy/compose.yaml deploy/compose.release.yaml \
+            --api "${{ env.REGISTRY }}/${OWNER}/gen-harness-api@${api_digest}" \
+            --web "${{ env.REGISTRY }}/${OWNER}/gen-harness-web@${web_digest}" \
+            --bridge "${{ env.REGISTRY }}/${OWNER}/gen-harness-bridge@${bridge_digest}" \
+            --db "${{ env.REGISTRY }}/${OWNER}/gen-harness-db@${db_digest}" \
+            --browser "${{ env.REGISTRY }}/${OWNER}/gen-harness-browser@${browser_digest}"
+
+      - name: Kiểm compose.release.yaml là YAML hợp lệ
+        run: python3 -c "import yaml,sys; d=yaml.safe_load(open('deploy/compose.release.yaml')); assert 'services' in d; print('ok:', sorted(d['services']))"
+
+      - name: Bản phát hành vẫn mang profile seccomp + cap_drop ALL cho browser (F-85)
+        run: |
+          python3 - <<'PY'
+          import yaml
+          b = yaml.safe_load(open('deploy/compose.release.yaml'))['services']['browser']
+          opts = b.get('security_opt', [])
+          assert any(o.startswith('seccomp=') and 'chromium-seccomp.json' in o for o in opts), opts
+          assert 'no-new-privileges:true' in opts, opts
+          assert b.get('cap_drop') == ['ALL'], b.get('cap_drop')
+          print('ok: browser giữ', opts)
+          PY
+          cmp deploy/browser/chromium-seccomp.json apps/genh/internal/compose/embedded_chromium-seccomp.json
+
+      # v0.1.63: hộp riêng Antigravity (agy-box) chỉ an toàn khi bản phát hành mang đúng cấu hình cô lập: chỉ secret
+      # gh_agy_key, không mạng default, không biến DB/Redis/khoá, cap_drop ALL, no-new-privileges, read_only, chỉ volume
+      # agy_state, và chạy đúng ảnh api đã ghim digest. Lệch ⇒ bản phát hành dừng tại đây, không có gì được publish.
+      - name: Bản phát hành mang agy-box đúng cấu hình cô lập (v0.1.63)
+        run: python3 .github/scripts/check_agy_box_isolation.py deploy/compose.release.yaml --release
+
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: compose-release
+          path: deploy/compose.release.yaml
+          retention-days: 90
+
+  # ── wsl-rootfs ───────────────────────────────────────────────────────────
+  # docs/handoff/05-installer.md (bảng container runtime, cột Windows/Không
+  # có): "nhập bản phân phối tối giản gen-harness (rootfs Alpine đóng gói
+  # kèm bản phát hành) chứa Docker Engine".
+  #
+  # THÀNH THẬT: job này chỉ tải rootfs Alpine CHÍNH THỨC, KHÔNG custom —
+  # phần "đóng gói kèm Docker Engine + service khởi động sẵn bên trong rootfs
+  # đó, kiểm thử `wsl --import` thật trên Windows" là việc phức tạp (cần
+  # chroot/binfmt, đóng gói docker tĩnh + openrc, và kiểm thử trên Windows
+  # thật — không khả thi để làm CHẮC CHẮN ĐÚNG trong phiên này). Đây là việc
+  # CÒN THIẾU — xem TODO dưới. Không bịa bước đóng gói Docker giả.
+  wsl-rootfs:
+    name: rootfs WSL (Alpine chính thức — chưa đóng gói Docker Engine)
+    runs-on: ubuntu-latest
+    needs: meta
+    if: needs.meta.outputs.skip != 'true'
+    concurrency:
+      group: release-${{ needs.meta.outputs.version }}-wsl-rootfs
+      cancel-in-progress: false
+    steps:
+      - name: Tải Alpine minirootfs chính thức (x86_64, aarch64)
+        run: |
+          set -euo pipefail
+          ALPINE_BRANCH="v3.20"
+          ALPINE_VERSION="3.20.3"
+          mkdir -p wsl-out
+          for pair in "x86_64:amd64" "aarch64:arm64"; do
+            alpine_arch="${pair%%:*}"
+            out_arch="${pair##*:}"
+            url="https://dl-cdn.alpinelinux.org/alpine/${ALPINE_BRANCH}/releases/${alpine_arch}/alpine-minirootfs-${ALPINE_VERSION}-${alpine_arch}.tar.gz"
+            echo "tải ${url}"
+            curl -fsSL -o "wsl-out/gen-harness-wsl-rootfs-${out_arch}.tar.gz" "$url"
+          done
+          # TODO (ngoài phạm vi phiên này — xem báo cáo bàn giao): đóng gói
+          # Docker Engine tĩnh + init/openrc + `wsl.conf` vào rootfs này rồi
+          # kiểm thử `wsl --import gen-harness <đích> gen-harness-wsl-rootfs-amd64.tar.gz`
+          # thật trên Windows trước khi coi đây là "bản phân phối gen-harness"
+          # theo đúng mô tả trong docs/handoff/05-installer.md. Hiện tại đây
+          # CHỈ là Alpine minirootfs nguyên bản, chưa có gì của Gen-Harness.
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: wsl-rootfs
+          path: wsl-out/*
+          retention-days: 90
+        continue-on-error: true
+
+  # ── release ──────────────────────────────────────────────────────────────
+  # checksums.txt + ký cosign keyless (OIDC, cần id-token: write) + tạo
+  # GitHub Release đính kèm mọi artifact — job này TỰ TẠO tag `version` trỏ
+  # đúng github.sha (softprops/action-gh-release tạo tag nếu chưa có, dùng
+  # target_commitish bên dưới). Tag tạo bằng GITHUB_TOKEN mặc định KHÔNG
+  # kích hoạt lại workflow khác (kể cả chính Release này) — đúng ý: không
+  # chạy release lần 2 vì chính tag mình vừa tạo.
+  #
+  # Cổng phát hành: CI xanh (needs: ci) → tạo bản thử (prerelease, KHÔNG
+  # đổi latest) → E2E (e2e-install.yml, workflow_run khi Release xong) cài
+  # thật đúng tag này → job `promote` ở đó nâng thành bản chính thức
+  # (latest). Bước cuối job này tự kiểm lại: bản vừa tạo là prerelease và
+  # releases/latest CHƯA trỏ vào nó.
+  release:
+    name: checksums + cosign + GitHub Release (bản thử)
+    runs-on: ubuntu-latest
+    needs: [meta, ci, installer, verify-docker-pins, build-genh, pin-compose, wsl-rootfs]
+    if: needs.meta.outputs.skip != 'true'
+    concurrency:
+      group: release-${{ needs.meta.outputs.version }}-release
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Tải 6 binary genh
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: genh-bin-*
+          path: dist
+          merge-multiple: true
+
+      - name: sha256sum -> checksums.txt
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          ls -la
+          sha256sum genh-* >checksums.txt
+          cat checksums.txt
+
+      - uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
+      - name: Ký cosign keyless (OIDC GitHub Actions) cho từng binary
+        working-directory: dist
+        env:
+          COSIGN_YES: "true"
+        run: |
+          set -euo pipefail
+          for f in genh-*; do
+            cosign sign-blob --yes \
+              --output-signature "${f}.sig" \
+              --output-certificate "${f}.pem" \
+              "$f"
+          done
+
+      - name: Tải compose.release.yaml (nếu job pin-compose sinh được)
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: compose-release
+          path: dist
+        continue-on-error: true
+
+      - name: Tải rootfs WSL (best-effort — xem TODO ở job wsl-rootfs)
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: wsl-rootfs
+          path: dist
+        continue-on-error: true
+
+      - name: Đính kèm install.sh / install.ps1 nguyên trạng
+        run: cp install.sh install.ps1 dist/
+
+      - name: Danh sách file đính kèm Release
+        run: ls -la dist
+
+      # v0.1.33 — chặn Re-run ghi đè: tag đã có mà trỏ commit KHÁC, hoặc
+      # Release của tag đã là bản chính thức (đã promote) ⇒ dừng, không để
+      # softprops ghi đè asset/đổi lại thành prerelease.
+      - name: Kiểm tag ${{ needs.meta.outputs.version }} chưa có hoặc trỏ đúng commit này, Release chưa promote
+        id: tag-guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ needs.meta.outputs.version }}
+          R: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          refs="$(git ls-remote --tags origin "refs/tags/$V" "refs/tags/$V^{}")"
+          if [ -n "$refs" ]; then
+            # Tag có chú thích: dòng "^{}" là commit thật — ưu tiên dòng đó.
+            tag_sha="$(printf '%s\n' "$refs" | awk -v r="refs/tags/$V^{}" '$2==r{print $1}' | head -n1)"
+            [ -n "$tag_sha" ] || tag_sha="$(printf '%s\n' "$refs" | awk '{print $1}' | head -n1)"
+            echo "tag $V đã tồn tại, trỏ $tag_sha (lượt này: $SHA)"
+            if [ "$tag_sha" != "$SHA" ]; then
+              echo "::error::Tag $V đã tồn tại và trỏ commit $tag_sha, KHÔNG phải commit đang phát hành ($SHA) — dừng để không ghi đè Release của commit khác. Muốn phát hành commit này: tăng VERSION sang bản mới rồi merge lại; KHÔNG xoá tag $V nếu bản đó đã tới máy Owner." >&2
+              exit 1
+            fi
+          else
+            echo "tag $V chưa có — bước sau sẽ tạo trỏ $SHA"
+          fi
+          if pre="$(gh api "repos/$R/releases/tags/$V" --jq .prerelease 2>/dev/null)"; then
+            echo "Release $V đã có, prerelease=$pre"
+            if [ "$pre" != "true" ]; then
+              echo "::error::Release $V đã là bản chính thức (đã promote) — chạy lại job này sẽ ghi đè asset và hạ nó về bản thử. Dừng. Cần phát hành lại thì tăng VERSION." >&2
+              exit 1
+            fi
+          fi
+
+      - name: Tạo GitHub Release bản thử (và tag ${{ needs.meta.outputs.version }} nếu chưa có)
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          tag_name: ${{ needs.meta.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: Gen-Harness ${{ needs.meta.outputs.version }}
+          generate_release_notes: true
+          # LUÔN là bản thử (prerelease) và KHÔNG đổi latest — máy Owner chỉ
+          # thấy bản này sau khi e2e-install.yml (job promote) cài thật xanh
+          # rồi nâng thành bản chính thức. Bản có hậu tố "-" (vd -beta.1)
+          # không bao giờ được promote.
+          prerelease: true
+          make_latest: "false"
+          files: dist/*
+
+      - name: Kiểm bản vừa tạo là prerelease, latest chưa đổi
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ needs.meta.outputs.version }}
+          R: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # releases/latest có thể 404 khi repo chưa có bản chính thức nào —
+          # coi là rỗng, không làm job đỏ. (Không dùng `$(… || true)`: khi
+          # lỗi HTTP, gh api vẫn in thân JSON lỗi ra stdout.)
+          latest=""
+          if out="$(gh api "repos/$R/releases/latest" --jq .tag_name 2>/dev/null)"; then latest="$out"; fi
+          echo "bản chính thức (latest) hiện tại: ${latest:-<chưa có>}"
+          pre="$(gh api "repos/$R/releases/tags/$V" --jq .prerelease)"
+          echo "$V prerelease=$pre"
+          if [ "$pre" != "true" ]; then
+            echo "::error::Release $V KHÔNG phải bản thử (prerelease=$pre) — máy Owner có thể đã thấy bản chưa qua E2E. Sửa tay: gh release edit $V --prerelease, rồi kiểm lại bước softprops/action-gh-release." >&2
+            exit 1
+          fi
+          if [ "$latest" = "$V" ]; then
+            echo "::error::releases/latest đã trỏ vào $V trước khi E2E chạy — cổng phát hành bị vượt. Sửa tay: đánh dấu lại bản chính thức trước đó là latest (gh release edit <tag cũ> --latest), rồi kiểm make_latest ở bước tạo Release." >&2
+            exit 1
+          fi
+          echo "OK: $V là bản thử, bản chính thức vẫn là ${latest:-<chưa có>} — chờ e2e-install.yml cài thật rồi promote."

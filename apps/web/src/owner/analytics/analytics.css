@@ -1,0 +1,37 @@
+/* v0.1.59 (G3) — màn Phân tích (/owner/phan-tich). Mobile-first; CHỈ token (không mã màu cứng), chữ 12/14/18/28px, hai độ đậm,
+ * không chữ hoa toàn bộ, điểm gãy duy nhất min-width 760px / 1024px (lính gác: test/unit/design-guard-v0159.test.ts). Thẻ là `Card`
+ * của @gen-harness/ui; biểu đồ là `TrendChart` / `HBar` (SVG tự vẽ, màu qua biến CSS); lưới `kit-grid` + `kit-c*` của owner-kit.css. */
+
+.an-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-3); min-width: 0; }
+.an-line { margin: 0; font-size: var(--fs-12); line-height: var(--lh-12); color: var(--text-3); overflow-wrap: anywhere; }
+.an-muted { color: var(--text-3); }
+
+/* Ghi chú chênh lệch của tile "Trả lời nhanh" (nói bằng ĐIỂM nên không dùng huy hiệu % của tile). */
+.an-pct-note { display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-1); }
+
+/* Khối lỗi / rỗng nhỏ trong thẻ */
+.an-fail { display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-2); }
+.an-fail__text { margin: 0; color: var(--text-2); }
+
+/* Chi phí */
+.an-total { font-size: var(--fs-14); line-height: var(--lh-14); font-weight: var(--fw-600); color: var(--text); white-space: nowrap; }
+.an-unknown { margin: 0; font-size: var(--fs-18); line-height: var(--lh-18); font-weight: var(--fw-600); color: var(--text-2); }
+.an-warn {
+  display: flex; align-items: flex-start; gap: var(--sp-2); margin: var(--sp-3) 0 0; padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-8); background: var(--warn-soft); color: var(--warn-ink); font-size: var(--fs-14); line-height: var(--lh-14);
+}
+.an-warn svg { flex: none; margin-top: var(--sp-1); }
+.an-warn span { min-width: 0; overflow-wrap: anywhere; }
+.an-warn .kit-link { color: var(--warn-ink); text-decoration: underline; min-height: 0; display: inline; }
+
+/* Nút chọn kỳ (Segmented của Console) — số đo Mặt tiền: chữ 14px, vùng chạm ≥ 44px ở điện thoại. */
+.analytics .gh-seg { gap: var(--sp-1); padding: var(--sp-1); border-color: var(--border); border-radius: var(--r-8); background: var(--surface); }
+.analytics .gh-seg__opt {
+  height: auto; min-height: var(--tap); padding: 0 var(--sp-3); border-radius: var(--r-8);
+  font-size: var(--fs-14); line-height: var(--lh-14); color: var(--text-2);
+}
+.analytics .gh-seg__opt:hover { color: var(--text); }
+.analytics .gh-seg__opt[aria-checked='true'] { background: var(--accent-soft); color: var(--accent-ink); font-weight: var(--fw-600); }
+@media (min-width: 760px) {
+  .analytics .gh-seg__opt { min-height: var(--sp-5); }
+}

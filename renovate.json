@@ -1,0 +1,129 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", "docker:pinDigests", "helpers:pinGitHubActionDigests"],
+  "timezone": "Asia/Ho_Chi_Minh",
+  "schedule": ["before 6am on monday"],
+  "prConcurrentLimit": 5,
+  "labels": ["phụ thuộc"],
+  "internalChecksFilter": "strict",
+  "osvVulnerabilityAlerts": true,
+  "vulnerabilityAlerts": { "enabled": true },
+  "lockFileMaintenance": { "enabled": true },
+  "docker-compose": {
+    "managerFilePatterns": ["/(^|/)(?:docker-)?compose[^/]*\\.ya?ml$/", "/(^|/)embedded_compose\\.yaml$/"]
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "uv gắn tạm lúc build ảnh (RUN --mount=from=ghcr.io/astral-sh/uv:<bản>@<digest>) — manager dockerfile không đọc dòng này.",
+      "managerFilePatterns": ["/(^|/)deploy/images/[^/]+\\.Dockerfile$/"],
+      "matchStrings": ["ghcr\\.io/astral-sh/uv:(?<currentValue>[0-9][0-9.]*)@(?<currentDigest>sha256:[0-9a-f]{64})"],
+      "depNameTemplate": "ghcr.io/astral-sh/uv",
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "Bản uv của CI (setup-uv `version:`) và của `make lock` (UV_VERSION) — phải cùng bản với ảnh.",
+      "managerFilePatterns": ["/^\\.github/workflows/[^/]+\\.ya?ml$/", "/(^|/)Makefile$/"],
+      "matchStrings": [
+        "astral-sh/setup-uv@[0-9a-f]{40}[^\\n]*\\n\\s*with:[^\\n]*[\\s{,]version:\\s*\"(?<currentValue>[0-9][0-9.]*)\"",
+        "(?:^|\\n)UV_VERSION\\s*[:?]?=\\s*(?<currentValue>[0-9][0-9.]*)\\s"
+      ],
+      "depNameTemplate": "astral-sh/uv",
+      "datasourceTemplate": "github-releases"
+    },
+    {
+      "customType": "regex",
+      "description": "pip-audit chạy bằng uvx trong workflow (quét bảo mật F-13).",
+      "managerFilePatterns": ["/^\\.github/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": ["--from pip-audit==(?<currentValue>[0-9][0-9.]*)"],
+      "depNameTemplate": "pip-audit",
+      "datasourceTemplate": "pypi"
+    },
+    {
+      "customType": "regex",
+      "description": "govulncheck chạy bằng go run trong workflow (quét bảo mật F-13).",
+      "managerFilePatterns": ["/^\\.github/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": ["golang\\.org/x/vuln/cmd/govulncheck@(?<currentValue>v[0-9][0-9.]*)"],
+      "depNameTemplate": "golang.org/x/vuln",
+      "datasourceTemplate": "go"
+    },
+    {
+      "customType": "regex",
+      "description": "renovate-config-validator chạy bằng npx trong workflow (kiểm renovate.json).",
+      "managerFilePatterns": ["/^\\.github/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": ["--package renovate@(?<currentValue>[0-9][0-9.]*)"],
+      "depNameTemplate": "renovate",
+      "datasourceTemplate": "npm"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "F-19: nâng nhỏ/digest/ghim THƯ VIỆN (pip/uv, npm, Go) tự merge squash khi MỌI check xanh (platformAutomerge=false để chờ cả E2E cài thật) — chỉ khi bản mới đã ra ít nhất 3 ngày (bản độc trên PyPI/npm thường bị gỡ trong vài ngày; internalChecksFilter=strict: chưa đủ tuổi thì chưa mở PR).",
+      "matchDatasources": ["pypi", "npm", "go"],
+      "matchUpdateTypes": ["minor", "patch", "digest", "pin", "pinDigest"],
+      "minimumReleaseAge": "3 days",
+      "automerge": true,
+      "automergeType": "pr",
+      "automergeStrategy": "squash",
+      "platformAutomerge": false
+    },
+    {
+      "description": "Ảnh Docker (ảnh nền python/node/caddy/redis/pgvector/nginx/playwright, uv) KHÔNG tự merge: gom 1 PR/tuần để review — tag trên registry bị chiếm thì digest mới không tự lọt vào bản phát hành.",
+      "matchDatasources": ["docker"],
+      "groupName": "ảnh Docker",
+      "automerge": false
+    },
+    {
+      "description": "GitHub Actions KHÔNG tự merge: gom 1 PR/tuần để review (action chạy với GITHUB_TOKEN và đẩy ảnh phát hành).",
+      "matchManagers": ["github-actions"],
+      "groupName": "GitHub Actions",
+      "automerge": false
+    },
+    {
+      "description": "Nâng major luôn cần người duyệt.",
+      "matchUpdateTypes": ["major"],
+      "automerge": false
+    },
+    {
+      "description": "playwright (pip) và ảnh mcr playwright/python phải nâng cùng nhau, không tự merge (đặt SAU nhóm ảnh Docker để thắng groupName).",
+      "groupName": "playwright",
+      "matchPackageNames": ["playwright", "mcr.microsoft.com/playwright/python"],
+      "automerge": false
+    },
+    {
+      "description": "uv: ảnh gắn lúc build, setup-uv của CI và `make lock` nâng cùng một PR (lệch bản ⇒ `uv lock --check` có thể đỏ), không tự merge.",
+      "groupName": "uv",
+      "matchPackageNames": ["ghcr.io/astral-sh/uv", "astral-sh/uv"],
+      "automerge": false
+    },
+    {
+      "description": "Giữ python ảnh slim ở 3.11.x (api cần >=3.11, ảnh/CI cố định 3.11).",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["python"],
+      "allowedVersions": "<3.12"
+    },
+    {
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["node"],
+      "allowedVersions": "<23"
+    },
+    {
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["redis"],
+      "allowedVersions": "<8"
+    },
+    {
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["caddy"],
+      "allowedVersions": "<3"
+    },
+    {
+      "description": "pgvector bám tag pg16: chỉ nâng digest.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["pgvector/pgvector"],
+      "matchUpdateTypes": ["major", "minor", "patch"],
+      "enabled": false
+    }
+  ]
+}

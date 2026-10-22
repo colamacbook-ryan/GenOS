@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="vi"><head><meta charset="utf-8"><title>Đăng nhập (trang mẫu)</title>
+<style>body{margin:0;font:16px sans-serif} input{position:absolute;left:100px;width:300px;height:40px}
+#email{top:100px} #pass{top:160px} #login{position:absolute;left:100px;top:220px;width:300px;height:40px}</style></head>
+<body>
+  <!-- Trang MẪU tự viết cho test — không phải HTML thật của Facebook. -->
+  <form id="f" onsubmit="event.preventDefault(); if (document.getElementById('pass').value) {
+      document.cookie = 'c_user=100012345; path=/'; document.cookie = 'xs=bi-mat-tu-trang-mau; path=/';
+      location.href = '/'; }">
+    <input id="email" name="email" placeholder="Email hoặc số điện thoại">
+    <input id="pass" name="pass" type="password" placeholder="Mật khẩu">
+    <button id="login" type="submit">Đăng nhập</button>
+  </form>
+</body></html>

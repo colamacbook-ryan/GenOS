@@ -1,0 +1,36 @@
+{
+  "package": "@gen/intel-core",
+  "name": "Core Agent · sàng lọc & chấm điểm",
+  "version": "2.2.0",
+  "layer": "intelligence",
+  "entry": null,
+  "description": "Sàng lọc kho thô → kho sạch theo chu kỳ hoặc ngưỡng, chấm điểm có chứng cứ, ghi sổ tay nhận thức.",
+  "permissions": [
+    "raw.read",
+    "clean.write",
+    "memory.write",
+    "model.call"
+  ],
+  "events": {
+    "subscribe": [
+      "gh.bridge.inbound"
+    ],
+    "publish": [
+      "gh.clean.ready"
+    ]
+  },
+  "settings_schema": {},
+  "sandbox": {
+    "mode": "inprocess",
+    "memory_mb": 768,
+    "timeout_s": 300,
+    "net": "public"
+  },
+  "dependencies": {
+    "@gen/chassis-store": "^2.2.0",
+    "@gen/chassis-policy": "^2.2.0"
+  },
+  "load_order": 5,
+  "removable": false,
+  "can_disable": false
+}

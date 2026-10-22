@@ -1,0 +1,265 @@
+/* v0.1.59 (G2) — Mặt tiền Owner (/owner/*): khung 5 trụ cột + các mảnh dùng chung. Mobile-first; CHỈ dùng token
+ * (packages/tokens) — không mã màu cứng, nên giao diện sáng/tối tự theo data-theme. Chữ chỉ 12/14/18/28px, hai độ đậm
+ * (var(--fw-400) / var(--fw-600)), không chữ hoa toàn bộ. Điểm gãy DUY NHẤT: (min-width: 760px) và (min-width: 1024px).
+ * Lính gác: apps/web/test/unit/design-guard-v0159.test.ts quét tệp này và mọi *.css dưới apps/web/src/owner/. Thành phần dùng
+ * chung (thẻ, bảng, ngăn, biểu đồ…) nằm ở packages/ui/src/owner-kit.css; tệp này chỉ có khung và mảnh riêng của Mặt tiền. */
+
+.owner-app {
+  --owner-top-h: calc(var(--top-h) - var(--sp-2));
+  display: grid; grid-template-columns: minmax(0, 1fr);
+  width: 100%; min-width: 0; min-height: 100vh;
+}
+.owner-body { display: flex; flex-direction: column; min-width: 0; }
+.owner-boot { max-width: 560px; margin: 0 auto; padding: var(--sp-5) var(--sp-3); }
+
+/* ── Thanh trái (≥ 760px) ── */
+.owner-rail {
+  position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; gap: var(--sp-2); min-height: 0;
+  padding: var(--sp-3); background: var(--rail-bg); border-right: 1px solid var(--border);
+}
+.owner-brand {
+  display: flex; align-items: center; gap: var(--sp-2); min-height: var(--tap); padding: var(--sp-2) var(--sp-2) var(--sp-3);
+  color: inherit; text-decoration: none;
+}
+.owner-brand__tile {
+  flex: none; width: var(--sp-5); height: var(--sp-5); display: grid; place-items: center; border-radius: var(--r-8);
+  background: var(--accent); color: var(--on-accent);
+}
+.owner-brand__text { display: flex; flex-direction: column; min-width: 0; }
+.owner-brand__name { font-size: var(--fs-14); line-height: var(--lh-14); font-weight: var(--fw-600); }
+.owner-brand__org { font-size: var(--fs-12); line-height: var(--lh-12); color: var(--text-3); overflow-wrap: anywhere; }
+.owner-rail__nav { display: flex; flex-direction: column; gap: var(--sp-1); overflow-y: auto; }
+.owner-rail__sep { height: 1px; margin: var(--sp-2) 0; background: var(--border); }
+.owner-nav {
+  display: flex; align-items: center; gap: var(--sp-3); width: 100%; min-height: var(--tap); padding: 0 var(--sp-3);
+  border: 0; border-radius: var(--r-8); background: transparent; color: var(--text-2);
+  font: inherit; font-size: var(--fs-14); line-height: var(--lh-14); text-align: left; text-decoration: none; cursor: pointer;
+}
+.owner-nav:hover { background: var(--hover); color: var(--text); }
+.owner-nav[data-on] { background: var(--surface); color: var(--text); font-weight: var(--fw-600); box-shadow: 0 0 0 1px var(--border); }
+.owner-nav[data-on] svg { color: var(--accent); }
+.owner-nav__name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.owner-rail__foot { margin-top: auto; display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2); }
+.owner-rail__who { display: flex; flex-direction: column; min-width: 0; }
+.owner-rail__name { font-size: var(--fs-14); line-height: var(--lh-14); font-weight: var(--fw-600); overflow-wrap: anywhere; }
+.owner-rail__role { font-size: var(--fs-12); line-height: var(--lh-12); color: var(--text-3); }
+
+/* ── Đầu trang: tiêu đề màn 18px, Hỏi Gen, chuông, ảnh đại diện ── */
+.owner-top {
+  position: sticky; top: 0; z-index: 20; min-height: var(--owner-top-h); display: flex; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2) var(--sp-1) var(--sp-3); background: var(--bg); border-bottom: 1px solid var(--border);
+}
+.owner-top__title {
+  flex: 1; min-width: 0; margin: 0; font-size: var(--fs-18); line-height: var(--lh-18); font-weight: var(--fw-600);
+  overflow-wrap: anywhere;
+}
+.owner-top__right { display: flex; align-items: center; gap: var(--sp-1); flex: none; }
+.owner-top__ask { width: var(--tap); padding: 0; }
+.owner-top__ask-label { display: none; }
+.owner-top__bell { display: flex; }
+.owner-top__bell .gh-btn {
+  width: var(--tap); height: var(--tap); border-color: transparent; border-radius: var(--r-8); background: transparent; color: var(--text-2);
+}
+.owner-top__bell .gh-btn:hover { background: var(--hover); color: var(--text); }
+.owner-menu-wrap { position: relative; display: flex; }
+.owner-avatar-btn {
+  width: var(--tap); height: var(--tap); display: grid; place-items: center; padding: 0; border: 0; border-radius: var(--r-8);
+  background: none; cursor: pointer;
+}
+.owner-avatar-btn:hover { background: var(--hover); }
+.owner-menu {
+  position: absolute; top: calc(100% + var(--sp-1)); right: 0; z-index: 30; min-width: 264px; max-width: calc(100vw - var(--sp-5));
+  padding: var(--sp-1); background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-8);
+  box-shadow: var(--shadow-pop);
+}
+.owner-menu__who { padding: var(--sp-2) var(--sp-3); }
+.owner-menu__name { font-weight: var(--fw-600); overflow-wrap: anywhere; }
+.owner-menu__email { font-size: var(--fs-12); line-height: var(--lh-12); color: var(--text-3); overflow-wrap: anywhere; }
+.owner-menu__item {
+  display: flex; align-items: center; gap: var(--sp-3); width: 100%; min-height: var(--tap); padding: 0 var(--sp-3); border: 0;
+  border-radius: var(--r-8); background: none; color: var(--text); font: inherit; font-size: var(--fs-14); line-height: var(--lh-14);
+  text-align: left; cursor: pointer;
+}
+.owner-menu__item:hover, .owner-menu__item:focus-visible { background: var(--hover); }
+.owner-menu__item:disabled { opacity: 0.55; cursor: default; }
+.owner-menu__text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.owner-menu__hint { font-size: var(--fs-12); line-height: var(--lh-12); color: var(--text-3); }
+.owner-menu__sep { height: 1px; margin: var(--sp-1) 0; background: var(--border); }
+
+/* ── Nội dung ── */
+.owner-main { flex: 1; min-width: 0; padding: var(--sp-3) var(--sp-3) calc(var(--tab-h) + var(--sp-4) + env(safe-area-inset-bottom, 0px)); }
+.owner-main:focus { outline: none; }
+.owner-screen { display: flex; flex-direction: column; gap: var(--kit-gap); min-width: 0; max-width: var(--content-max); margin: 0 auto; }
+.owner-muted { color: var(--text-3); font-size: var(--fs-12); line-height: var(--lh-12); margin: 0; }
+
+/* ── Số đếm trên thanh điều hướng ── */
+.owner-nav .kit-badge { flex: none; }
+
+/* ── Thanh dưới (< 760px): đúng 5 trụ cột, icon 24 + nhãn 12 ── */
+.owner-tabbar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
+  height: calc(var(--tab-h) + env(safe-area-inset-bottom, 0px)); padding-bottom: env(safe-area-inset-bottom, 0px);
+  background: var(--surface); border-top: 1px solid var(--border);
+}
+.owner-tabbar__item {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--sp-1); min-width: 0; min-height: var(--tap);
+  color: var(--text-3); font-size: var(--fs-12); line-height: var(--lh-12); text-align: center; text-decoration: none;
+}
+.owner-tabbar__item[data-on] { color: var(--accent-ink); font-weight: var(--fw-600); }
+.owner-tabbar__icon { position: relative; display: grid; }
+.owner-tabbar__icon .kit-badge { position: absolute; top: calc(var(--sp-2) * -1); left: var(--sp-3); }
+.owner-tabbar__name { max-width: 100%; overflow-wrap: anywhere; }
+
+/* ── Trạng thái dùng chung ── */
+.owner-skel { display: flex; flex-direction: column; gap: var(--sp-3); padding: var(--sp-3) var(--kit-pad); }
+.owner-skel__row { display: flex; align-items: center; gap: var(--sp-3); }
+.owner-skel__text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-2); }
+.owner-error, .owner-empty { padding: var(--sp-1) 0; }
+/* Một phần dữ liệu lỗi, phần còn lại vẫn hiện: thông báo + nút Thử lại cùng hàng */
+.owner-partial { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); margin: 0; }
+
+/* ── Thẻ ngày đầu (FirstRunCard): đúng MỘT thẻ thay cho mọi số/danh sách ── */
+.owner-firstrun__body { display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-3); padding: var(--sp-4) 0; }
+.owner-firstrun__icon {
+  width: var(--sp-6); height: var(--sp-6); display: grid; place-items: center; border-radius: var(--r-8);
+  background: var(--info-soft); color: var(--info-ink);
+}
+.owner-firstrun__title { margin: 0; font-size: var(--fs-18); line-height: var(--lh-18); font-weight: var(--fw-600); }
+.owner-firstrun__text { margin: 0; max-width: 560px; color: var(--text-2); }
+.owner-firstrun__actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-4); }
+
+/* ── Dòng danh sách cũ (RowLink) — còn dùng ở Cài đặt, thay dần bằng ListRow của @gen-harness/ui ── */
+.owner-list { display: flex; flex-direction: column; }
+.owner-row {
+  display: flex; align-items: center; gap: var(--sp-3); min-height: var(--tap); padding: var(--sp-3) var(--kit-pad); color: inherit;
+  text-decoration: none; border-top: 1px solid var(--border);
+}
+.owner-list > .owner-row:first-child { border-top: none; }
+.owner-row:hover { background: var(--hover); }
+.owner-row__body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); }
+.owner-row__title { font-weight: var(--fw-600); color: var(--text); overflow-wrap: anywhere; }
+.owner-row__meta { font-size: var(--fs-12); line-height: var(--lh-12); color: var(--text-3); overflow-wrap: anywhere; }
+.owner-row__right { flex: none; max-width: 44%; font-size: var(--fs-12); line-height: var(--lh-12); color: var(--accent-ink); text-align: right; overflow-wrap: anywhere; }
+.owner-row--ok .owner-row__right { color: var(--ok-ink); }
+.owner-row--warn .owner-row__right { color: var(--warn-ink); }
+.owner-row--bad .owner-row__right { color: var(--bad-ink); }
+.owner-row__go { flex: none; color: var(--text-3); }
+.owner-tile {
+  flex: none; width: var(--sp-5); height: var(--sp-5); display: grid; place-items: center; border-radius: var(--r-8);
+  background: var(--accent-soft); color: var(--accent-ink);
+}
+.owner-tile--warn { background: var(--warn-soft); color: var(--warn-ink); }
+.owner-tile--bad { background: var(--bad-soft); color: var(--bad-ink); }
+.owner-tile--ok { background: var(--ok-soft); color: var(--ok-ink); }
+.owner-avatar {
+  flex: none; width: var(--sp-5); height: var(--sp-5); border-radius: 50%; display: grid; place-items: center;
+  background: var(--accent-soft); color: var(--accent-ink); font-size: var(--fs-12); line-height: var(--lh-12); font-weight: var(--fw-600);
+}
+.owner-dot { flex: none; width: var(--sp-2); height: var(--sp-2); border-radius: 50%; background: var(--neutral-400); }
+.owner-dot[data-state='ok'] { background: var(--ok); }
+.owner-dot[data-state='todo'] { background: var(--warn); }
+.owner-count {
+  min-width: var(--sp-4); padding: 0 var(--sp-2); border-radius: var(--r-999); text-align: center; font-size: var(--fs-12);
+  line-height: var(--lh-14); font-weight: var(--fw-600); background: var(--accent-soft); color: var(--accent-ink);
+}
+.owner-more {
+  display: flex; align-items: center; justify-content: flex-end; gap: var(--sp-2); min-height: var(--tap); padding: var(--sp-2) var(--kit-pad);
+  border-top: 1px solid var(--border); font-size: var(--fs-14); color: var(--accent-ink); text-decoration: none;
+}
+.owner-more:hover { background: var(--hover); }
+
+/* ── Mảnh của các màn cũ (Hôm nay / Việc / Quan hệ) — G3, G4 xoá cùng màn ── */
+.owner-kpis { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--kit-gap); }
+.owner-kpi {
+  position: relative; display: flex; flex-direction: column; gap: var(--sp-1); min-width: 0; min-height: var(--tap); padding: var(--sp-3);
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-8); color: inherit; text-decoration: none; overflow: hidden;
+}
+.owner-kpi:hover { background: var(--hover); }
+.owner-kpi__head { display: flex; align-items: center; gap: var(--sp-2); color: var(--text-2); font-size: var(--fs-12); line-height: var(--lh-12); }
+.owner-kpi__value { font-size: var(--fs-28); line-height: var(--lh-28); font-weight: var(--fw-600); }
+.owner-kpi__sub { font-size: var(--fs-12); line-height: var(--lh-12); color: var(--text-3); }
+.owner-kpi::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: var(--sp-1); background: var(--neutral-200); }
+.owner-kpi[data-tone='ok']::after { background: var(--ok); }
+.owner-kpi[data-tone='warn']::after { background: var(--warn); }
+.owner-kpi[data-tone='bad']::after { background: var(--bad); }
+.owner-brief { display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-3); }
+.owner-brief__text { margin: 0; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.owner-value {
+  display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3); background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--r-8);
+}
+.owner-value p { margin: 0; overflow-wrap: anywhere; }
+.owner-suggest { display: flex; flex-direction: column; gap: var(--sp-3); }
+.owner-suggest__card {
+  display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3); background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--r-8);
+}
+.owner-suggest__text { flex: 1; min-width: 0; }
+.owner-suggest__title { font-weight: var(--fw-600); }
+.owner-suggest__body { margin: var(--sp-1) 0 0; font-size: var(--fs-12); line-height: var(--lh-12); color: var(--text-3); overflow-wrap: anywhere; }
+.owner-progress {
+  display: flex; align-items: center; gap: var(--sp-2); min-height: var(--tap); padding: var(--sp-2) var(--sp-3);
+  border: 1px dashed var(--border-strong); border-radius: var(--r-8); color: var(--text-2); text-decoration: none;
+}
+.owner-progress span { flex: 1; min-width: 0; }
+.owner-progress:hover { background: var(--hover); color: var(--text); }
+.owner-tabs { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.owner-tab {
+  flex: 0 1 auto; min-height: var(--tap); padding: 0 var(--sp-3); border: 1px solid var(--border-strong); border-radius: var(--r-999);
+  background: transparent; color: var(--text-2); font: inherit; font-size: var(--fs-14); line-height: var(--lh-14); cursor: pointer; white-space: nowrap;
+}
+.owner-tab:hover { background: var(--hover); color: var(--text); }
+.owner-tab[aria-selected='true'] { background: var(--accent-soft); border-color: var(--accent); color: var(--text); font-weight: var(--fw-600); }
+.owner-advanced { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); padding: var(--sp-3) var(--kit-pad); }
+
+/* ── Hỏi Gen: trang /owner/gen (link cũ) + khung Gen trong ngăn ── */
+.owner-ask {
+  display: block; max-width: 1100px; margin: 0 auto; min-width: 0;
+}
+.owner-ask__side { display: none; }
+.owner-ask__title { margin: 0; font-size: var(--fs-18); line-height: var(--lh-18); font-weight: var(--fw-600); }
+.owner-ask__prompts { display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-2); }
+.owner-ask__prompts .kit-btn { height: auto; min-height: var(--tap); padding: var(--sp-2) var(--sp-3); text-align: left; white-space: normal; }
+.owner-gen { min-width: 0; height: calc(100dvh - var(--owner-top-h) - var(--tab-h) - env(safe-area-inset-bottom, 0px)); min-height: 0; }
+.owner-gen .gen-panel, .owner-gen-sheet .gen-panel {
+  position: relative; top: auto; inset: auto; z-index: auto; width: 100%; height: 100%; border: 0; border-radius: 0; overflow: hidden;
+}
+/* Trang toàn màn: Gen luôn mở — nút đóng khung vô nghĩa. Trong ngăn thì nút × đóng ngăn. */
+.owner-ask .gen-panel__head button[aria-label='Đóng khung Gen'] { display: none; }
+.owner-gen--sheet { flex: 1; height: auto; min-height: 0; display: flex; flex-direction: column; }
+.owner-gen--sheet .gen-panel { flex: 1; min-height: 0; }
+.owner-app[data-screen='gen'] .owner-main { padding: 0 0 calc(var(--tab-h) + env(safe-area-inset-bottom, 0px)); }
+
+/* ── Nút "← Về Mặt tiền" trong header Console ── */
+/* Chỉ mũi tên 32px ở MỌI cỡ màn: ở 1024px header Console đã đầy (hiện thêm chữ "Về Mặt tiền" làm rớt dòng ở /tasks, /inbox…).
+ * Tên truy cập + tooltip vẫn là "Về Mặt tiền". Chữ nằm trong DOM (aria-hidden) nên văn bản vẫn tìm được. */
+.hd-back {
+  flex: none; display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-1); height: var(--sp-5); width: var(--sp-5);
+  padding: 0; white-space: nowrap; border: 1px solid var(--border); border-radius: var(--r-8); background: transparent;
+  color: var(--accent-ink); font-size: var(--fs-12); line-height: var(--lh-12); font-weight: var(--fw-600); text-decoration: none;
+}
+.hd-back__text { display: none; }
+.hd-back:hover { background: var(--hover); color: var(--text); }
+.hd-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+@media (min-width: 760px) {
+  .owner-app { --owner-top-h: var(--top-h); grid-template-columns: var(--rail-w) minmax(0, 1fr); }
+  .owner-top { padding: var(--sp-2) var(--sp-4); }
+  .owner-top__ask { width: auto; padding: 0 var(--sp-3); }
+  .owner-top__ask-label { display: inline; }
+  .owner-main { padding: var(--sp-4) var(--sp-4) var(--sp-6); }
+  .owner-tabbar { display: none; }
+  .owner-kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .owner-ask { display: grid; grid-template-columns: minmax(0, 1fr) 420px; gap: var(--sp-4); align-items: start; }
+  .owner-ask__side { display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0; }
+  .owner-gen { position: sticky; top: calc(var(--owner-top-h) + var(--sp-4)); height: calc(100vh - var(--owner-top-h) - var(--sp-6)); min-height: 420px; }
+  .owner-gen .gen-panel { border: 1px solid var(--border); border-radius: var(--r-8); }
+  .owner-gen--sheet { position: static; height: auto; min-height: 0; }
+  .owner-gen--sheet .gen-panel { border: 0; border-radius: 0; }
+  .owner-app[data-screen='gen'] .owner-main { padding: var(--sp-4) var(--sp-4) var(--sp-6); }
+}
+@media (min-width: 1024px) {
+  .owner-top { padding: var(--sp-2) var(--sp-5); }
+  .owner-main { padding: var(--sp-5) var(--sp-5) var(--sp-6); }
+  .owner-app[data-screen='gen'] .owner-main { padding: var(--sp-5) var(--sp-5) var(--sp-6); }
+}

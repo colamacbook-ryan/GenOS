@@ -1,0 +1,110 @@
+/* Giai đoạn 4.2 · API & Model. */
+
+.apm-providers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 900px) { .apm-providers { grid-template-columns: 1fr; } }
+
+.apm-provider {
+  display: flex; flex-direction: column;
+  background: var(--color-surface); border: 1px solid var(--color-divider); border-radius: var(--radius-md); overflow: hidden;
+}
+.apm-provider__head { display: flex; align-items: center; gap: 11px; padding: 12px 15px; border-bottom: 1px solid var(--color-divider); }
+.apm-provider__icon {
+  flex: none; width: 30px; height: 30px; border-radius: var(--radius-md); display: grid; place-items: center;
+  background: var(--color-neutral-900); border: 1px solid var(--color-neutral-800);
+}
+.apm-provider__title { flex: 1; min-width: 0; }
+.apm-provider__name { font-size: 12.5px; font-weight: 600; color: var(--color-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.apm-provider__kind { font-size: 10px; color: var(--color-neutral-500); margin-top: 2px; }
+.apm-provider__body { padding: 12px 15px; display: flex; flex-direction: column; gap: 9px; }
+
+.apm-field { display: flex; align-items: center; gap: 11px; }
+.apm-field__key { width: 96px; flex: none; font-size: 10px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: var(--color-neutral-500); }
+.apm-field__box {
+  flex: 1; min-width: 0; height: 28px; display: flex; align-items: center; gap: 8px; padding: 0 10px;
+  border: 1px solid var(--color-neutral-800); border-radius: var(--radius-sm); background: var(--color-bg);
+}
+.apm-field__val { flex: 1; min-width: 0; font-size: 11.5px; font-family: var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.apm-provider__foot { display: flex; align-items: center; gap: 8px; padding: 10px 15px; border-top: 1px solid var(--color-divider); flex-wrap: wrap; }
+.apm-test-result { padding: 8px 15px; font-size: 11px; border-top: 1px solid var(--color-divider); }
+.apm-provider > .cli-diag { margin-top: 0; padding: 0 15px 12px; }
+/* v0.1.68: bộ chọn model nằm thẳng trong thẻ nguồn — chữ ghi chú không được dính mép khung (lính gác bố cục «dinh-bien»). */
+.apm-provider > .prov-model { margin-top: 0; padding: 4px 15px 12px; }
+.apm-test-result--ok { color: var(--color-ok); }
+.apm-test-result--bad { color: var(--color-bad); }
+
+.apm-mid { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
+@media (max-width: 980px) { .apm-mid { grid-template-columns: 1fr; } }
+.apm-side { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+
+.apm-table-wrap { width: 100%; overflow-x: auto; }
+.apm-table { width: 100%; min-width: 760px; border-collapse: collapse; }
+.apm-table th {
+  text-align: left; font-size: 9.5px; font-weight: 600; letter-spacing: .13em; text-transform: uppercase;
+  color: var(--color-neutral-500); padding: 9px 14px;
+}
+.apm-table td { padding: 10px 14px; font-size: 11.5px; color: var(--color-neutral-400); border-top: 1px solid var(--color-divider); }
+.apm-table__agent { font-size: 12px; color: var(--color-text); }
+/* Màn hẹp (≤ 640px): bảng gán model đổi sang dạng thẻ — mỗi agent một khối (tên, model, mức suy nghĩ, nút Gỡ), không cắt cột
+   MODEL và không phải cuộn ngang. Hàng tiêu đề cột ẩn (mỗi thẻ tự đủ nghĩa). */
+@media (max-width: 640px) {
+  .apm-table--bindings { min-width: 0; display: block; }
+  .apm-table--bindings thead { display: none; }
+  .apm-table--bindings tbody { display: block; }
+  .apm-table--bindings tr {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; padding: 11px 16px; border-top: 1px solid var(--color-divider);
+  }
+  .apm-table--bindings td { display: block; padding: 0; border: none; min-width: 0; overflow-wrap: anywhere; }
+  .apm-table--bindings .apm-td-agent { grid-column: 1; }
+  .apm-table--bindings .apm-td-act { grid-column: 2; grid-row: 1; align-self: start; }
+  .apm-table--bindings .apm-td-model { grid-column: 1 / -1; }
+  .apm-table--bindings .apm-td-effort { grid-column: 1 / -1; font-size: 10.5px; color: var(--color-neutral-500); }
+  .apm-table--bindings .apm-td-effort::before { content: attr(data-label) ": "; }
+}
+.apm-model-pill {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--color-accent-300);
+  background: none; border: none; cursor: pointer; padding: 0;
+}
+.apm-model-pill:hover { text-decoration: underline; }
+
+.apm-params { padding: 13px 16px 15px; display: flex; flex-direction: column; gap: 11px; }
+.apm-param-row { display: flex; align-items: center; gap: 11px; }
+.apm-param-row__key { width: 96px; flex: none; font-size: 11px; color: var(--color-neutral-400); }
+.apm-param-row__box {
+  flex: 1; min-width: 0; height: 28px; display: flex; align-items: center; padding: 0 10px;
+  border: 1px solid var(--color-neutral-800); border-radius: var(--radius-sm); background: var(--color-bg);
+  font-size: 11.5px; color: var(--color-text); font-family: var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.apm-rates { padding: 6px 0 10px; }
+.apm-rate-row { display: flex; align-items: center; gap: 11px; padding: 8px 16px; }
+.apm-rate-row__label { flex: 1; min-width: 0; font-size: 11.5px; color: var(--color-neutral-300); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.apm-rate-row__value { flex: none; font-size: 11px; color: var(--color-neutral-400); white-space: nowrap; }
+
+.apm-panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 16px; align-items: start; }
+
+.apm-chain { padding: 8px 0 12px; }
+.apm-chain-list { display: flex; flex-direction: column; list-style: none; margin: 0; padding: 0; }
+.apm-chain-row { display: flex; align-items: center; gap: 12px; padding: 10px 16px; }
+.apm-chain-row[draggable='true'] { cursor: grab; }
+.apm-chain-row__rank { width: 20px; flex: none; text-align: center; font-size: 11px; color: var(--color-neutral-500); }
+.apm-chain-row__body { flex: 1; min-width: 0; }
+.apm-chain-row__name { font-size: 12.5px; font-weight: 500; color: var(--color-text); }
+.apm-chain-row__model { font-size: 10.5px; color: var(--color-neutral-500); margin-top: 2px; }
+.apm-chain-row__state { flex: none; font-size: 11px; white-space: nowrap; }
+.apm-chain-row__keys { flex: none; display: flex; gap: 2px; }
+
+.apm-rules { padding: 6px 0 10px; }
+.apm-rule-row { display: flex; align-items: baseline; gap: 12px; padding: 8px 16px; }
+.apm-rule-row__key { width: 122px; flex: none; font-size: 10.5px; color: var(--color-neutral-500); }
+.apm-rule-row__val { flex: 1; min-width: 0; font-size: 11.5px; color: var(--color-neutral-300); text-wrap: pretty; }
+
+/* v0.1.66 (F008, F009): "Quản lý khoá và model" trong thẻ nhà cung cấp — gọn, xuống dòng được ở 390px. */
+.apm-manage { margin-top: 8px; }
+.apm-manage__group { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.apm-manage__title { font-size: 10.5px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--color-neutral-500); }
+.apm-manage__row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.apm-manage__name { flex: 1 1 140px; min-width: 0; font-size: 11.5px; color: var(--color-neutral-300); overflow-wrap: anywhere; }
+.apm-manage__row--model .apm-manage__name { flex-basis: 100%; }
+.apm-manage__field { display: inline-flex; flex-direction: column; gap: 2px; flex: 1 1 110px; min-width: 0; }
+.apm-manage__field .gh-input { width: 100%; }

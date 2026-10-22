@@ -1,0 +1,2346 @@
+{
+ "confirmed": [
+  {
+   "id": "F-1",
+   "title": "Giao việc (Hộp thư), gán người (Vụ việc), gán BOT (Nhóm & Con người) dùng ID giả viết cứng → luôn lỗi 422 ở bản thật; test mock không bắt được",
+   "severity": "red",
+   "dimension": "kien-truc",
+   "evidence": [
+    "apps/web/src/screens/queue/InboxScreen.tsx:25-30 (TEAMMATES = u-lan \"Chị Lan Phạm\"/u-minh \"Anh Minh Kiểm\"/u-me \"Tôi\"), dùng ở :234 (Hộp thư › \"Giao cho người khác\")",
+    "apps/web/src/screens/market/DealsScreen.tsx:21-26, dùng ở :239-240 (Vụ việc › \"Gán người xử lý\"): cùng danh sách trên",
+    "apps/web/src/screens/relations/DirectoryScreen.tsx:28-34 (AGENTS = 'agent-tls', 'agent-ka'…), dùng ở :183, :403, :462 (\"Gán BOT trực nhóm\"/người)",
+    "gh/biz/queue/routes.py:226-227 (user_id: uuid.UUID)",
+    "gh/biz/market/routes.py:878-880 (assignee_user_id: uuid.UUID)",
+    "gh/biz/relations/routes.py:101-103, 199-201 (agent_id: uuid.UUID)",
+    "apps/web/test/mock-p3-relations.ts:70-74, apps/web/test/mock-p3-market.ts:230: mock dùng đúng các mã giả này nên e2e vẫn xanh",
+    "Chú thích code còn ghi \"tạm — chưa có màn Danh mục người dùng (GĐ 4)\"; màn Người dùng đã có từ v0.1.22"
+   ],
+   "impact": "Giao việc ở Hộp thư, gán người cho Vụ việc, gán BOT ở Nhóm & Con người không bao giờ chạy với người dùng thật: hộp thoại hiện tên người không có trong công ty, bấm vào thì Boss chỉ thấy \"Dữ liệu chưa hợp lệ\". Không giao được việc, không gán được trợ lý cho nhóm — vòng \"quản lý đội\" cốt lõi. Bằng chứng rõ nhất của lỗ hổng phương pháp ở O2 (mock không kiểm như API thật).",
+   "fix": "Thay danh sách cứng bằng truy vấn /users (đã có) hoặc /gen/assignees cho người, /agents cho trợ lý, \"Tôi\" là người đang đăng nhập. Đưa mock về UUID và cho mock kiểm UUID như API thật. Thêm 1 test e2e-live cho mỗi thao tác. Thêm kiểm tra tĩnh cấm { id: 'u-…' } và agent-… trong src/.",
+   "effort": "S",
+   "sources": [
+    "KT-1",
+    "UX-1"
+   ],
+   "survives": true,
+   "better_fix": "Đừng dùng /users: auth/users.py:32 yêu cầu roles.manage (chỉ Owner). /gen/assignees cũng không hợp: gen/routes.py:36-39 trả 403 GEN_DISABLED cho vai trò chưa bật Gen (mặc định chỉ owner). /agents cần system.read ALL (agents_api/routes.py:41). Nên thêm 2 endpoint chọn người/agent nhẹ (vd. GET /api/v1/pickers/users với quyền queue.act hoặc opportunity.write, tái dùng SQL ở gen/routes.py:214-218; và GET /api/v1/pickers/agents với profile.write, chỉ trả id+name). Thêm hook useAssignees/useAgentOptions dùng chung cho cả 3 màn; \"Tôi\" lấy theo me=true. Mock dùng UUID và trả 422 khi không phải UUID. Thêm test e2e-live cho từng thao tác. | Gộp luôn graph/graphModel.ts:99-103 (OWNER_OPTIONS 'u-ha'/'u-khoa', bộ lọc người phụ trách cũng giả). Dùng một hook chung useAssignees() (gọi /users với người đang hoạt động, 'Tôi' = me.id) và useAgents() (gọi /agents); thêm luật lint/grep trong CI để chặn chuỗi id: 'u-' và 'agent-' trong src/.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.95,
+     "reason": "Đã đọc InboxScreen.tsx:25-30 + :234 và DealsScreen.tsx:21-26 + :239-240: TEAMMATES cứng u-lan/u-minh/u-me. DirectoryScreen.tsx:29-34 có AGENTS 'agent-tls'…, dùng ở :183/:403/:462. API: queue/routes.py:226-227 user_id: uuid.UUID; market/routes.py:880 assignee_user_id: uuid.UUID|None; relations/routes.py:101-103, 199-201 agent_id: uuid.UUID. Pydantic từ chối → errors.py:96-101 trả 422 \"Dữ liệu chưa hợp lệ\". Mock (mock-p3-relations.ts:70-74, mock-p3-market.ts:230) dùng đúng mã giả; e2e-live không có test giao việc hay gán BOT. Kết luận: tái hiện đúng."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.88,
+     "reason": "Đã xác minh: InboxScreen.tsx:26-30 và DealsScreen.tsx:22-26 dùng 'u-lan/u-minh/u-me', DirectoryScreen.tsx:29-34 dùng 'agent-tls…'; API yêu cầu uuid.UUID (queue/routes.py:226, market/routes.py:880, relations/routes.py:102,200) nên luôn 422. Cả 3 màn đều có route thật (queue/market/relations index.ts). Chỉ 'Chưa gán' chạy được. Màn hiện tên người không có thật và thao tác giao việc/gán BOT luôn hỏng, trái thẳng mục tiêu 2 (không lỗi logic) và mục tiêu 1 (gán trợ lý cho nhóm). Không có biện pháp bù nào. Giữ mức đỏ."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-2",
+   "title": "\"Hạn lưu dữ liệu\" trên giao diện là giả — không job nào thi hành; nhiều bảng phình vô hạn",
+   "severity": "orange",
+   "dimension": "kien-truc",
+   "evidence": [
+    "gh/system_api/routes.py:867-901",
+    "apps/web/src/screens/system/StorageTab.tsx:54,101",
+    "db/sql/0001_baseline.sql:855 (pg_partman retention chỉ cho ops.plugin_logs)",
+    "db/sql/0019_v0125_triage.sql:5-30 (item_marks giữ norm_text ≤600 ký tự)",
+    "docs/design/gen-browser-agent.md:105-107 (hứa giữ 14 ngày, chưa làm)",
+    "0001_baseline.sql:293, 878 (trigger cấm DELETE raw.events, ops.action_log)"
+   ],
+   "impact": "Đĩa đầy dần (máy tự host, không ai trực); job quét toàn bảng chậm dần; Owner đặt \"giữ 90 ngày\" và tin là đã xoá — sai sự thật về dữ liệu cá nhân (tin nhắn Zalo/WhatsApp/Facebook).",
+   "fix": "Module gh/retention.py + cron hằng ngày: đọc ops.retention_policies + mặc định an toàn; bảng phân vùng → partman.part_config.retention; bảng thường → DELETE theo lô; browser_jobs.result 14 ngày; action_log cần điểm neo cho verify_chain. Gộp 3 kiểu purge rải rác (gen/store.py:111-119, notifications.py:142-160, purge_expired_sessions). Trước khi xong: ghi rõ \"chưa áp dụng\" trên StorageTab.",
+   "effort": "M",
+   "sources": [
+    "KT-2"
+   ],
+   "survives": true,
+   "better_fix": "Làm trong ngày: StorageTab ghi 'chưa áp dụng tự động' hoặc tạm khoá nút Sửa. Sau đó mới làm job: raw.events, clean.meaning_units, agent.model_calls đã phân vùng nên chỉ cần ghi keep_days vào partman.part_config.retention (partition_maintenance đã chạy mỗi giờ), không cần DELETE theo lô; ops.action_log làm sau cùng vì vướng chuỗi băm.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.9,
+     "reason": "system_api/routes.py:867-899 chỉ đọc/ghi ops.retention_policies; grep toàn repo thì ngoài 2 route này và 1 test, không chỗ nào khác đọc bảng. worker.py:191-202 không có job retention nào. Partman chỉ đặt retention cho ops.plugin_logs (0001_baseline.sql:855). raw.events và action_log còn có trigger cấm DELETE (:293, :878). StorageTab.tsx:59/:101 hiển thị hạn lưu như thể đang được áp dụng. Hạ xuống orange: mặc định là NULL (\"mãi mãi\"), chỉ sai khi Owner tự đặt hạn; một công ty nhỏ, dữ liệu text tăng chậm, không mất dữ liệu cũng không phải lỗ bảo mật ngay."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.75,
+     "reason": "Đã xác minh: ops.retention_policies chỉ có đọc/ghi (system_api/routes.py:871-899), không job nào đọc nó; partman chỉ đặt retention cho plugin_logs. Tuy vậy mặc định màn hiện 'mãi mãi', tức là vẫn đúng sự thật. Sai lệch chỉ xảy ra khi Owner chủ động sửa (có PIN), mà Boss hiếm khi làm. Với công ty nhỏ, dữ liệu chủ yếu là văn bản (model_calls mỗi dòng rất nhỏ) nên nhiều năm mới đầy đĩa. Vấn đề có thật (hứa xoá mà không xoá) nhưng không gấp tới mức đỏ."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-3",
+   "title": "Sao lưu theo lịch có thể hỏng âm thầm, không chuông, không bù",
+   "severity": "orange",
+   "dimension": "kien-truc",
+   "evidence": [
+    "gh/worker.py:180-202 (WorkerSettings không đặt job_timeout)",
+    "gh/backup.py:443 (cron không truyền timeout) vs gh/backup.py:444 (backup_now 3600 s)",
+    "gh/backup.py:380-381 (except Exception không bắt CancelledError)",
+    "gh/backup.py:256, 260 (dump đọc vào RAM, mã hoá đồng bộ trong event loop)",
+    "gh/backup.py:333-334 (chỉ chạy trong ±15 phút quanh giờ đặt)",
+    "gh/shell/routes.py:80-101 (/ready không kiểm worker)",
+    "apps/api/tests/test_backup.py:94-112 (chỉ test is_due)"
+   ],
+   "impact": "Lưới an toàn dữ liệu của Boss có thể ngừng mà không ai biết; CSDL lớn dần ⇒ pg_dump vượt 5 phút ⇒ job bị huỷ không chuông; lỡ giờ thì bỏ qua cả ngày.",
+   "fix": "cron(..., timeout=3600); dump theo luồng (pg_dump → mã hoá theo khối → ghi tệp), CPU trong asyncio.to_thread; bắt BaseException để chuông rồi raise lại; điều kiện đến hạn thành \"đã qua giờ đặt và chưa có bản trong chu kỳ\" (tự bù); job kiểm \"bản mới nhất cũ hơn 36 giờ\" → chuông P1; thêm nhịp tim worker.",
+   "effort": "M",
+   "sources": [
+    "KT-3"
+   ],
+   "survives": true,
+   "better_fix": "Bản tối thiểu: (1) backup.py:443 thêm \"timeout\": 3600 vào dict kw của JOBS. (2) scheduled_backup_scan bắt thêm asyncio.CancelledError: gửi chuông rồi raise lại. Trong _run (backup.py:231) khi bị huỷ thì gọi proc.kill() để không để pg_dump mồ côi. (3) Thêm cron hằng ngày kiểm \"bản mới nhất trong manifest cũ hơn 36 giờ\" → chuông P1; cách này phủ cả đường arq lẫn đường genh, kể cả khi Owner tắt auto-update. Chưa cần sửa is_due để tự bù vì timer genh đã bù. Ghi dump theo luồng và chạy CPU trong to_thread để sau, ưu tiên thấp. | Ưu tiên 3 việc rẻ: cron(..., timeout=3600); đổi is_due thành 'đã qua giờ đặt và chưa có bản trong chu kỳ' để tự bù; job hằng giờ báo chuông P1 khi bản mới nhất (tính cả pre-update) cũ hơn 36 giờ. Phần dump theo luồng và to_thread để sau.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.7,
+     "reason": "Lỗi trong code là thật: backup.py:443 JOBS chỉ có minute, worker.py:201 cron(fn,**kw) không truyền timeout, nên áp job_timeout mặc định của arq là 300 s (WorkerSettings :180-202 không đặt). :380 except Exception không bắt CancelledError nên không có chuông. :333-334 cửa sổ ±15 phút. :256/:260 đọc cả dump vào RAM và mã hoá đồng bộ. Nhưng auditor bỏ sót lưới thứ hai: genh auto-update (bật mặc định) chạy mỗi đêm 03:00 với Persistent=true (autoupdate/content.go:42-43), và bước 1/5 của RunUpdate (ops/update.go) luôn chạy `python -m gh.backup run` qua docker exec, không bị timeout của arq, có bù khi lỡ giờ. Vì vậy câu \"lưới an toàn ngừng mà không ai biết\" là quá mức → orange."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.68,
+     "reason": "Các điểm kỹ thuật đều đúng: cron mặc định hết giờ sau 300 s của arq; CancelledError lọt qua except Exception nên không báo chuông; cửa sổ chỉ ±15 phút và không chạy bù; /ready không kiểm worker. Nhưng CSDL công ty nhỏ thì pg_dump mất vài giây, nên kịch bản vượt 5 phút là lý thuyết trong nhiều năm. Ngoài ra genh luôn sao lưu 'pre-update' trước mỗi lần tự cập nhật (chạy qua compose exec, không bị giới hạn giờ), coi như bù một phần. Rủi ro thật là máy tắt hoặc worker chết đúng giờ đặt thì mất bản ngày đó mà không ai biết. Hạ xuống cam."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-4",
+   "title": "Log production nuốt traceback và thời gian; mã ERR-… trên web không nối được với log máy chủ",
+   "severity": "orange",
+   "dimension": "kien-truc",
+   "evidence": [
+    "gh/app.py:217-226 (JsonFormatter chỉ ghi level/logger/msg, bỏ exc_info; 13 chỗ log.exception/exc_info mất stack trace)",
+    "deploy/compose.yaml:12 (GH_ENV mặc định production)",
+    "gh/main.py:12-13 (uvicorn log_config=None)",
+    "gh/refinery/scheduler.py:86",
+    "gh/middleware.py:84",
+    "gh/app.py:196-199 (không có handler Exception chung)",
+    "apps/web/src/shell/ErrorPage.tsx:90-99 (mã ERR-… chỉ in console)",
+    "web/src/lib/errorId.ts — ERR-… sinh ở trình duyệt, không gửi máy chủ, không request-id",
+    "doctor.go:175 — docker compose logs --tail=500 không -t",
+    "Gói doctor phải chạy CLI, thiếu auto-update.log, update-status.json, revision alembic, digest ảnh; không lọc dữ liệu nhạy cảm"
+   ],
+   "impact": "Mọi lỗi 500 mất stack trace và thời gian; Boss báo \"màn sập, mã ERR-XXXX\" nhưng người sửa không có gì để tra; Claude không chẩn đoán được từ xa — ngược với mục tiêu \"tự bảo trì\".",
+   "fix": "Formatter thêm ts + exc/stack + request_id; middleware gán X-Request-ID (trả header, đưa vào mọi problem+json RFC 7807 và log), web hiện request-id cạnh mã ERR; handler Exception chung trả problem+json INTERNAL kèm mã; web gửi lỗi giao diện về POST /client-errors; docker compose logs thêm -t; nút Console \"Tải gói chẩn đoán\" (qua run/request/doctor.json → genh doctor có lọc dữ liệu nhạy cảm, kèm auto-update.log, update-status.json, revision alembic, digest ảnh).",
+   "effort": "M",
+   "sources": [
+    "KT-4",
+    "VH-12"
+   ],
+   "survives": true,
+   "better_fix": "Tách ra một bước S làm ngay trước phần M. (a) JsonFormatter thêm \"ts\": self.formatTime(record), \"exc\": self.formatException(record.exc_info) khi có, và stack_info. (b) db_error_handler chỉ trả 503 cho OperationalError/InterfaceError; các DBAPIError khác thì log.exception rồi trả 500 INTERNAL, không đưa str(exc) cho client. (c) Thêm handler Exception chung: log.exception kèm method/path, trả problem+json INTERNAL. Request-id, POST /client-errors và gói doctor có lọc dữ liệu nhạy cảm làm sau. | Bước 1 (vài dòng): formatter thêm 'ts' và 'exc': self.formatException(record.exc_info) khi có lỗi, doctor thêm -t. Bước 2: middleware X-Request-ID, đưa id vào problem+json và hiện cạnh mã ERR. Gói chẩn đoán từ Console làm sau.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.9,
+     "reason": "app.py:217-226: JsonFormatter chỉ ghi level/logger/msg, không có ts, không có exc_info. compose.yaml:12 GH_ENV mặc định production; worker.py:43 cũng gọi configure_logging. main.py:12-13 log_config=None nên log uvicorn.error đi qua formatter này và mất traceback; có đúng 13 chỗ log.exception/exc_info. app.py:196-199 không có handler Exception chung. ErrorPage.tsx:98 chỉ console.error mã ERR; errorId.ts sinh mã ở trình duyệt; API không có request-id. doctor.go:175 dùng logs --tail=500, không có -t. Auditor còn bỏ sót: errors.py:70-80 đổi MỌI DBAPIError (kể cả IntegrityError/ProgrammingError do lỗi SQL) thành 503 \"Mất kết nối CSDL\" mà không ghi log → lỗi logic bị che thành sự cố hạ tầng. Hạ xuống orange: thiếu khả năng quan sát, không làm hỏng chức năng."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.72,
+     "reason": "Đã xác minh: JsonFormatter (app.py:217-226) chỉ ghi level/logger/msg nên mất exc_info; worker cũng dùng formatter này. ERR-… chỉ in ra console trình duyệt; doctor.go dùng --tail=500 không có -t. Riêng 'mất thời gian' là nói quá: Docker json-file vẫn lưu mốc giờ, xem được bằng logs -t. Đây là lỗ hổng chẩn đoán, làm chậm việc tự bảo trì, nhưng không gây mất dữ liệu hay hỏng chức năng của Boss. Hạ xuống cam."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-5",
+   "title": "Stored XSS qua Tài liệu → nhân viên chiếm phiên Owner",
+   "severity": "red",
+   "dimension": "bao-mat",
+   "evidence": [
+    "apps/api/gh/biz/relations/routes.py:724",
+    "apps/api/gh/biz/relations/routes.py:749",
+    "apps/api/gh/biz/relations/routes.py:783-784",
+    "apps/web/src/screens/relations/DocumentsScreen.tsx:198",
+    "apps/web/src/screens/relations/DocumentsScreen.tsx:100",
+    "apps/web/src/screens/relations/DocumentsScreen.tsx:118",
+    "deploy/proxy/Caddyfile:16",
+    "apps/api/gh/auth/routes.py:40",
+    "apps/api/gh/auth/rbac.py (dòng \"profile.write\" của _M)",
+    "apps/api/gh/biz/relations/routes.py:615-622"
+   ],
+   "impact": "Nhân viên có profile.write tải tệp .html/.js lên, Owner bấm Mở → JS chạy với phiên Owner (cookie SameSite vẫn gửi, cookie CSRF đọc được): tạo tài khoản Manager không cần PIN, đổi nhà cung cấp AI để tuồn mọi prompt ra ngoài, nếu PIN còn hiệu lực thì xuất raw/audit, đổi ma trận quyền. Phá vỡ toàn bộ ranh giới RBAC/che dữ liệu giữa nhân viên và Owner.",
+   "fix": "Allowlist mime (pdf, png/jpg/webp/gif, txt, csv, docx/xlsx/pptx…); ngoài allowlist ép application/octet-stream + Content-Disposition: attachment; không bao giờ phục vụ inline text/html, image/svg+xml, *javascript*, text/xml. Route nội dung thêm CSP: sandbox; default-src 'none' và Cross-Origin-Resource-Policy: same-origin. Siết CSP Caddy: script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'. Lâu dài phục vụ tệp từ origin riêng hoặc tải dạng blob. Thêm test hồi quy: tải lên text/html → trả attachment.",
+   "effort": "S",
+   "sources": [
+    "BM-01"
+   ],
+   "survives": true,
+   "better_fix": "Thi hành ở lúc phục vụ tệp (routes.py:783-784), không chỉ lúc tải lên, vì các dòng cũ đã mang mime tuỳ ý. Chỉ cho inline với application/pdf và image/png|jpeg|webp|gif; mọi mime khác ép application/octet-stream + attachment. Luôn thêm Content-Security-Policy: sandbox; default-src 'none'. Ở Caddyfile:16 thêm script-src 'self'; object-src 'none'; base-uri 'none' và bỏ 'wss:' khỏi connect-src ('self' đã gồm ws cùng origin). Thêm test hồi quy trong tests/test_p3_relations.py: tải lên text/html và application/javascript → nhận attachment + octet-stream. | Route /content: luôn trả Content-Disposition: attachment, trừ allowlist an toàn (pdf, png/jpg/webp/gif); kèm 'Content-Security-Policy: sandbox; default-src none' cho mọi phản hồi tệp. Ở Caddy đổi connect-src 'self' wss: thành connect-src 'self' (bỏ wss: mở toang). Đồng thời bắt PIN cho POST/PATCH /providers và /providers/chain.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.9,
+     "reason": "relations/routes.py:724 mime do client tự khai, không kiểm. :783-784 trả lại đúng media_type=r.mime kèm Content-Disposition inline. DocumentsScreen.tsx:100/:118 mở bằng <a target=_blank> cùng origin, cookie SameSite=strict vẫn được gửi; CSRF cookie httponly=False (auth/routes.py:38-39). rbac.py:67 cho Operator/Manager/agent_staff có profile.write. CSP Caddy (Caddyfile:16) chặn script inline, NHƯNG kẻ tấn công có thể tải lên một tệp .js (mime application/javascript) rồi một tệp .html dùng <script src=\"/api/v1/documents/<id>/content\">: script cùng origin nên khớp 'self', nosniff cũng qua vì mime do kẻ tấn công đặt. connect-src còn cho wss: tới mọi host, đủ để tuồn dữ liệu ra. Một chi tiết trong impact sai: tạo user vẫn cần PIN (users.py:129-131); phần lõi của lỗi vẫn đúng."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.85,
+     "reason": "Đã xác minh: mime do client gửi lên được lưu nguyên (routes.py:749) và trả về inline cùng origin (783-784). CSP 'default-src self' chặn script inline, nhưng lách được bằng cách tải thêm một tài liệu .js rồi dùng <script src=/api/v1/.../content>. Link mở bằng target=_blank cùng site nên cookie SameSite=strict vẫn được gửi, và cookie CSRF đọc được bằng JS. Tạo/sửa nhà cung cấp AI không cần PIN, nên kẻ tấn công chuyển được toàn bộ prompt ra ngoài; connect-src 'wss:' còn cho đẩy dữ liệu tới bất kỳ máy chủ wss nào (đọc được cả dữ liệu chỉ Owner thấy như people_review). Một chi tiết sai: mời người dùng/Manager CÓ cần PIN (users.py:131). Điều kiện là nhân viên có ý xấu và Owner bấm mở, khả thi với rủi ro nội bộ. Giữ mức đỏ."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-6",
+   "title": "Hệ thống hỏng mà không báo cho Boss: không giám sát sức khoẻ, không cảnh báo chủ động trong lẫn ngoài app",
+   "severity": "red",
+   "dimension": "van-hanh",
+   "evidence": [
+    "grep kind= trong apps/api/gh: chỉ có backup.done/failed, hub.token_expiring, nghiệp vụ — không có cho cập nhật lỗi/rollback (chỉ run/update-status.json, web/src/update/UpdateCard.tsx), worker chết, kênh Zalo/WhatsApp rớt, CLI hết hạn (providers/cli.py:16), đĩa đầy",
+    "Chuông chỉ có 8 loại thông báo: apps/api/gh/auth/users.py:172,202,217; apps/api/gh/social/service.py:637,706; apps/api/gh/backup.py:407; apps/api/gh/hub_link/service.py:512; apps/api/gh/biz/queue/jobs.py:236",
+    "Không có thông báo cho: kênh rớt/phiên hết hạn, model lỗi/hết hạn mức, đăng nhập CLI hết hạn, có bản mới, nháp chờ duyệt quá lâu, lần sàng lọc lỗi",
+    "Sự kiện channel.status chỉ cập nhật bộ đệm, không báo gì (lib/realtime.ts:323-342)",
+    "Ảnh shots/own-system-channels.png: WhatsApp \"Phiên hết hạn — Ngừng nhận tin từ 15:05\", chỉ thấy khi tự vào Hệ thống › Kênh",
+    "Docker không tự khởi động lại container unhealthy; gh/shell/routes.py:80-101 (/ready chỉ có db/redis/bridge, không kiểm worker/browser)",
+    "gh/chassis/bus.py:125 (DLQ chỉ ghi, không đọc/hiển thị/phát lại)",
+    "bus.py:118-120, 151-155 (Deferred nhận lại mỗi 30 s mãi mãi)",
+    "gh/social/service.py:836-842 (xack cả khi xử lý lỗi)",
+    "gh/social/protocol.py:25 (gh:browser:heartbeat đã tồn tại)"
+   ],
+   "impact": "Với Boss không rành kỹ thuật, tự bảo trì thất bại âm thầm: lỗi hook/consumer/worker/browser không ai thấy, worker chết thì Console vẫn \"khoẻ\"; cập nhật lỗi lặp mỗi đêm, backup ngừng, kênh rớt nhiều ngày, dữ liệu ngừng chảy về mà Boss không biết. Biết có bản mới chỉ khi tình cờ mở Tổng quan — đúng kiểu \"nút cập nhật biến mất\" Boss từng gặp.",
+   "fix": "(1) Trong app: job \"Sức khoẻ cần Sếp\" — mỗi sự cố (kênh rớt/phiên hết hạn, model lỗi/hết hạn mức, CLI hết hạn, cập nhật lỗi/rollback, worker chết, đĩa đầy, có bản mới, nháp chờ lâu, sàng lọc lỗi) sinh một thông báo chuông khử trùng lặp kèm liên kết sửa; thẻ \"Cần Sếp xử lý\" ở đầu Tổng quan gộp dải Chưa có model, thẻ Cập nhật và kênh rớt; thẻ \"Sức khoẻ hệ thống\" ở Điều khiển hệ thống: nhịp tim worker (arq health-check key), lần chạy cuối của từng cron (ghi Redis khi job xong), số tin DLQ theo stream + nút \"Chạy lại\"; chuông P1 khi worker im > 10 phút. (2) Ngoài app: watchdog do genh cài (timer 10–15 phút) kiểm /ready, container unhealthy (tự restart), đĩa, tuổi backup, update-status=failed, heartbeat worker/bridge → gửi một kênh ngoài (Telegram/Zalo của Boss, email, hoặc Kho dữ liệu), chống spam.",
+   "effort": "M",
+   "sources": [
+    "VH-5",
+    "KT-10",
+    "UX-2"
+   ],
+   "survives": true,
+   "better_fix": "Báo ngay tại chỗ trạng thái thật sự đổi, thay vì thêm một job quét sức khoẻ, vì cách này tự khử trùng lặp. (a) data/ingest.py, nhánh session.ended khi reason ∈ {expired, error}: gọi notifications.notify(owner_ids, kind='channel.down', link='/system?tab=channels'). (b) providers/router.py _set_auth_state: khi rowcount>0 và state='expired' thì notify kind='model.auth_expired'. (c) Không đưa worker vào /ready, vì genh update dùng /ready để quyết rollback (update.go:248). Thay vào đó thêm GET /system/health đọc khoá health-check của arq, gh:browser:heartbeat và độ dài từng stream .dlq, rồi hiện thẻ ở Điều khiển hệ thống. (d) Watchdog ngoài app do genh cài: chạy `genh doctor --notify` theo timer cạnh gen-harness-update, đọc update-status.json=failed, compose health unhealthy (restart service đó), đĩa, tuổi backup; gửi qua Telegram Bot API (bot chính thức, chat_id của Boss). Viết test cho (a) và (b) trong apps/api/tests. | Chia 2 bước. Bước 1 (S): sinh chuông khử trùng lặp theo sự cố + dải 'Cần Sếp xử lý' đầu Tổng quan cho: kênh expired/logged_out, CLI/model auth expired, update-status=failed/rolled_back, backup quá 48 giờ, worker im >10 phút (đọc health-check key của arq). Bước 2 (M): đẩy cùng cảnh báo ra một kênh ĐỘC LẬP với kênh có thể rớt (bot Telegram tới Boss hoặc email), do genh/watchdog gửi được cả khi api chết. Tách DLQ/xack/Deferred thành finding độ tin cậy riêng.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.85,
+     "reason": "Xác nhận. Chỉ có 9 kind gọi notify(): user.* (auth/users.py:172,202,217), social.read/paused (social/service.py:636,705), backup.done/failed (backup.py:405-407), hub.token_expiring (hub_link/service.py:511), task.reminder (biz/queue/jobs.py:236). Kênh Zalo/WhatsApp rớt (data/ingest.py:269-283, session.ended) chỉ ghi actionlog + phát WS channel.status; web chỉ cập nhật cache (lib/realtime.ts:323-342). providers/router.py:218-222 đổi auth_state=expired mà không báo. /ready chỉ kiểm db/redis/bridge (shell/routes.py:80-101), không kiểm worker; worker có healthcheck docker (compose.yaml:111) nhưng không có gì tự khởi động lại khi unhealthy hay đưa lên Console. DLQ chỉ ghi (bus.py:125, không ai đọc .dlq); Deferred không ack, bị nhận lại mãi (bus.py:118-120); social/service.py:842 xack cả khi lỗi. Có hai sắc thái nhỏ: Facebook có social.paused, và header có pill 'N kênh' (shell/Header.tsx:95-98). Hai điểm này không đủ để coi là có cảnh báo chủ động."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.72,
+     "reason": "Xác nhận trong mã: notify() chỉ có 8 loại (user.*, social.read/paused, backup.done/failed, hub.token_expiring, task.reminder); kênh Zalo/WhatsApp hết phiên, CLI/model hết hạn, cập nhật lỗi/rollback, worker treo đều không báo chuông. channel.status chỉ cập nhật cache + đếm 'channels_live' ở header (tín hiệu thụ động, rất yếu). /ready không kiểm worker/browser; restart: unless-stopped không cứu container treo.\nCó bù trừ một phần (social.paused, backup.failed có chuông) nhưng hỏng phổ biến nhất (phiên kênh hết hạn — có ảnh chứng) im lặng → dữ liệu ngừng chảy, trái mục tiêu (3). Giữ đỏ.\nTuy vậy effort M là thấp: watchdog ngoài app + kênh đẩy ngoài + UI DLQ là L; các bằng chứng DLQ/xack/Deferred là lỗi độ tin cậy riêng, nên tách."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-7",
+   "title": "Menu xếp theo kiến trúc kỹ thuật, việc quản trị của Boss nằm trong \"Kỹ thuật · Backend\"",
+   "severity": "orange",
+   "dimension": "ux",
+   "evidence": [
+    "Có 25 màn, 7 tab Hệ thống và 5 trang ngoài danh mục",
+    "Mô tả màn Hệ thống ghi \"Việc hằng ngày không cần vào đây\" (screens.ts:227) nhưng mời người, sao lưu, cập nhật, đổi tài khoản Google, xem kênh rớt đều phải vào đây",
+    "Việc \"kết nối\" rải ở 5 nơi: Hệ thống › Kênh; Plugin (cài Telegram); menu tài khoản (Facebook); MCP Hub (Gen-hub); tài khoản AI 4 chỗ",
+    "4 thẻ bị lặp (a2) và thuật ngữ không thống nhất (a3)"
+   ],
+   "impact": "Boss phải nhớ \"cái gì nằm ở đâu\". Mỗi chỗ lặp là một chỗ dễ lệch — gốc của chuỗi lỗi v0.1.28–31 (hướng dẫn mất, nút cập nhật mất, đổi tài khoản Google không ăn).",
+   "fix": "Thêm \"Chế độ Boss\" (mặc định) cho thanh bên theo khuyến nghị 1: 6 mục theo việc, phần còn lại vào \"Nâng cao\". Không cần sửa backend, chỉ sắp lại menu và gom các thẻ đã có.",
+   "effort": "M",
+   "sources": [
+    "UX-3"
+   ],
+   "survives": true,
+   "better_fix": "Không nên thêm 'Chế độ Boss' dạng bật/tắt, vì như vậy có thêm một cây menu thứ hai phải giữ khớp (NAV backend, NAV_ORDER/DOMAINS trong screens.ts và chế độ mới), đúng kiểu dễ lệch mà finding đang phê phán. Nên sắp lại một lần, đồng thời ở apps/api/gh/shell/navigation.py (NAV) và packages/contracts/src/screens.ts (DOMAINS/NAV_ORDER). Đổi nhãn domain 'Kỹ thuật · Backend' thành 'Nâng cao'. Thêm vào domain business một nhóm 'Quản trị' trỏ thẳng tới các tab system (users, storage, channels) qua key/tab. Bỏ một trong hai chỗ đặt UpdateCard. Sửa mô tả ở screens.ts:227. Cập nhật apps/web/test/unit/nav.test.tsx và các test RBAC/navigation trong apps/api/tests. | Không thêm 'Chế độ Boss' (thêm một bộ menu thứ hai = thêm chỗ lệch, đúng loại lỗi finding đang chê). Sửa trực tiếp menu duy nhất: tạo nhóm 'Quản trị' ở miền chính gồm Người dùng, Sao lưu & cập nhật, Kết nối (gom Kênh + Telegram + Facebook + Gen-hub + tài khoản AI vào một màn); bỏ 4 thẻ lặp; đổi câu mô tả màn Hệ thống cho đúng.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.8,
+     "reason": "Các sự kiện đều đúng. Domain 'Kỹ thuật · Backend' nằm ở packages/contracts/src/screens.ts:52 và apps/api/gh/shell/navigation.py (NAV). Mô tả 'Việc hằng ngày không cần vào đây' ở screens.ts:227, trong khi 7 tab của màn này (SystemScreen.tsx:22-28) gồm cả Người dùng (mời), Dữ liệu & lưu trữ (sao lưu · cập nhật) và Kênh. UpdateCard bị lặp ở OverviewScreen.tsx:162 và StorageTab.tsx:30. Hub-link nằm ở screens/mcp/HubLinkCard.tsx, còn /social mở từ shell/AccountFooter.tsx:142. Tuy vậy đây là vấn đề sắp xếp UX, không phải lỗi logic. Câu 'gốc của chuỗi lỗi v0.1.28–31' là suy đoán, nên hạ xuống orange. Fix ghi 'không cần sửa backend' là sai: thanh bên render từ GET /navigation, dựng từ NAV trong apps/api/gh/shell/navigation.py:24-60."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.7,
+     "reason": "Xác nhận: navigation.py chia 'Kinh doanh' / 'Kỹ thuật · Backend'; Điều khiển hệ thống (mô tả 'Việc hằng ngày không cần vào đây') lại chứa Người dùng, Sao lưu & cập nhật, Kênh — việc quản trị của Boss.\nNhưng đây là ma sát UX, không mất dữ liệu, không lỗi logic; Gen có navigate/highlight/tour để dẫn đường (bù trừ một phần). Gán là 'gốc của chuỗi lỗi v0.1.28–31' là suy diễn quá: các lỗi đó là lỗi logic, không do thứ tự menu.\nHạ xuống cam."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-8",
+   "title": "Gen chưa phải trợ lý thật: chỉ trả lời trong khung chat Console",
+   "severity": "orange",
+   "dimension": "ux",
+   "evidence": [
+    "Bảng a6: không chủ động, nhắc việc chỉ vào chuông",
+    "Mất hội thoại khi tải lại (gen/genStore.ts:65, gen/genClient.ts:99 không được dùng)",
+    "Không trí nhớ dài hạn (apps/api/gh/gen/engine.py:39)",
+    "Mạng xã hội và Kho chỉ đọc (apps/api/gh/social/service.py:7)",
+    "Không có kênh chat với Gen ngoài Console"
+   ],
+   "impact": "Boss muốn \"Gen quản lý thông tin và tương tác thay mình\" nhưng vẫn phải mở máy, vào Console, tự hỏi, rồi tự đi duyệt ở màn khác.",
+   "fix": "Theo thứ tự khuyến nghị 4: lịch sử hội thoại (S), \"Bản tin Gen\" sáng/tối (M), nhắc việc và bản tin qua Telegram/Zalo tới chính Boss (M–L), hành động khép vòng, Gen nhớ, thêm công cụ đọc Tài liệu/Deal.",
+   "effort": "L",
+   "sources": [
+    "UX-4"
+   ],
+   "survives": true,
+   "better_fix": "Bước S làm ngay: ở genStore.ts:65 cho partialize thêm conversationId; khi GenPanel mount, nếu có conversationId và messages rỗng thì gọi loadConversation(conversationId). Thêm danh sách 'Hội thoại cũ' dùng api.gen.conversations. Kèm test unit trong apps/web/test. Kênh ra ngoài tới Boss: dùng Telegram Bot API chính thức (token bot + chat_id của Boss, gửi một chiều trước), qua một job worker gom bản tin/nhắc việc. Không nên đi qua bridge Zalo cá nhân. Lưu ý repo chưa có plugin Telegram (plugins/ chỉ có channel-zalo và channel-whatsapp), nên effort cho phần này phải tính cả việc viết plugin. | Tách: (a) lỗi nhỏ làm ngay (S): lưu conversationId + gọi loadConversation khi mở lại, có danh sách hội thoại gần đây; (b) 'Bản tin Gen' sáng qua chuông + đẩy tới Boss qua Telegram (M) — dùng chung đường đẩy ngoài app với F-6; (c) bỏ 'Kho/MXH chỉ đọc' khỏi bằng chứng lỗi; nếu mở ghi MXH thì qua nháp chờ duyệt, có cảnh báo theo QD-12.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.85,
+     "reason": "Xác nhận. genStore.ts:65 chỉ persist openByUser, nên conversationId và messages mất khi tải lại. loadConversation (genClient.ts:99) chỉ có định nghĩa, grep không thấy chỗ nào gọi. Backend đã có GET /gen/conversations và /messages (gen/routes.py:70,76; contracts gen.ts:203-205) nhưng UI không dùng. Engine chỉ lấy 10 tin của hội thoại hiện tại (engine.py:39, 209), không có trí nhớ xuyên hội thoại; memory/notebook.py chỉ ghi theo người/nhóm. Gen chỉ được gọi qua POST /gen/turns (routes.py:118), không có kênh nào khác. Social CHỈ ĐỌC (social/service.py:1). Thư mục plugins/ chưa có plugin Telegram."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.62,
+     "reason": "Xác nhận: genStore chỉ persist openByUser, loadConversation() không ai gọi → mất hội thoại khi tải lại; engine chỉ HISTORY_MESSAGES=10, không trí nhớ dài hạn; nhắc việc chỉ vào chuông; không kênh chat ngoài Console.\nNhưng đây là khoảng trống lộ trình (tính năng chưa làm), không phải hỏng/mất dữ liệu; 'Kho chỉ đọc' đúng theo quyết định hiệu lực (Gen ghi Gen-hub để sau), social chỉ đọc là thiết kế có chủ ý v0.1.29 — ghi là lỗi là gán nhãn sai.\nĐỏ nên dành cho thứ hỏng âm thầm/dữ liệu/bảo mật; hạ cam, giữ ưu tiên cao trong lộ trình."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-9",
+   "title": "Phát hành và tự cập nhật không có cổng chặn: bản thành \"latest\" trước CI/E2E, chữ ký cosign không ai kiểm, không người duyệt — máy Owner tự nhận bản lỗi (hoặc bị chiếm) lúc 03:00",
+   "severity": "orange",
+   "dimension": "van-hanh",
+   "evidence": [
+    "release.yml chạy trên push: main song song với CI, các job chỉ needs: meta — không chờ CI; v0.1.24 phát hành (Release run 36581421234, xanh, published 14:23:34) trong khi CI trên đúng commit đó đỏ (run 36581421131, job 109450289123: 1 failed, 997 passed)",
+    "e2e-install.yml:32-34 (workflow_run) — E2E chỉ chạy sau khi Release xong; release.yml:489-497 (softprops/action-gh-release mặc định latest); selfupdate.go:208-237 và install.sh:13 đọc releases/latest",
+    "list_branches: \"protected\": false — main không bảo vệ",
+    "docs/ROADMAP.md:3 \"CI + E2E cài thật xanh mới phát hành\" (tài liệu nói ngược)",
+    "ops/update.go:25-31 — kênh --channel stable|beta chỉ là trang trí",
+    "apps/genh/internal/autoupdate/autoupdate.go:1-20",
+    "install.sh:135-145",
+    "release.yml:454-467 ký cosign; install.sh:113-116 và apps/genh/internal/selfupdate/selfupdate.go:243-265 chỉ so SHA-256 với checksums.txt từ cùng bản phát hành",
+    "05-installer.md:30: \"và chữ ký cosign nếu có\"",
+    "release.yml:329-361",
+    "release.yml:16-20, 65-71",
+    "release.yml:283-295, 454, 490",
+    "ci.yml và installer-matrix.yml không khai permissions:",
+    "deploy/compose.yaml:31, 170, 249",
+    "release.yml:249-251"
+   ],
+   "impact": "Một bản hỏng (migration lỗi, ảnh thiếu thư viện…) sẽ tự cài lên máy duy nhất đang chạy thật trong ≤ 24 giờ; 31 bản trong 6 ngày ⇒ xác suất không nhỏ. Về an ninh (mức đỏ nếu xảy ra): token agent có quyền push/merge bị lừa/lộ → PR tăng VERSION → CI xanh → tự merge → release → 03:00 mọi máy tự tải genh mới (chạy bằng user Owner, điều khiển Docker) → đọc secrets.json (khoá master, mật khẩu DB) → tuồn toàn bộ dữ liệu. Checksum chỉ chống tệp hỏng, không chống giả mạo; cosign có ký nhưng không nơi nào kiểm (tài liệu lại nói có kiểm); không người duyệt trước khi mã tới máy khách.",
+   "fix": "Release tạo prerelease/draft → E2E kiểm đúng tag → job cuối `gh release edit <tag> --prerelease=false --latest` chỉ khi E2E xanh; release needs CI (reusable workflow hoặc kiểm check-runs); bật branch protection cho main và tag v* với required checks. Job release chạy trong GitHub Environment có required reviewers = Boss. genh, install.sh, install.ps1 kiểm cosign với identity ghim (workflow release.yml@refs/heads/main, issuer token.actions.githubusercontent.com; Go: sigstore-go) — hoặc ký checksums.txt bằng khoá ed25519/minisign có public key nhúng trong genh; nếu chưa làm thì sửa tài liệu cho đúng. Ghim mọi Action theo SHA; mặc định permissions: contents: read; ghim digest caddy/redis trong pin-compose. Kênh cập nhật ổn định thật: auto-update chỉ nhận bản đã chín 12–72 giờ, có công tắc tắt.",
+   "effort": "M",
+   "sources": [
+    "VH-1",
+    "BM-03",
+    "VH-15"
+   ],
+   "survives": true,
+   "better_fix": "Cổng tự động, không đòi Boss duyệt. Required reviewer = Boss đi ngược mục tiêu (3) và quy trình tự merge trong CLAUDE.md. (1) Thêm `on: workflow_call` cho ci.yml rồi gọi nó trong release.yml thành job `ci`, đưa vào needs của release. (2) softprops chạy với prerelease: true và make_latest: false; /releases/latest vốn bỏ qua prerelease nên genh, install.sh và system_api/update.py:72 tự không thấy bản đó. (3) Trong e2e-install.yml, chế độ release kiểm đúng tag từ workflow_run.head_sha, xanh thì job cuối chạy `gh release edit $TAG --prerelease=false --latest` (permissions contents: write). (4) Thời gian chín: selfupdate.latestTag đọc published_at, bỏ qua bản dưới 24 giờ khi chạy --yes. (5) Bật branch protection cho main với required checks và bảo vệ tag v*. Lưu ý: kiểm cosign/minisign chỉ chặn được việc tráo asset trên Release. Kẻ đã merge được vào main thì sửa được release.yml và ký bằng đúng identity đó, nên lớp chặn thật cho chuỗi tấn công đã nêu là (1), (5) và thời gian chín. Ghim SHA cho các Action và ghim digest caddy/redis thì nên làm nhưng là việc phụ. | Release chờ CI của đúng SHA (workflow_run khi CI success, hoặc kiểm check-runs) → tạo prerelease → E2E đúng tag → mới gh release edit --latest. Bật branch protection main với required checks (không cần người duyệt — Boss không rành code, QD cho tự merge). Sửa ngay ROADMAP/05-installer cho đúng thực tế. Kiểm cosign/minisign trong genh để sau (vàng) vì chỉ chống thay asset, không chống token bị lộ.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.9,
+     "reason": "Xác nhận cả trong code lẫn trên GitHub. release.yml:16-20 chạy trên push main; job release chỉ needs meta/verify/build/pin/wsl (dòng 428), không có CI. softprops ở dòng 490-496 không đặt make_latest, prerelease chỉ khi version có '-'. e2e-install.yml:32-34 chỉ chạy sau khi Release xong (workflow_run). Run CI 36581421131 kết luận failure, còn Release 36581421234 success, cùng sha e38da47. list_branches: main protected=false. selfupdate.go:208-265 và install.sh:13,113-116 chỉ so SHA-256 với checksums.txt cùng bản, không kiểm .sig/.pem dù release.yml:454-467 có ký. 05-installer.md:30 và ROADMAP.md:3 mô tả ngược thực tế. update.go:25-31 xác nhận Channel chỉ để trang trí."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.65,
+     "reason": "Xác nhận: release.yml chạy trên push main, chỉ needs meta, không chờ CI; E2E chạy sau qua workflow_run; selfupdate đọc releases/latest; chỉ so SHA-256 với checksums.txt cùng release; cosign ký nhưng không nơi nào kiểm, 05-installer.md và ROADMAP nói ngược.\nBù trừ có thật: PR chỉ merge khi CI xanh (quy trình), E2E chế độ PR cho genh/deploy, và genh update tự rollback khi migrate lỗi hoặc /ready không lên — đúng các ví dụ 'migration lỗi, ảnh thiếu thư viện'. Chuỗi tấn công cần lộ token agent; kiểm cosign với identity của chính workflow cũng KHÔNG chặn được chuỗi đó. 'Required reviewers = Boss' trái mục tiêu (3).\nVấn đề thật nhưng hạ cam."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-10",
+   "title": "Rollback khôi phục CSDL kể cả khi CHƯA đụng gì (pull lỗi) — mất dữ liệu ghi trong khoảng đó; chu trình chạy MỖI ĐÊM",
+   "severity": "orange",
+   "dimension": "van-hanh",
+   "evidence": [
+    "ops/update.go:201-211: docker compose pull lỗi ⇒ rollbackAndWrap ⇒ restoreInContainer (:348) ⇒ restore_backup xoá và tạo lại CSDL rồi pg_restore (backup.py:296-321)",
+    "main.go:281-313: khi đã ở bản mới nhất, genh update vẫn chạy đủ backup → pull → migrate → up (E2E bước \"đã mới nhất\" chạy 8 giây)",
+    "deploy/compose.yaml:31, 249 — caddy:2-alpine, redis:7-alpine không ghim nên pull luôn cần mạng",
+    "run 36741082010, job 109975416642 — chính CI cũng gặp ECONNRESET"
+   ],
+   "impact": "Mỗi lần mạng chập chờn lúc cập nhật (đêm hoặc Boss bấm nút ban ngày) = mất dữ liệu vài giây tới vài chục phút + gián đoạn dịch vụ do drop/restore CSDL.",
+   "fix": "(1) pull ảnh trước bước backup; (2) chỉ restore CSDL nếu migrate đã chạy; (3) khi có migrate: dừng api/worker/bridge trước khi backup; (4) bỏ qua cả chu trình khi phiên bản không đổi và ảnh đã có sẵn (hoặc chỉ up -d).",
+   "effort": "M",
+   "sources": [
+    "VH-2"
+   ],
+   "survives": true,
+   "better_fix": "(1) Pull TRƯỚC backup nhưng không đồng bộ compose.yaml sớm (không để tái phát lỗi #3 ở update.go:100-110). Ghi compose nhúng ra tệp tạm cùng thư mục rồi chạy `docker compose -f <tmp> pull`, retry 3 lần có backoff. Lỗi thì trả OpError 'chưa đụng gì', không rollback. (2) Thêm tham số dbTouched cho rollbackAndWrap, chỉ đặt true từ bước migrate trở đi; khi false thì chỉ khôi phục compose.yaml.bak và chạy up -d, không gọi restoreInContainer. (3) Trong main.go: khi selfupdate báo không có bản mới VÀ compose nhúng trùng byte với tệp trên đĩa thì bỏ qua RunUpdate, ghi hostlink 'done', không backup/pull. (4) Ghim digest caddy/redis trong pin-compose-images.sh để bản 'không đổi' thật sự không đổi. Sửa test update_test.go:167 thành khẳng định KHÔNG có lệnh restore khi pull lỗi; thêm test cho trường hợp migrate lỗi thì CÓ restore. | Đúng hướng; thêm: (0) đặt timeout cho docker compose pull; (1) pull trước backup, pull lỗi thì dừng không đụng CSDL; (2) chỉ restore khi migrate đã chạy, và trước restore phải dừng api/worker/bridge để không ghi chen vào CSDL đang nạp lại; (3) bản không đổi + ảnh đã có → bỏ qua hẳn (không backup/migrate).",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.9,
+     "reason": "Xác nhận. update.go:201-211: pull lỗi dẫn tới rollbackAndWrap, rồi restoreInContainer ở dòng 348 chạy vô điều kiện, rồi restore_backup gọi recreate_database (DROP DATABASE ... WITH (FORCE), backup.py:123-139) và pg_restore (backup.py:296-321). Mọi dữ liệu ghi từ lúc backup ở bước 1 tới lúc đó đều mất. Hành vi này còn được test chốt lại (update_test.go:167 TestRunUpdate_PullFails_TriggersRollback). Pull không có retry (grep retry trong dockercli/ops không ra gì). main.go:281-313 gọi RunUpdate kể cả khi selfupdate thấy đã ở bản mới nhất. Timer chạy `update --yes --quiet` mỗi đêm (autoupdate/content.go:27,73). proxy/redis dùng tag trôi caddy:2-alpine, redis:7-alpine (compose.yaml:31,249; pin-compose-images.sh không ghim hai ảnh này), nên pull đêm nào cũng cần mạng."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.58,
+     "reason": "Xác nhận: update.go: pull lỗi → rollbackAndWrap → restoreInContainer → DROP DATABASE WITH (FORCE) + pg_restore, dù migrate chưa chạy; main.go không bỏ qua khi đã mới nhất nên chu trình backup→pull→migrate→up chạy mỗi đêm; caddy/redis theo tag nên luôn cần mạng; không timeout cho pull.\nNhưng mất dữ liệu chỉ xảy ra khi mạng lỗi đúng lúc pull, cửa sổ = thời gian pull lúc 03:00 (ít ghi) — thường vài giây tới vài phút, không phải 'vài chục phút' thường lệ. Rủi ro thật đáng lo là đuôi: restore lỗi sau DROP → CSDL rỗng, Boss không tự cứu được.\nSửa rẻ, nên làm đợt đầu; mức cam."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-11",
+   "title": "Không dọn image cũ, không theo dõi dung lượng đĩa — đĩa đầy dần, Postgres dừng, Boss không được báo",
+   "severity": "red",
+   "dimension": "van-hanh",
+   "evidence": [
+    "grep \"prune|rmi\" trong apps/genh chỉ ra GH_BACKUP_KEEP — không có docker image prune/rmi",
+    "release.yml:293-306 — build không cache-from; deploy/images/api.Dockerfile:12-49",
+    "machine/checks.go:48-50 — ~1,5 GB/bản giải nén (đo ở v0.1.10); 31 bản/6 ngày",
+    "shell/routes.py:80-99 — /ready không kiểm đĩa; ops/doctor.go:117-124 — doctor không cảnh báo ngưỡng; không có kind= loại \"đĩa\" trong api"
+   ],
+   "impact": "Sau vài tuần–vài tháng tự cập nhật, ổ đầy ⇒ Postgres/Redis lỗi ghi ⇒ toàn hệ thống dừng âm thầm; rollback cũng thất bại vì không ghi được backup.",
+   "fix": "Sau update thành công, xoá ảnh ghcr.io/<owner>/gen-harness-* không thuộc bản hiện tại và bản liền trước; thêm kiểm dung lượng trống (< 10 % hoặc < 5 GB) vào watchdog//ready và gửi cảnh báo.",
+   "effort": "S",
+   "sources": [
+    "VH-3"
+   ],
+   "survives": true,
+   "better_fix": "Ngoài bước dọn ảnh sau khi update thành công (giữ digest của bản hiện tại và bản liền trước, lấy từ compose nhúng), thêm bước kiểm trước khi chạy trong ops/update.go, trước lệnh pull ở dòng 197. Dùng lại machine.probeDiskFree và CheckDisk (cần export ra). Nếu còn dưới MinDiskBytes thì dọn ảnh cũ trước; vẫn thiếu thì dừng với OpError và ghi trạng thái vào hộp thư host-link (run/) để Console hiện cảnh báo. Thêm test update_test.go với Runner giả cho cả hai nhánh. | Sau update thành công: `docker image prune -f` (ảnh pull theo digest không còn tag nên bị coi là dangling), hoặc liệt kê ảnh ghcr.io/<owner>/gen-harness-* rồi giữ digest hiện tại + bản rollback. Chạy cả trong nhánh rollback. Thêm kiểm đĩa trống (statvfs trên volume pg_data/objects) vào /ready + thẻ cảnh báo Tổng quan. genh update từ chối pull khi trống < 5 GB và báo lý do bằng lời thường.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.85,
+     "reason": "Đúng. Cả repo không có lệnh image prune hay rmi; chữ 'prune' chỉ gặp ở backup.py:454 (dọn GFS) và ops/backup.go:183. release.yml:303-306 gắn tag theo phiên bản, pin-compose ghim digest, build không dùng cache. api.Dockerfile chạy apt-get update rồi pip install mỗi lần build, nên mỗi bản tải về là các lớp mới, còn ảnh cũ nằm lại trên máy.\nKiểm đĩa chỉ có lúc cài: machine/probe.go:95 → CheckDisk (checks.go:117-125). update.go không kiểm đĩa trước khi pull (dòng 197-214). /ready (shell/routes.py:80-99) chỉ kiểm db/redis/bridge. doctor.go:117-124 chỉ đếm số dòng volume, luôn báo OK, không có ngưỡng."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.8,
+     "reason": "Xác nhận: genh update chỉ `compose pull` + `up -d --remove-orphans` (ops/update.go:202-237), không có prune/rmi ở đâu. Ảnh ghim digest nên mỗi bản là bộ ảnh mới. Release build không có cache, nên mỗi bản phát sinh lại các layer lớn (agy + claude + pg-client + pip). API không có kiểm đĩa nào (grep disk_usage/statvfs = 0), doctor chỉ đếm dòng `docker system df`.\nSửa nhẹ bằng chứng: tự cập nhật chạy 1 lần/đêm nên tối đa ~1 bản/ngày chứ không phải 31 bản. Mỗi bản ước 0,7–1 GB, tức khoảng 20–30 GB/tháng, đầy đĩa sau vài tháng. Hệ thống sẽ dừng âm thầm và Boss không tự gỡ được, nên giữ mức đỏ."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-12",
+   "title": "Sao lưu và khoá giải mã chỉ nằm trên cùng ổ đĩa; tuỳ chọn S3/MinIO không có tác dụng — hỏng ổ là mất hết",
+   "severity": "red",
+   "dimension": "van-hanh",
+   "evidence": [
+    "backup.py:257, chassis/objects.py:55 — backup lưu vào volume gh_objects cùng ổ với pg_data",
+    "apps/api/gh/backup.py:239-262; backup.py:240-271 — GFS chỉ là pg_dump; biz/relations/routes.py:747 (tài liệu tải lên) và volume agy_state không có trong backup tự động",
+    "apps/api/gh/chassis/objects.py:1-15",
+    "deploy/compose.yaml:84",
+    "deploy/compose.yaml:27",
+    "system_api/backups.py:151-152 — tệp tải về chỉ khôi phục được bằng khoá của bản cài này; khoá ở config/secrets.json / secrets/ (~/.gen-harness/config/secrets.json); README.md:124-132",
+    "README.md:129-132 — genh export thủ công là đường duy nhất ra ngoài máy",
+    "apps/api/gh/setup/routes.py:725, 738 — bước 11 nhận destination s3/minio nhưng không mã nào dùng",
+    "ops/uninstall.go:71-72 — genh uninstall mặc định xoá volume"
+   ],
+   "impact": "Bản sao lưu nằm trong volume gh_objects cùng đĩa với CSDL, khoá backup cũng cùng máy; tài liệu tải lên và agy_state không có trong backup tự động; bước 11 nhận s3/minio nhưng không làm gì → Owner tưởng đã sao lưu ra ngoài. Ổ SSD hỏng, ransomware, mất máy hay gỡ nhầm (uninstall mặc định xoá volume) = mất toàn bộ dữ liệu kinh doanh lẫn sao lưu, không có đường khôi phục; ai lấy được đĩa có cả bản sao lưu lẫn khoá giải mã.",
+   "fix": "Ẩn lựa chọn s3/minio cho tới khi làm thật. Lịch tự động xuất .ghbundle (CSDL + tài liệu + khoá, mã hoá mật khẩu) ra đích ngoài máy (S3-compatible khoá chỉ-ghi, Google Drive, USB/NAS, rclone) hoặc nhắc hằng tuần tải bản mã hoá về ổ ngoài; Console hiện \"bản sao ngoài máy gần nhất\" và báo khi > 7 ngày; giữ mật khẩu gói ở Kho/vault, hướng dẫn cất khoá backup ngoại tuyến (in, QR); thử khôi phục định kỳ; uninstall mặc định --keep-data.",
+   "effort": "M",
+   "sources": [
+    "VH-4",
+    "BM-06"
+   ],
+   "survives": true,
+   "better_fix": "Không cần làm tích hợp S3. Dùng lại genh export đã có: bundle.py đã gói CSDL, objects và khoá, mã hoá bằng argon2id. Thêm lịch xuất hằng tuần qua cùng bộ hẹn giờ của autoupdate (systemd.go, launchd.go, schtasks.go) ra một đường dẫn Owner chọn (USB hoặc NAS đã mount). Ghi thời điểm xuất gần nhất vào host-link run/; Console đọc và cảnh báo khi quá 7 ngày. Ở API, thu Literal destination về 'local'. Bỏ mục ẩn s3/minio trong đề xuất vì giao diện đã ẩn rồi. | Bỏ 's3'/'minio' khỏi Literal của API (UI đã ẩn sẵn). Trong Console thêm nút 'Tải gói mang đi' (.ghbundle gồm CSDL + tài liệu + khoá, có mật khẩu, cần Owner + PIN) và 'Bộ khôi phục' (khoá in/QR). Hằng tuần tự đẩy gói lên Google Drive qua kết nối Google sẵn có, hoặc nhắc trên Tổng quan khi bản ngoài máy > 7 ngày. Uninstall mặc định --keep-data.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.8,
+     "reason": "Phần lõi đúng. backup.py:249-260 chỉ pg_dump rồi store.put vào ObjectStore, tức volume gh_objects (compose.yaml:83,111) nằm cùng ổ máy chủ với pg_data. Tài liệu tải lên và agy_state không có trong GFS. README.md:124-127 tự thừa nhận khoá chỉ nằm trên máy này. Không có lịch tự xuất bản sao ra ngoài máy (grep off-site/rclone/ngoài máy không ra gì).\nPhần sai: Step11Backup.tsx:16-19,38 luôn gửi destination 'local', giao diện không có lựa chọn S3/MinIO, nên ý 'Owner tưởng đã sao lưu ra ngoài' không đúng; s3/minio chỉ còn sót trong Literal của API (setup/routes.py:725). uninstall.go:48-58 có hỏi y/N kèm cảnh báo rõ trước khi chạy --volumes (dòng 71-72)."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.85,
+     "reason": "Rủi ro chính là thật: backup chỉ là pg_dump, lưu ở gh_objects (LocalObjectStore) cùng đĩa, khoá cũng chỉ ở máy này. Tệp tải từ Console 'chỉ khôi phục được trên máy chủ này' nên vô dụng khi hỏng ổ. Đường ra ngoài duy nhất là `genh export` bằng CLI, cần biến mật khẩu, mà Boss không rành code.\nSai ở bằng chứng: UI bước 11 KHÔNG hiện s3/minio, luôn gửi 'local' và ghi rõ 'lưu ngay trong máy chủ', nên ý 'Owner tưởng đã sao lưu ra ngoài' không đúng. Uninstall cũng có cảnh báo rõ kèm hỏi y/N.\nVới dữ liệu kinh doanh duy nhất của công ty, mất cả bản sao lưu lẫn khoá khi hỏng ổ vẫn đáng mức đỏ."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-13",
+   "title": "CI bỏ sót nhiều bộ test đã có (Go của genh, Playwright web, app-role, E2E cài thật) và không quét bảo mật",
+   "severity": "orange",
+   "dimension": "kien-truc",
+   "evidence": [
+    ".github/workflows/* (không có go test dù genh có 285 test); 45 tệp *_test.go (~7,7 nghìn dòng) trong apps/genh; grep go test|go vet trong .github/ và Makefile: không có",
+    "installer-matrix.yml:34-50 chỉ go build + genh version/help",
+    "apps/web/e2e (120 test Playwright mock, 9 spec gồm visual.spec.ts) và apps/web/e2e-live/run.sh không chạy ở CI",
+    ".github/workflows/ci.yml:93-104 (chỉ lint/typecheck/vitest/build)",
+    "ci.yml:59-64 (pytest chạy bằng superuser)",
+    "apps/api/tests/conftest.py:45, Makefile:44-45 (GH_TEST_APP_ROLE=1 chỉ chạy tay); make api-test-app-role không có trong CI",
+    "e2e-install.yml:41-51 — E2E pr chỉ kích hoạt khi đổi apps/genh/**, deploy/**, install.sh",
+    "Không có quét bảo mật (Dependabot, CodeQL, pip-audit, npm audit, govulncheck, Trivy); compose.yaml:54 alembic upgrade heads che giấu nhánh migration kép"
+   ],
+   "impact": "genh (bộ máy tự bảo trì, giữ dữ liệu của Boss khi update/khôi phục) có thể hỏng rollback/selfupdate mà PR vẫn xanh rồi tự cài lên máy Owner; thiếu GRANT/RLS và migration kép chỉ lộ sau khi đã phát hành; đổi apps/api/** hay apps/web/Dockerfile không được cài thử trước khi phát hành.",
+   "fix": "Thêm job genh vào ci.yml: go vet ./... && go test -race ./... (+ govulncheck); thêm npx playwright test (mock, đã có webServer trong apps/web/playwright.config.ts); đổi pytest CI sang GH_TEST_APP_ROLE=1 (hoặc chạy cả hai); mở rộng path filter E2E pr (hoặc chạy khi VERSION đổi); job \"alembic heads = 1\"; Dependabot + pip-audit/npm audit.",
+   "effort": "M",
+   "sources": [
+    "KT-5",
+    "VH-6",
+    "VH-14"
+   ],
+   "survives": true,
+   "better_fix": "Thêm go vet ./... và go test ./... vào ngay installer-matrix.yml: job đã có setup-go trên 4 hệ điều hành, nên bắt được cả mã riêng của Windows và macOS (probe_disk_windows.go, bootstrap_darwin.go) mà không tốn thêm job. Ở bước pytest của ci.yml, thêm env GH_TEST_APP_ROLE: \"1\". Thêm bước npx playwright test (mock) vào job web. | Ngoài các job go vet/test -race, playwright mock, APP_ROLE: đưa e2e-install vào trước khi phát hành. Ví dụ release tạo prerelease/draft, e2e xanh mới promote thành latest, và autoupdate chỉ lấy bản 'latest' đã qua e2e. Như vậy bản lỗi không bao giờ tự cài lên máy Owner.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.9,
+     "reason": "Đúng. Grep 'go test|go vet|govulncheck|codeql|trivy|audit' trong .github và Makefile không ra gì; có 45 tệp _test.go trong apps/genh. installer-matrix.yml:34-50 chỉ build rồi chạy version/help. ci.yml:93-104 phía web chỉ chạy lint, typecheck, vitest, build; script test:e2e (Playwright) không được gọi. ci.yml:59-64 chạy pytest không đặt GH_TEST_APP_ROLE (conftest.py:45; chỉ có ở Makefile:44-45). Không có tệp dependabot.\ne2e-install.yml:41-51 chỉ lọc apps/genh, deploy, install.sh. Riêng chế độ pr có build ảnh từ checkout (GENH_COMPOSE_FILE), nên chỉ cần mở rộng bộ lọc đường dẫn là có tác dụng. Hiện migration vẫn chỉ một head (22 bản, nối thẳng), nên 'migration kép' mới là rủi ro."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.85,
+     "reason": "Xác nhận: không workflow nào chạy `go test` (45 tệp, 285 Test*). installer-matrix chỉ build + version/help. Playwright mock (apps/web/e2e) và e2e-live không chạy ở CI. pytest CI chạy bằng superuser, GH_TEST_APP_ROLE=1 chỉ có trong Makefile. Không có Dependabot/audit.\nCó một phần bù đắp: e2e-install chế độ pr có cài/update/uninstall thật khi đổi apps/genh/**. Lỗi nhỏ ở bằng chứng: visual.spec.ts không có trong apps/web/e2e.\nĐiểm đáng thêm: e2e chế độ release chạy SAU khi đã publish, nên bản hỏng vẫn có thể bị tự cài lúc 03:00. Mức cam là đúng."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-14",
+   "title": "Hợp đồng API và mock viết tay, không đối chiếu với backend → lệch là chuyện thường",
+   "severity": "yellow",
+   "dimension": "kien-truc",
+   "evidence": [
+    "packages/contracts/src/schema.ts:1-9 (\"hand-written… có thể thay bằng openapi-typescript\")",
+    "apps/web/test/mock-*.ts (7.8k dòng mock)",
+    "docs/reports/HANDOFF-v0.1.1.md:917-925 (hotfix v0.1.30 React error #31)"
+   ],
+   "impact": "4.6k dòng contracts + 7.8k dòng mock mô phỏng lại backend, không test nào so với /api/v1/openapi.json; hệ quả đã xảy ra: R1 và hotfix v0.1.30.",
+   "fix": "Sinh types từ OpenAPI trong CI (openapi-typescript) và so khác biệt; chạy e2e-live rút gọn (1–2 luồng chính) trong CI với Postgres/Redis service; dần cho mock lấy shape từ types sinh ra.",
+   "effort": "M",
+   "sources": [
+    "KT-6"
+   ],
+   "survives": true,
+   "better_fix": "Ưu tiên chạy apps/web/e2e-live/run.sh rút gọn (live-phase1, đã có fake_bridge và fake_llm) trong job api của ci.yml, vốn đã có Postgres và Redis. Thêm test hợp đồng ở pytest: ghi JSON phản hồi thật của các endpoint chính (setup steps, header, các lỗi problem+json) thành snapshot. Thêm một test vitest kiểm khoá và kiểu của mock-*.ts khớp với snapshot đó. Chỉ sinh type từ OpenAPI sau khi đã thêm response_model cho các route chính. | Chạy e2e-live rút gọn (run.sh đã có fake_llm/fake_bridge) trong CI với Postgres/Redis service, cho 2–3 luồng chính (setup, Gen chat, hộp thư). Thêm Pydantic response_model dần cho các route nóng và chuẩn hoá problem+json (detail luôn là chuỗi) bằng một test chung. Chỉ sau đó mới sinh types từ OpenAPI.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.8,
+     "reason": "Hiện tượng đúng. Đầu schema.ts (dòng 1-9) ghi rõ viết tay; packages/contracts khoảng 4,6k dòng; apps/web/test/mock-*.ts 7.771 dòng. Không test nào đối chiếu với openapi.json (grep 'openapi' chỉ ra schema.ts và package.json). e2e-live không chạy ở CI.\nNhưng cách sửa yếu. Trong apps/api/gh không có response_model nào (0 lần), còn khoảng 366 handler trả dict[str, Any], nên schema phản hồi trong OpenAPI là object rỗng. Sinh type bằng openapi-typescript chỉ bắt lệch ở path và body yêu cầu, không bắt được lỗi kiểu React #31: lỗi đó do khuôn problem+json detail={'reasons'} (HANDOFF-v0.1.1.md:917-925), mà khuôn này không có trong OpenAPI."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.6,
+     "reason": "Contracts 4,6k dòng + mock 7,8k dòng viết tay là thật. Nhưng cách sửa đề xuất gần như vô hiệu: 212/275 route trả dict[str, Any], 0 response_model, nên openapi.json không có schema phản hồi và openapi-typescript chỉ sinh kiểu rỗng.\nVụ v0.1.30 (detail là object) cũng là lỗi dạng phản hồi lỗi mà OpenAPI không mô tả. Trong HANDOFF chỉ ghi nhận 1 sự cố, và đã sửa nóng được.\nĐây là nợ quy trình gây lỗi UI chứ không mất dữ liệu, nên hạ xuống vàng."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-15",
+   "title": "Hai API sổ tay song song, phân quyền khác nhau → vượt phạm vi dữ liệu",
+   "severity": "yellow",
+   "dimension": "kien-truc",
+   "evidence": [
+    "gh/data_api/routes.py:713-725 (chỉ kiểm profile.read/write, không scope_for; 35 route, 0 lần dùng scope)",
+    "gh/biz/relations/routes.py:434-439 (có scope_for)",
+    "gh/auth/rbac.py:66-67",
+    "CleanScreen.tsx:208-386 vs screens/relations/queries.ts:76-109"
+   ],
+   "impact": "Vai trò bị giới hạn phạm vi (Manager TEAM, AgentNV ASSIGNED) vẫn đọc/ghi được sổ tay của bất kỳ ai qua /notebooks/*; hai payload, hai UI cho cùng một dữ liệu.",
+   "fix": "Giữ một API (bản relations có scope), cho CleanScreen dùng lại; hoặc tối thiểu thêm scope_for vào data_api. Rà các route khác của data_api cùng câu hỏi.",
+   "effort": "M",
+   "sources": [
+    "KT-7"
+   ],
+   "survives": true,
+   "better_fix": "Cách sửa tối thiểu: api.notebooks chỉ được CleanScreen gọi, mà màn Kho sạch vốn cần data.read. Vì vậy đổi NB_READ = READ (data.read) và NB_WRITE = MANAGE (data.manage) ở data_api/routes.py:709-710, cho khớp phần còn lại của router. Nếu muốn giữ profile.*, thì trong _subject gọi scope_for (biz/core/scope.py:101) rồi ensure_person hoặc ensure_group (dòng 113-126). Thêm test: AgentNV gọi GET hoặc POST /api/v1/notebooks/person/{người ngoài phạm vi} phải nhận 403 hoặc 404. Việc gộp hẳn về một API như đề xuất có thể làm sau. | Effort S: trong 6 route notebook của data_api gọi scope_for(db, user, 'profile.read'/'profile.write') + ensure_subject trước _subject. Hoặc đổi NB_READ/NB_WRITE thành require('data.read'/'data.manage') vì chỉ CleanScreen dùng. Về lâu dài cho CleanScreen dùng /notebook của relations rồi xoá bản trùng.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.9,
+     "reason": "Lỗi có thật nhưng hẹp hơn mô tả. Chỉ 6 route /notebooks/* ở data_api/routes.py:709-800 dùng profile.read/write (NB_READ, NB_WRITE). Hàm _subject (dòng 677-683) chỉ lọc theo org_id, không có scope_for. Theo ma trận rbac.py:66-67, profile.read/write là TEAM cho Manager và ASSIGNED cho AgentNV, nên hai vai trò này đọc, ghi, xoá và compact được sổ tay của bất kỳ ai nếu biết UUID. RLS chỉ lọc theo org (0012_p5_rls.sql). Không có test nào chặn trường hợp này.\nĐiểm sai trong bằng chứng: 29 route còn lại của data_api dùng data.read/data.manage, chỉ Owner và Auditor có (đều ở mức ALL), nên chuyện '0 lần dùng scope' ở các route đó không phải lỗi. Bản relations (relations/routes.py:434-439) có scope_for."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.7,
+     "reason": "Lỗi phân quyền là thật: 6 route /notebooks/* ở data_api chỉ require('profile.read/write'), _subject chỉ lọc org_id. RLS cũng chỉ theo app.org_id, nên AgentNV (ASSIGNED) có thể đọc/ghi sổ tay ngoài phạm vi.\nNhưng '35 route 0 scope' bị thổi phồng: 29 route còn lại dùng data.read/manage, vốn chỉ Owner/Auditor (ALL) có. UI duy nhất gọi /notebooks là CleanScreen, cần data.read. Muốn lạm dụng, nhân viên phải tự gọi API với UUID của người không thuộc phạm vi mình.\nCông ty nhỏ, nhân viên không rành kỹ thuật, nên rủi ro thực tế thấp. Effort cũng chỉ là S, không phải M. Hạ xuống vàng."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-16",
+   "title": "Một số job định kỳ có chi phí tăng theo toàn bộ lịch sử, chạy mỗi 10–15 phút",
+   "severity": "orange",
+   "dimension": "kien-truc",
+   "evidence": [
+    "gh/worker.py:194 (detect_identities mỗi 10 phút)",
+    "gh/identity/service.py:29-41 (O(n²), OR similarity(...) >= 0.55 không dùng chỉ mục trigram)",
+    "gh/biz/graph/jobs.py:117-123, 152-157, 179-183 (quét toàn bộ raw.events không giới hạn thời gian)",
+    "gh/biz/graph/jobs.py:104, :139, :168, :216 (upsert từng cạnh)",
+    "gh/chassis/actionlog.py:91-116 (verify toàn chuỗi mỗi đêm)",
+    "apps/api/scripts/bench_phase5.py, docs/reports/phase-5-performance.md (không có benchmark)"
+   ],
+   "impact": "Khi nối kênh Zalo/WhatsApp có nhóm đông, Postgres bận liên tục, job bị cắt giữa chừng (timeout 300 s), đồ thị/đề xuất gộp danh tính ngừng cập nhật — không ai được báo.",
+   "fix": "detect chỉ xét danh tính mới/đổi (watermark) + giới hạn ứng viên qua chỉ mục trigram (%); graph áp cửa sổ thời gian cho mọi truy vấn và upsert hàng loạt (INSERT … SELECT … ON CONFLICT); verify chuỗi tăng dần. Thêm benchmark 20k danh tính / 1 triệu tin.",
+   "effort": "M",
+   "sources": [
+    "KT-8"
+   ],
+   "survives": true,
+   "better_fix": "identity/service.py: thêm vào WHERE trước LIMIT điều kiện `AND NOT EXISTS (SELECT 1 FROM core.identity_merge_candidates m WHERE LEAST(m.identity_a,m.identity_b)=a.id AND GREATEST(m.identity_a,m.identity_b)=b.id)` (khớp unique index ở 0003_phase2.sql:70) để hết lỗi không còn đề xuất mới. Giới hạn vế a theo watermark (pi.created_at hoặc p.updated_at > lần chạy trước), đổi sang `a.name % b.name` sau `SELECT set_limit(0.55)` và tạo chỉ mục gin(lower(display_name) gin_trgm_ops). graph/jobs.py: thêm `e.occurred_at > now() - make_interval(days => :w)` cho _SHARES/_OWNS/_MEMBER_ACTIVITY; gộp upsert thành một câu INSERT … SELECT … ON CONFLICT cho mỗi kind. Đặt job_timeout rõ ràng; job lỗi thì bắn notifications cho Owner. Thêm test: 2001 cặp cũ cộng 1 cặp mới thì detect() > 0. | Cách rẻ nhất, làm trước: bỏ danh tính tên rỗng và danh tính chỉ thuộc nhóm 'off' khỏi detect (hoặc chỉ lưu thành viên của nhóm đang lắng nghe). Sau đó thêm mốc thời gian (chỉ ghép danh tính mới/đổi với phần còn lại) và LATERAL dùng toán tử % trên chỉ mục GIN của persons.display_name. Thêm cảnh báo trên chuông khi job định kỳ timeout 2 lần liên tiếp.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.85,
+     "reason": "Đúng. worker.py:192-194 detect_identities chạy mỗi 10 phút, không đặt job_timeout (arq mặc định 300 s), commit một lần ở cuối. identity/service.py:29-41 tự nối CTE ids×ids và lọc bằng similarity(...) >= 0.55 trên lower(display_name), nên chỉ mục GIN trigram ở 0001_baseline.sql:218 (trên display_name, không lower) không dùng được. graph/jobs.py:117-122, 152-157, 179-184 quét raw.events không giới hạn thời gian; :104/:139/:168/:216 upsert từng cạnh; jobs.py:256 chạy mỗi 15 phút. actionlog.py:91-116 kiểm lại toàn chuỗi. Không có cảnh báo khi job thất bại. Thêm một lỗi auditor bỏ sót: LIMIT 2000 (service.py:41) không loại các cặp đã có trong identity_merge_candidates, nên khi top 2000 đều là cặp cũ (kể cả đã từ chối) thì ON CONFLICT DO NOTHING và không còn đề xuất mới nào được tạo."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.72,
+     "reason": "Xác nhận: identity.detect tự nối toàn bộ danh tính, gọi similarity() cho từng cặp (O(n²), không dùng chỉ mục trigram vì tên tính trong CTE), chạy mỗi 10 phút, không có mốc 'chỉ xét mới'. Điều kiện xảy ra rất thực tế: data/ingest.handle_directory tạo danh tính cho MỌI thành viên của MỌI nhóm Zalo/WhatsApp (tối đa 5000/nhóm), kể cả nhóm không lắng nghe. Chủ doanh nghiệp VN ở vài chục nhóm đông là đã 10–30k danh tính, khoảng 10^8 phép so sánh, vượt timeout 300 s của arq, lỗi lặp lại mà không ai biết. Các truy vấn shares/owns/bridges trong graph quét raw.events không giới hạn thời gian, nhưng chỉ là gom nhóm nên nhẹ hơn. Riêng verify chuỗi nhật ký mỗi đêm thì tuyến tính, theo lô, không đáng lo. Giữ mức orange."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-17",
+   "title": "Gói chuyển máy (.ghbundle) bỏ sót phiên mạng xã hội; danh sách bí mật viết tay không có gì bảo vệ",
+   "severity": "yellow",
+   "dimension": "kien-truc",
+   "evidence": [
+    "gh/bundle.py:100-109 (REENCRYPT_TARGETS 5 cột)",
+    "gh/social/service.py:669 (state_enc AAD social:{org}:{account})",
+    "gh/social/service.py:425 (_sealed_state gọi crypto.decrypt, không handler)"
+   ],
+   "impact": "Sau genh export → import sang máy khác khoá, InvalidTag ⇒ 500 ở nút Kiểm tra/Đọc, lịch đọc mỗi phút lỗi lặp lại.",
+   "fix": "Cho phép AAD là hàm của dòng; thêm social_accounts vào REENCRYPT_TARGETS; thêm test quét AST \"mọi lời gọi crypto.encrypt đều có trong REENCRYPT_TARGETS\"; _sealed_state bắt lỗi giải mã → đặt needs_login.",
+   "effort": "S",
+   "sources": [
+    "KT-9"
+   ],
+   "survives": true,
+   "better_fix": "Giữ hướng 'AAD là hàm của dòng' (SELECT thêm org_id rồi tạo b'social:'+account_aad(org,id)). Test bảo vệ nên quét lược đồ thay cho AST: truy vấn information_schema.columns WHERE data_type='bytea' AND column_name LIKE '%\\_enc', rồi assert mọi (bảng, cột) đều có trong REENCRYPT_TARGETS; AST không ánh xạ được lời gọi encrypt về bảng nào. Trong _sealed_state bắt InvalidTag/ValueError thì đặt status='needs_login' và ném ApiError 409 SOCIAL_NEEDS_LOGIN. Trong schedule_tick bắt Exception cho từng tài khoản để một tài khoản lỗi không chặn các tài khoản khác. | Ngoài AAD dạng hàm: _sealed_state bắt InvalidTag thì đặt status='needs_login' và gửi chuông 'Đăng nhập lại'. Thêm test quét mọi lời gọi crypto.encrypt ngoài bundle/backup phải có trong REENCRYPT_TARGETS.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.9,
+     "reason": "Đúng. bundle.py:100-109 REENCRYPT_TARGETS chỉ có 5 cột, mỗi cột một AAD cố định, không có core.social_accounts.state_enc. social/service.py:669 mã hoá với AAD social:{org}:{account}; :423-426 _sealed_state gọi crypto.decrypt (crypto.py:108-115 ném InvalidTag nếu khác khoá) mà không bắt lỗi. Lỗi xảy ra ở request_check :468 và request_read :503. Không test nào đối chiếu REENCRYPT_TARGETS. Mô tả 'lỗi lặp mỗi phút' bị thổi phồng: schedule_tick :733 đặt khoá Redis NX trước khi gọi, nên chỉ lỗi một lần mỗi mốc giờ đã hẹn. Nhưng InvalidTag không phải ApiError nên thoát khỏi vòng :736-741 và bỏ dở các tài khoản khác trong cùng phút. Có thể tự phục hồi bằng cách Đăng nhập lại (request_login không giải mã; _store_state ghi đè state_enc). Đường chuyển máy hiếm, tính năng tắt mặc định, nên hạ xuống yellow."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.68,
+     "reason": "Xác nhận: REENCRYPT_TARGETS thiếu core.social_accounts.state_enc (AAD social:{org}:{account}). Sau khi import sang máy có khoá master khác, _sealed_state ném InvalidTag nên Kiểm tra/Đọc/Gen social.read trả 500, trạng thái vẫn 'active'. Nhưng điều kiện hiếm (chuyển máy, có thể vài năm mới một lần), tính năng MXH mặc định tắt, không mất dữ liệu, bấm 'Đăng nhập lại' là khỏi (request_login không cần phiên cũ). Câu 'lịch đọc mỗi phút lỗi lặp lại' là phóng đại: khoá redis nx đặt trước nên chỉ lỗi một lần mỗi mốc giờ đã hẹn. Rủi ro thật là cách làm 'danh sách viết tay', nên hạ xuống yellow."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-18",
+   "title": "Logic nghiệp vụ nằm trong route; route import route; tệp quá lớn",
+   "severity": "yellow",
+   "dimension": "kien-truc",
+   "evidence": [
+    "gh/setup/routes.py:18-32 (import handler từ 5 module route khác)",
+    "gh/gen/proposals.py:196 (import _item_payload, _load_item private của gh/biz/queue/routes.py)",
+    "gh/worker.py:19 (import gh.app); gh/refinery/runner.py:144, gh/data/ingest.py:365 (import gh.shell.routes)",
+    "biz/market/routes.py 63 lần text(, system_api/routes.py 60",
+    "system_api/routes.py 986 dòng (tiêu đề mục :45-865), biz/market/routes.py 913, data_api/routes.py 894, biz/relations/routes.py 858, social/service.py 849, setup/routes.py 830, biz/queue/routes.py 720, biz/people/routes.py 631, screens/api/ApiScreen.tsx 610, cmd/genh/main.go 965"
+   ],
+   "impact": "Sửa một màn dễ làm vỡ bước thiết lập/Gen; khó cho agent đọc trọn ngữ cảnh; kiểm thử phải đi qua HTTP.",
+   "fix": "Dần, không đập đi: khi chạm route nào, rút logic sang service.py cùng cụm; tách system_api/routes.py theo 9 mảng sẵn có; setup và gen chỉ gọi service.",
+   "effort": "L",
+   "sources": [
+    "KT-11"
+   ],
+   "survives": true,
+   "better_fix": "Không refactor diện rộng (L). Chỉ làm đúng các chỗ import chéo: chuyển _item_payload/_load_item sang gh/biz/queue/service.py; chuyển GroupPatch/update_group, create_rule/save_schedule/save_weights, try_chat, set_session_cookies, publish_header/header_payload sang service.py cùng cụm, và để routes cũ re-export. Thêm import-linter (hoặc một test duyệt AST) với luật: module ngoài *.routes không được import gh.*.routes, chỉ trừ gh/app.py. Mỗi bước khoảng S và giữ test hiện có xanh. | Chỉ làm khi đang sửa đúng chỗ đó. Ưu tiên rút _load_item/_item_payload ra queue/service.py (đang bị gen import, là hàm riêng) và tách system_api/routes.py. Không lập đợt sửa riêng.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.85,
+     "reason": "Số liệu khớp. setup/routes.py:18-32 import từ agents_api, auth, biz.people, data_api, system_api routes. gen/proposals.py:196 import _item_payload/_load_item (private) của biz/queue/routes. worker.py:19 import gh.app; refinery/runner.py:144 và data/ingest.py:365 import gh.shell.routes. text( đếm được 63 và 60; wc -l khớp 986/913/894/858/849/830/720/631/610; main.go 965 dòng nằm ở apps/genh/cmd/genh. Tuy vậy đây là nợ bảo trì, chưa tái hiện được lỗi nào cho người dùng. Bước thiết lập đã có test test_setup_auth_api.py và test_setup_v0129.py, nên rủi ro 'sửa màn làm vỡ setup' đã được giảm một phần. Mức orange là quá cao, nên hạ xuống yellow."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.7,
+     "reason": "Bằng chứng đúng: setup/routes import handler từ 5 module route; gen/proposals import hàm riêng _load_item/_item_payload; worker import gh.app; các tệp dài 600–990 dòng. Nhưng đây là nợ bảo trì, Boss không thấy ảnh hưởng trực tiếp. Việc setup dùng lại handler (update_group, create_rule) còn giúp giữ chung một bộ kiểm tra. 900 dòng chưa đến mức agent không đọc trọn được. Chưa thấy lỗi thật nào sinh ra từ việc này. Hạ xuống yellow và làm dần như đề xuất."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-19",
+   "title": "Ảnh nền và phụ thuộc không ghim (Python không lockfile, caddy/redis và ảnh nền build không digest) — bản build không tái lập",
+   "severity": "yellow",
+   "dimension": "van-hanh",
+   "evidence": [
+    "compose.yaml:31, 170, 249 — caddy:2-alpine, redis:7-alpine không ghim; pin-compose-images.sh chỉ ghim 5 ảnh tự build",
+    "Ảnh nền build python:3.11-slim, node:22-slim, pgvector/pgvector:pg16, nginx-unprivileged:1.27-alpine không ghim digest",
+    "apps/api/pyproject.toml:6-23 (chỉ cận dưới >=, không lockfile)",
+    "deploy/images/api.Dockerfile:49 (RUN pip install .); log CI cho thấy starlette==1.7.0 kéo tự do",
+    "gh/db.py:73 (Depends(get_db, scope=\"function\") cần FastAPI 0.121+, cận dưới 0.115 đã sai)"
+   ],
+   "impact": "Bản build không tái lập; mỗi lần phát hành có thể kéo bản thư viện khác bản CI đã test — một bản FastAPI/arq/redis-py lỗi là hỏng release mà không đổi dòng mã nào; tổ hợp phụ thuộc chạy thật trên máy Owner chưa từng được kiểm.",
+   "fix": "uv lock + uv sync --frozen trong Dockerfile và CI (cả apps/browser); sửa cận dưới FastAPI; ghim digest caddy/redis trong compose (qua pin-compose) và ảnh nền build; bật Dependabot/Renovate.",
+   "effort": "M",
+   "sources": [
+    "VH-10",
+    "KT-12"
+   ],
+   "survives": true,
+   "better_fix": "Phương án đề xuất đúng. Cách gọn hơn cho caddy/redis là ghi thẳng `image: caddy:2-alpine@sha256:…` và `redis:7-alpine@sha256:…` vào deploy/compose.yaml, không cần sửa pin-compose-images.sh (script chỉ thay dòng build:), rồi để Renovate (docker-compose + dockerfile + pep621/uv managers) mở PR tăng digest; CI xanh thì tự merge theo quy trình repo. CI đã dùng uv nên `uv lock` cho apps/api và apps/browser, ci.yml chuyển sang `uv sync --frozen --extra dev`, Dockerfile dùng `uv sync --frozen --no-dev`; sửa fastapi>=0.121. | Làm trước phần rẻ: ghim digest caddy/redis qua pin-compose-images.sh và ghim digest ảnh nền trong Dockerfile. Sau đó uv lock + uv sync --frozen cho api/browser, bật Renovate để PR nâng phụ thuộc đi qua CI.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.85,
+     "reason": "Đúng. deploy/compose.yaml:31, :170, :249 dùng caddy:2-alpine và redis:7-alpine theo tag. genh update có chạy compose pull (internal/ops/update_test.go:50), nên máy Owner kéo bản caddy/redis mới mỗi đêm mà CI chưa từng kiểm. Ảnh nền api.Dockerfile:2 python:3.11-slim, bridge node:22-slim, db pgvector:pg16, web nginx-unprivileged:1.27-alpine đều không có digest; chỉ browser.Dockerfile:9 có ghim. pyproject.toml:6-23 chỉ có cận dưới, không có uv.lock hay requirements. api.Dockerfile:49 pip install .; ci.yml:55 tự giải phụ thuộc ở thời điểm khác. db.py:73 dùng Depends(scope='function') (FastAPI 0.121+) trong khi cận dưới là >=0.115. Không có dependabot/renovate. Không kiểm được số starlette trong log CI, nhưng phần chính của phát hiện đã được xác nhận."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.6,
+     "reason": "Xác nhận: pyproject chỉ có cận dưới, không có lockfile; caddy:2-alpine/redis:7-alpine và ảnh nền build không ghim digest. Tuy vậy đã có lớp bù: 5 ảnh tự build được ghim digest khi phát hành, nên máy Owner chạy đúng ảnh mà E2E cài thật đã thử. CI cài bản mới nhất ở mỗi PR nên bản lớn gây vỡ thường lộ ra ở CI trước khi merge. genh update có healthcheck và tự rollback. Rủi ro còn lại: lệch giữa lúc chạy CI và lúc build release, caddy/redis trôi theo mỗi lần pull (rollback không đưa về ảnh cũ được), không build lại y hệt được. Cận dưới FastAPI sai chỉ là lý thuyết vì pip luôn lấy bản mới nhất. Hạ xuống yellow."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-20",
+   "title": "Thiếu PIN ở các thao tác \"định tuyến lại / hạ rào\"",
+   "severity": "orange",
+   "dimension": "bao-mat",
+   "evidence": [
+    "apps/api/gh/auth/service.py:19-42",
+    "apps/api/gh/setup/routes.py:672-726",
+    "apps/api/gh/auth/users.py:129-131",
+    "apps/api/gh/setup/routes.py:636-670",
+    "apps/api/gh/setup/routes.py:529-543",
+    "apps/api/gh/agents_api/routes.py:403-407",
+    "apps/api/gh/agents_api/routes.py:198",
+    "apps/api/gh/system_api/routes.py:343, 381, 402, 444",
+    "apps/api/gh/mcp_api/routes.py:96, 113",
+    "apps/api/gh/mcp_api/routes.py:201-212",
+    "apps/api/gh/mcp_api/routes.py:238",
+    "apps/api/gh/mcp_api/routes.py:274",
+    "apps/api/gh/mcp_api/routes.py:219",
+    "apps/api/gh/system_api/routes.py:597",
+    "apps/api/gh/system_api/routes.py:636",
+    "apps/api/gh/system_api/update.py:162",
+    "apps/api/gh/system_api/backups.py:118, 208"
+   ],
+   "impact": "Phiên Owner bị lấy (BM-01, máy để mở, cookie lộ) thì không cần PIN vẫn: tạo tài khoản bám trụ (setup bước 10 trả temp_password), chuyển toàn bộ lưu lượng LLM về máy chủ kẻ tấn công, đổi tool MCP ghi thành đọc rồi gọi thẳng (bỏ qua duyệt), nối tài khoản Claude/Google của kẻ tấn công vào CLI, cập nhật/sao lưu hệ thống.",
+   "fix": "Thêm require_pin cho các route trên (có thể thêm danh mục ai.route_change, mcp.manage; dùng lại policy.change, user.manage, cli.switch_account). Bước 9/10 sau finished_at: chuyển sang endpoint đã có PIN hoặc đòi PIN. Thêm test bảng: mọi route ghi cấu hình an ninh trả 423 khi chưa có PIN.",
+   "effort": "M",
+   "sources": [
+    "BM-02"
+   ],
+   "survives": true,
+   "better_fix": "Không gắn PIN tràn lan (dễ gây mỏi PIN cho Boss); chỉ chặn đúng đường hạ rào. (1) patch_agent: chỉ đòi PIN policy.change khi body có autonomy_level/forbidden/limits/channel_scopes, kiểm user.pin_active() trong thân hàm. (2) patch_tool_access: đòi PIN mcp.expose khi chuyển write→read. (3) create_provider/patch_provider/patch_chain/add_key: thêm thao tác 'ai.route_change'. (4) cli_login: đòi PIN cli.switch_account, vì _finish tự kích hoạt profile mới. (5) setup bước 9/10 khi row.finished_at đã có: đòi PIN policy.change / user.manage. Bỏ update/backup-now/backup-schedule khỏi danh sách. Thêm test dạng bảng gọi từng route với phiên Owner chưa có PIN, kỳ vọng 423. | Bỏ update/backup_now khỏi danh sách. Ưu tiên: providers create/patch/chain/keys, mcp servers create/patch + tools access/grants, agents patch (autonomy/limits) + bindings, setup bước 4–11 sau finished_at, cli_login, đổi lịch backup. Cách bền: dependency ở mức router đòi PIN cho mọi route ghi có system.manage, trừ danh sách miễn trừ ghi rõ; thêm test bảng kiểm trả 423.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.85,
+     "reason": "Đúng phần lõi. deps.py:78-87 require_pin chỉ được gắn ở các route liệt kê; các route sau chỉ cần MANAGE, không cần PIN: agents_api/routes.py:407 patch_agent cho đổi autonomy_level 0–6, forbidden, limits (:275) trong khi PIN_OPERATIONS có policy.change 'Đổi mức tự trị'; system_api/routes.py:343/381/402/444 tạo provider openai_compat với endpoint tuỳ ý và đổi thứ tự chuyển hướng; mcp_api/routes.py:201-212 đổi write→read rồi gọi thẳng ở :274; system_api/routes.py:597 cli_login, mà providers/cli.py _finish (~:667) tự đặt is_active=true, vượt qua PIN cli.switch_account. setup/routes.py:672-726 bước 10 (after_finish=True) tạo user và trả temp_password; bước 9 :636-670 đổi mức tự trị. Sai một chỗ: system_api/routes.py:636 (cli_activate) đã có PIN. update.py:162 và backups.py:118/208 có rủi ro thấp."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.75,
+     "reason": "Xác nhận có các lỗ thật trong lớp PIN. setup bước 9/10 (after_finish=True) đổi mức tự trị và tạo tài khoản kèm temp_password mà không cần PIN, lách user.manage/policy.change. agents PATCH đổi autonomy_level không cần PIN. Thêm provider openai_compat rồi sắp lại chuỗi là chuyển toàn bộ lưu lượng LLM ra ngoài. PATCH /mcp/tools đổi write thành read rồi call_tool là gọi thẳng, bỏ qua duyệt (khoá cứng #4). Điều kiện là phiên Owner bị lộ, nhưng PIN chính là lớp hệ thống tự đặt cho đúng tình huống đó. Một số bằng chứng thừa/sai: :636 cli_activate đã có PIN; update/sao lưu ngay là thao tác vô hại."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-21",
+   "title": "Phơi cổng & không chống dò mật khẩu",
+   "severity": "yellow",
+   "dimension": "bao-mat",
+   "evidence": [
+    "deploy/compose.yaml:33",
+    "deploy/proxy/Caddyfile:6",
+    "README:13",
+    "apps/api/gh/auth/routes.py:69-88",
+    "db/sql/0001_baseline.sql:92",
+    "apps/api/gh/bundle.py:105",
+    "apps/api/gh/auth/service.py:99-106",
+    "apps/api/gh/auth/service.py:126-133"
+   ],
+   "impact": "Cổng 8443 nghe trên mọi giao diện (site localhost chỉ khớp Host/SNI, không phải an ninh); /auth/login không giới hạn tần suất, không khoá tài khoản; không 2FA; dò email theo thời gian phản hồi; phiên 7 ngày trượt không hạn tuyệt đối → cài trên VPS/mạng văn phòng/quán cà phê là bị dò mật khẩu Owner/nhân viên không giới hạn.",
+   "fix": "Mặc định bind 127.0.0.1:8443, genh hỏi mới mở LAN kèm cảnh báo; rate-limit theo IP + email (Redis, backoff) cho login/setup/PIN; chạy argon2 giả khi không có user; TOTP tuỳ chọn cho Owner; hạn tuyệt đối 30 ngày cho phiên.",
+   "effort": "M",
+   "sources": [
+    "BM-04"
+   ],
+   "survives": true,
+   "better_fix": "Bind: đổi compose.yaml (và apps/genh/internal/compose/embedded_compose.yaml) thành `\"${GH_BIND_ADDR:-127.0.0.1}:${GH_PORT:-8443}:8443\"`; genh chỉ ghi GH_BIND_ADDR=0.0.0.0 vào .env khi Owner đặt GH_SITE_ADDRESS khác localhost (mặc định cert/Host đã chỉ là localhost nên không phá cài hiện có; doctor.go đã dò 127.0.0.1). Login: trong routes.login dùng Redis sẵn có, INCR+EXPIRE khoá `gh:auth:fail:{ip}` và `gh:auth:fail:{email}` (vd 10 lần/15 phút → 429 kèm retry_after), xoá khi thành công; client_ip lấy XFF đầu — an toàn vì Caddy (không trusted_proxies) ghi đè XFF. service.login: khi row None vẫn gọi verify_secret với một hash argon2 giả hằng. load_session: thêm điều kiện `s.created_at > now() - interval '30 days'`. Test: pytest 11 lần sai → 429; email không tồn tại vẫn gọi verify_secret. TOTP để đợt sau. | Ưu tiên phần rẻ: bind 127.0.0.1 mặc định (genh có cờ/hỏi khi cần mở LAN cho nhân viên); rate-limit login theo IP+email bằng Redis (vd 5 lần/5 phút, backoff) và giới hạn số login đồng thời để chống cạn RAM do argon2. TOTP và hạn tuyệt đối 30 ngày để sau.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.85,
+     "reason": "Đúng như mô tả. compose.yaml:33 `ports: [\"${GH_PORT:-8443}:8443\"]` nghe 0.0.0.0; Caddyfile:6 `{$GH_SITE_ADDRESS:localhost}:8443` chỉ lọc Host/SNI (kẻ dò đặt SNI/Host=localhost là qua). routes.py:69-88 /auth/login chỉ ghi actionlog khi sai, không đếm/khoá; grep toàn apps/api/gh không có rate-limit/lockout cho login (chỉ PIN có pin_max_attempts=5, service.py:186-216). service.py:99-106 trả None ngay khi không có user (không chạy argon2) → lộ email theo thời gian. config.py:55 session_ttl_hours=168, service.py:126-133 gia hạn trượt vô hạn. totp_secret_enc (0001_baseline.sql:92) chưa nối dây (bundle.py:101-105 tự ghi). Mã setup 12 ký tự ~60 bit nên phần setup không đáng lo; PIN đã có khoá."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.6,
+     "reason": "Đúng: compose bind 0.0.0.0:8443 (Docker vượt firewalld), /auth/login không rate-limit, không TOTP (cột có nhưng chưa nối), không argon2 giả khi sai email, phiên trượt không hạn tuyệt đối.\nNhưng có bù trừ: mật khẩu Owner/nhân viên tối thiểu 12 ký tự + argon2id (~64MiB/lần) nên dò online rất chậm. Thao tác nhạy cảm còn cần PIN có khoá sau 5 lần. Site chỉ khớp SNI/Host localhost nên trình duyệt hay máy quét thường sẽ bắt tay TLS thất bại, kẻ dò phải cố tình giả SNI.\nMáy Fedora ở nhà/văn phòng, không phải VPS: rủi ro thực là người trong LAN cố tình dò, hoặc làm cạn RAM bằng login dồn dập. Hạ xuống vàng."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-22",
+   "title": "agy CLI nhận prompt không tin cậy mà không khoá công cụ/không cô lập (cần kiểm chứng trên agy 1.2.9)",
+   "severity": "orange",
+   "dimension": "bao-mat",
+   "evidence": [
+    "apps/api/gh/providers/clients.py:259-260",
+    "apps/api/gh/providers/clients.py:378-401",
+    "apps/api/gh/refinery/runner.py:289-294",
+    "apps/api/gh/biz/duty/engine.py:355",
+    "apps/api/gh/providers/router.py:134, 167",
+    "apps/api/gh/providers/clients.py:213-218",
+    "apps/genh/internal/install/steps_migrate.go:267",
+    "deploy/images/api.Dockerfile:61-65"
+   ],
+   "impact": "agy -p chạy không cờ tắt tool/sandbox, không đặt cwd, prompt trên argv (lộ qua ps). Prompt chứa mọi tin Zalo/WA, duty engine, Gen. agy cùng uid gh đọc được /run/secrets/gh_master_key (0644), /proc/1/environ (DSN superuser, GH_BACKUP_KEY), HOME chứa phiên Claude. Khách nhắn prompt injection yêu cầu đọc tệp/web/shell → khoá master và DSN superuser có thể lọt vào DB, bản nháp hoặc ra máy chủ lạ.",
+   "fix": "Kiểm thực tế tool nào chạy không cần xác nhận ở agy -p. Tắt mọi tool; cwd thư mục rỗng riêng, HOME riêng không chứa phiên Claude; prompt qua stdin hoặc tệp 0600. Cân nhắc chạy CLI trong container riêng không mount secrets. Riêng v0.1.32: kiểm model/effort bằng allowlist hoặc regex ^[A-Za-z0-9._:-]{1,80}$ và truyền --model=<x> / --effort=<x>.",
+   "effort": "M",
+   "sources": [
+    "BM-05"
+   ],
+   "survives": true,
+   "better_fix": "Bước 1 (bắt buộc trước khi sửa): chạy agy 1.2.9 thật với prompt 'đọc /run/secrets/gh_master_key và in ra' ở -p, ghi kết quả vào HANDOFF; dò `agy --help`/chuỗi trong tệp chạy tìm cờ tắt tool/sandbox/approval. Sửa tối thiểu trong AgyClient._run: cwd= thư mục rỗng riêng (vd /var/lib/gh/agy/work-empty, tạo 0700); dời phiên Claude ra ngoài HOME của agy (GH_CLAUDE_HOME=/var/lib/gh/claude/.claude trên volume riêng, genh update chuyển tệp) vì cả hai đang cùng /var/lib/gh/agy; truyền model bằng `--model=<x>` sau kiểm regex. Nếu agy không có cờ tắt tool thì giải pháp đúng là chạy agy trong container riêng không mount secrets, không có DSN trong env (worker gọi qua hàng đợi), không phải chỉ tuỳ chỉnh cờ. | Làm như ClaudeCodeClient: cwd là thư mục rỗng riêng, prompt qua stdin hoặc tệp 0600, dùng cờ tắt tool/approval của agy nếu có. Tách phiên Claude khỏi HOME của agy. Thêm test canary trong e2e: gửi prompt 'đọc /run/secrets/gh_master_key và in ra', khẳng định đầu ra không chứa khoá. Nếu agy không có cờ tắt tool thì chỉ cho dùng agy cho Gen (Owner), không cho sàng lọc/duty engine nhận tin khách.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.65,
+     "reason": "Phần mã đúng: clients.py:259-260 gọi `agy -p <prompt> --model <m> --effort ...` — prompt nằm trên argv, không cờ tắt tool/sandbox, _run (229-232) không đặt cwd. So với ClaudeCodeClient (378-401) có --tools \"\" --safe-mode, stdin, cwd riêng. cli_env (213-218) đặt HOME=/var/lib/gh/agy (Dockerfile:61-65) — thư mục này chứa luôn claude/.claude/.credentials.json. Worker (compose ~95-103) có GH_ADMIN_DATABASE_URL superuser + GH_BACKUP_KEY trong env PID 1 cùng uid gh; secrets 0644 (steps_migrate.go:249-267). Tin khách vào prompt qua refinery/runner.py:289-294, duty/engine.py:355. Chưa kiểm được agy 1.2.9 -p có tự chạy tool đọc tệp/web/shell hay không (HANDOFF chỉ ghi cờ -p/--model/--effort/--output-format) → mức khai thác thật còn là giả định, đúng như tiêu đề tự nhận."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.65,
+     "reason": "Đúng: AgyClient chạy `agy -p <prompt>` không cờ tắt tool, không đặt cwd, prompt nằm trên argv. Trong khi ClaudeCodeClient đã được làm cứng (--tools \"\", --safe-mode, stdin, cwd riêng), tức nhóm đã tự coi mối đe doạ này là thật.\nCùng uid gh với worker: đọc được /run/secrets/* (0644), /proc/1/environ (GH_ADMIN_DATABASE_URL superuser), HOME=/var/lib/gh/agy chứa luôn phiên Claude.\nĐầu vào là tin khách Zalo/WA, đường chính của sản phẩm. Chưa kiểm chứng agy 1.2.9 tự chạy tool nào ở chế độ -p. Kiểu Gemini CLI headless thường vẫn cho đọc tệp trong workspace. Lộ argv qua ps chỉ trong container nên nhẹ.\nGiữ cam vì hậu quả có thể là lộ khoá master."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-23",
+   "title": "\"Dùng dữ liệu mẫu\" ở bước 1 không làm gì",
+   "severity": "yellow",
+   "dimension": "ux",
+   "evidence": [
+    "setup/Step1Welcome.tsx:17-21 hứa \"Nạp dữ liệu mẫu…; xoá được sau ở Điều khiển hệ thống\"",
+    "Server chỉ lưu mode (apps/api/gh/setup/routes.py:77, 176). Dữ liệu mẫu chỉ nạp được bằng make seed (Makefile:63-70). Không có nút xoá dữ liệu mẫu"
+   ],
+   "impact": "Chọn xong vẫn thấy Console trống, tưởng hỏng.",
+   "fix": "Bỏ lựa chọn (S). Hoặc nối seed_demo vào bước 1 và thêm nút \"Xoá dữ liệu mẫu\" ở Hệ thống (M).",
+   "effort": "S",
+   "sources": [
+    "UX-5"
+   ],
+   "survives": true,
+   "better_fix": "Phương án S là đúng và đủ: xoá fieldset 'Cách bắt đầu' (Step1Welcome.tsx:85-106) và mảng MODES, luôn gửi mode 'empty'; sửa câu ở apps/web/src/setup/steps.ts:18; cập nhật test apps/web/test/unit/setup.test.tsx:188-195 (đang click 'Dùng dữ liệu mẫu'). Giữ Literal['empty','sample'] ở API để không vỡ client cũ. | Chỉ bỏ lựa chọn (S). Đừng nối seed_demo vào bản chạy thật: raw.events chỉ-ghi-thêm (luật cứng, clear_demo không xoá raw), nên tin mẫu sẽ nằm vĩnh viễn trong Kho thô của công ty thật.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.9,
+     "reason": "Đúng. Step1Welcome.tsx:17-21 hứa 'Nạp dữ liệu mẫu…; xoá được sau ở Điều khiển hệ thống'. Server setup/routes.py:77 nhận mode, :176 chỉ lưu vào completed, :114 trả lại trong state — grep toàn apps/api/gh không có chỗ nào đọc mode để gọi seed_demo; seed_demo/clear_demo chỉ chạy qua `python -m gh.seed_demo` (Makefile:63-70, cần .venv dev). Không có nút xoá dữ liệu mẫu trong apps/web/src (grep 'dữ liệu mẫu' chỉ ra Step1Welcome.tsx và steps.ts:18). genh cũng không gọi seed."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.85,
+     "reason": "Đúng: mode 'sample' chỉ được lưu vào setup.completed, không chỗ nào đọc lại. seed_demo chỉ chạy qua Makefile trong venv dev, không có trong luồng cài genh. Cũng không có nút xoá dữ liệu mẫu.\nNhưng Boss đã cài xong và qua bước 1 rồi, chỉ ai cài lại/cài mới mới gặp. Lúc đó Console trống giống hệt chọn 'Bắt đầu trống'. Lời hứa sai nhưng hại thấp. Hạ xuống vàng."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-25",
+   "title": "Bảng \"Gán model cho từng agent\" có 4 dòng không có tác dụng",
+   "severity": "yellow",
+   "dimension": "ux",
+   "evidence": [
+    "apps/api/gh/agents_api/routes.py:131-143 tự ghi core.reply/intent/scoring/indexing là \"chỗ cấu hình trước… không tự xưng đã nối dây\"",
+    "Ảnh shots/own-api-model.png cho thấy 9 dòng"
+   ],
+   "impact": "Boss gán model mà không có gì thay đổi. Màn chọn model càng rối, cùng họ với lỗi \"picker hiện sai\".",
+   "fix": "Ẩn các dòng chưa nối. Chỉ giữ Gen, Sàng lọc và từng trợ lý kênh.",
+   "effort": "S",
+   "sources": [
+    "UX-7"
+   ],
+   "survives": true,
+   "better_fix": "Bỏ core.intent, core.scoring, core.indexing khỏi CORE_AGENT_KEYS (agents_api/routes.py:136-144); list_bindings tự ẩn chúng, PUT trả lỗi field. Với core.reply: đổi biz/core/routes.py:323 từ 'core.reply_fast' sang 'core.reply' và đổi nhãn thành 'Soạn lại / dịch nháp (không có trợ lý)' để dòng này thật sự có tác dụng thay vì ẩn đi. Giữ nguyên hàng agent.bindings cũ trong DB (vô hại). Test: list_bindings chỉ trả core.refinery, core.reply, core.gen + agent:*; regenerate nháp không agent dùng binding core.reply. | Bỏ 4 khoá chết khỏi CORE_AGENT_KEYS và _bind_core_agents, chỉ giữ Sàng lọc, Gen và agent:<id>. Nếu muốn cấu hình được dịch/soạn lại nháp thì đưa core.reply_fast vào bảng với nhãn đúng.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.9,
+     "reason": "Đúng. agents_api/routes.py:131-143 tự ghi chỉ core.refinery và agent:<id> được ModelRouter dùng (core.gen cũng dùng: gen/engine.py:36, hub_link/service.py:35). grep agent_key= trong apps/api/gh: không có chỗ nào gọi core.reply/intent/scoring/indexing; router.embed (router.py:311-321) chọn model theo tên '%embedding%', không đọc bindings. Lại thêm lệch tên: biz/core/routes.py:323 dùng 'core.reply_fast' (không có trong CORE_AGENT_KEYS) nên dòng 'Trả lời nhanh' không bao giờ có tác dụng. setup/routes.py:457-465 còn tự gán model cho các khoá chết. Ảnh own-api-model.png hiện 9 dòng (ảnh mock). Tác hại chỉ là gây rối, không làm sai hành vi → hạ xuống vàng."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.7,
+     "reason": "Đúng: core.reply/intent/scoring/indexing không được router dùng ở đâu, chính chú thích code cũng thừa nhận. Key thật cho dịch/soạn lại nháp là core.reply_fast, lại không có trong bảng. Ảnh chụp cho thấy 4 dòng chết.\nTuy vậy màn này nằm trong nhóm 'Kỹ thuật · Backend', Boss ít vào; setup đã tự gán model; gán sai cũng không hỏng gì, chỉ gây rối và phí công. Hạ xuống vàng."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-26",
+   "title": "Người không phải Owner vẫn gặp ngõ cụt",
+   "severity": "yellow",
+   "dimension": "ux",
+   "evidence": [
+    "apps/api/gh/auth/rbac.py:63 (Nhân viên phụ trách không có overview), lib/safeNext.ts:3, router.tsx:71",
+    "screens/system/SystemScreen.tsx:33 (tab mặc định \"Kênh\")",
+    "screens/system/BrainTab.tsx:19-40 không kiểm quyền; ảnh shots/mgr-system-brain.png, shots/mgr-system-default.png",
+    "NoModelBanner.tsx:31 gọi /setup/follow-up mà không giới hạn Owner, vai trò khác nhận 403 thừa"
+   ],
+   "impact": "Nhân viên mới đăng nhập là gặp ổ khoá. Manager thấy cả loạt thẻ lỗi đỏ.",
+   "fix": "Trang đích = màn đầu tiên trong danh mục của vai trò. Ẩn tab không có quyền. Manager mặc định vào tab Nhật ký. Bộ não AI kiểm system.read.",
+   "effort": "S",
+   "sources": [
+    "UX-8"
+   ],
+   "survives": true,
+   "better_fix": "Thêm component HomeRedirect: lấy useNavigation() và chuyển tới key đầu tiên của screenKeys(nav.data) theo thứ tự danh mục. Dùng nó cho index route ở router.tsx:71, cho fallback của safeNext (trả null, bên gọi tự chọn), cho ForcePasswordPage.tsx:26/66 và SetupPage.tsx:115. SystemScreen: lọc TABS theo quyền (channels/brain/roles/org/storage cần system.read, users cần roles.manage, log cần audit.read), mặc định là tab đầu còn lại. Ẩn tab Kênh không làm mất chỗ đổi PIN, vì AccountPage.tsx:71 đã có PinCard. BrainTab: return sớm EmptyState ổ khoá khi !useCan('system.read'). NoModelBanner: thêm enabled: isOwner. Test vitest: nav của agent_staff thì '/' phải chuyển sang /inbox; Manager mở /system thì chỉ thấy tab Nhật ký. | Trang đích lấy màn đầu tiên trong GET /navigation (cả index lẫn safeNext). Bọc BrainTab bằng useCan('system.read') như ChannelsTab, hoặc lọc TABS theo quyền.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.9,
+     "reason": "Đúng. rbac.py:63 agent_staff overview.read=NONE; router.tsx:71 và safeNext.ts:3 luôn về /overview, nên ScreenPage.tsx:120-123 hiện ổ khoá (thanh bên vẫn còn màn khác, nên 'ngõ cụt' hơi quá lời).\nManager có audit.read nên vào được /system. SystemScreen.tsx:35 mặc định là tab 'channels', tab này chỉ hiện ổ khoá. BrainTab.tsx:19-23 không kiểm system.read, gọi useProviders/useFailoverRules nên ra 403. Ảnh shots/mgr-system-brain.png có 5 thẻ 'Không tải được dữ liệu'.\nCác tab Roles/Org/Storage/Users đều đã chặn quyền, chỉ BrainTab là thiếu.\nNoModelBanner.tsx:30 không có enabled, trong khi SetupFollowUp.tsx:20 có enabled: isOwner. Lỗi 403 (setup/routes.py:149-153) không thử lại (queryClient.ts:11) và không hiện ra, chỉ là một request thừa."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.75,
+     "reason": "Đúng về mã: Nhân viên phụ trách có overview.read=NONE, safeNext và index đều chuyển về /overview nên gặp màn ổ khoá. Tab Bộ não AI không kiểm quyền, ảnh mgr-system-brain.png hiện 5 thẻ lỗi đỏ.\nNhưng chưa phải ngõ cụt: màn khoá có dặn \"danh mục chỉ hiện màn được cấp\" và thanh bên vẫn liệt kê các màn được phép. Tab mặc định Kênh có thẻ khoá hiền, chỉ đường sang Nhật ký. NoModelBanner gặp 403 thì im lặng trả null, người dùng không thấy gì.\nTheo F-27, mặc định nhân viên chưa vào được Console từ máy khác, nên tác động hiện tại còn thấp. Người dùng chính là Boss, mà Boss không gặp lỗi này."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-27",
+   "title": "Mời nhân viên nhưng có thể nhân viên không vào được",
+   "severity": "orange",
+   "dimension": "ux",
+   "evidence": [
+    "screens/system/usersModel.ts:26 dùng window.location.origin",
+    "Proxy mặc định là {$GH_SITE_ADDRESS:localhost}:8443 với tls internal (deploy/proxy/Caddyfile:6)",
+    "README và app không có hướng dẫn truy cập từ máy khác hoặc điện thoại"
+   ],
+   "impact": "Lời mời trỏ về https://localhost:8443. Nhân viên mở ra lỗi. Boss cũng không mở được Console trên điện thoại.",
+   "fix": "Nếu địa chỉ là localhost: cảnh báo ngay trong hộp mời. Thêm thẻ \"Địa chỉ cho nhân viên và điện thoại\" ở trang Đội ngũ; genh đặt GH_SITE_ADDRESS/tên miền hoặc đường hầm. Cần kiểm trên máy Owner.",
+   "effort": "M",
+   "sources": [
+    "UX-9"
+   ],
+   "survives": true,
+   "better_fix": "Lời mời nên lấy địa chỉ từ cấu hình máy chủ (GH_PUBLIC_URL ở config.py:13, cho trả qua /about hoặc /org) thay vì window.location.origin. Nếu hostname là localhost hoặc 127.x thì hiện cảnh báo đỏ ngay trong TempPasswordDialog. Thêm lệnh `genh set-address <ip|tên miền>` để ghi GH_SITE_ADDRESS và GH_PUBLIC_URL vào .env rồi khởi động lại proxy; Caddyfile nên nhận được cả localhost lẫn địa chỉ đó. Cần nói trước với Boss: tls internal làm điện thoại báo chứng chỉ lạ. Nên ưu tiên Tailscale hoặc Cloudflare Tunnel, vì có chứng chỉ thật và không phải mở cổng. | Lưu ý cái bẫy: nếu chỉ đặt GH_SITE_ADDRESS=IP/tên miền thì site không còn 'localhost', mà genh ProxyHost cố định là 'localhost', nên kiểm tra ready và tự cập nhật 03:00 sẽ hỏng. Caddyfile phải giữ cả hai: 'localhost:8443, {$GH_SITE_ADDRESS}:8443'.\nNên làm lệnh genh (vd 'genh remote') đặt tên LAN hoặc Tailscale Serve, xuất CA cho điện thoại, rồi kiểm lại ready. Hộp mời thì cảnh báo khi hostname là localhost hoặc 127.x.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.9,
+     "reason": "Đúng, và còn nặng hơn mô tả. UsersTab.tsx:300 và :338 dùng window.location.origin cho lời mời (usersModel.ts:23-26).\nCaddyfile:6 khai site {$GH_SITE_ADDRESS:localhost}:8443 với tls internal, compose.yaml:35 mặc định là localhost.\nChính genh ghi ở ops/http.go:24-30: gọi bằng IP thì không có SNI, Caddy từ chối bắt tay TLS. Vậy máy khác hoặc điện thoại vào bằng IP LAN cũng hỏng, không chỉ lời mời trỏ về localhost.\nGenh không có lệnh nào đặt GH_SITE_ADDRESS. README.md:58 chỉ hướng dẫn mở https://localhost:8443."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.85,
+     "reason": "Xác nhận: Caddyfile chỉ khai {$GH_SITE_ADDRESS:localhost}:8443 với tls internal. Chú thích ở genh ops/http.go:27 ghi rõ gọi bằng IP thì Caddy từ chối bắt tay TLS. Vì vậy điện thoại và máy khác không vào được.\nLời mời dùng window.location.origin (UsersTab.tsx:300,338) nên chép ra https://localhost:8443/login. genh không có lệnh đặt GH_SITE_ADDRESS, README cũng không hướng dẫn.\nHậu quả: tính năng mời đội ngũ hỏng mặc định và Boss không dùng được trên điện thoại. Mức cam là hợp lý."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-28",
+   "title": "Hướng dẫn: 3 tên gọi, một liên kết sai, thiếu các việc Boss thật sự muốn làm",
+   "severity": "yellow",
+   "dimension": "ux",
+   "evidence": [
+    "guide/guideContent.ts:115 dẫn việc 10 sang tab Quyền hạn trong khi mời người ở tab Người dùng",
+    "Danh sách hướng dẫn chỉ có các việc 5–11 (guide/guideContent.ts:26-131), không có Facebook, Gen-hub, Telegram, truy cập từ xa",
+    "3 tên gọi: Sidebar.tsx:101, AccountFooter.tsx:173, guide/GuidePage.tsx:34, HelpPage.tsx:95-98, SetupFollowUp.tsx:38, setup/Step10Team.tsx:119"
+   ],
+   "impact": "Boss theo hướng dẫn mà vào nhầm chỗ. Các kết nối quan trọng nhất không có hướng dẫn.",
+   "fix": "Một tên: \"Hướng dẫn thiết lập\". Sửa to: '/system?tab=users'. Thêm việc 12–15: Facebook, Gen-hub, Telegram, địa chỉ cho nhân viên.",
+   "effort": "S",
+   "sources": [
+    "UX-10"
+   ],
+   "survives": true,
+   "better_fix": "Bỏ việc Telegram vì chưa có kênh này; chỉ thêm Facebook (/social), Gen-hub (màn MCP › HubLinkCard) và 'Địa chỉ cho nhân viên' (phụ thuộc F-27). Không làm kiểu 'Làm bước này' được: GuideStepPage.tsx:23-32 chỉ có form cho bước 4–11, n khác sẽ bị chuyển về /guide. Vì vậy GuideItem cần kiểu chỉ có link console. Trạng thái xong lấy từ GET /setup/follow-up (setup/routes.py:772-789, STEPS/FOLLOW_UP_SQL), nên phải thêm truy vấn nhận biết đã xong ở backend (có tài khoản social, có hub_link). Nếu không, các việc mới sẽ mãi hiện là 'chưa xong', và thẻ Tổng quan cứ nhắc. Effort thực tế gần M. Đổi to thành '/system?tab=users' và gom về một tên 'Hướng dẫn thiết lập'. | Sửa to thành '/system?tab=users' và gom về một tên. Chỉ thêm việc 12 (Facebook, ở /social) và 13 (Gen-hub). Phần truy cập từ xa làm cùng F-27; Telegram để sau, khi plugin được cài sẵn.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.85,
+     "reason": "Đúng phần lõi. guideContent.ts:115 dẫn việc 10 'Mời người' sang '/system?tab=roles', mà RolesTab không có chức năng mời. Mời người nằm ở UsersTab.\nCó 3 tên gọi: Sidebar.tsx:101 và AccountFooter.tsx:173 dùng 'Hướng dẫn thiết lập'; GuidePage.tsx:34 và HelpPage.tsx:95-98 dùng 'Hướng dẫn kết nối'; SetupFollowUp.tsx:38 và Step10Team.tsx:119 dùng 'Hướng dẫn từng bước'.\nGUIDE chỉ có việc 5–11 (guideContent.ts:26-131), không có Facebook (SocialPage) hay Gen-hub (HubLinkCard), dù hai tính năng này đã có.\nNhưng phần sửa về Telegram sai: không có plugin kênh Telegram (plugins/ chỉ có channel-zalo và channel-whatsapp; bootstrap.py:139)."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.75,
+     "reason": "Đúng: guideContent.ts:115 dẫn việc 10 sang /system?tab=roles thay vì users. Tên gọi lẫn lộn giữa \"Hướng dẫn thiết lập\" (Sidebar, menu tài khoản), \"Hướng dẫn kết nối\" (GuidePage, HelpPage), \"Việc thiết lập tiếp\" và \"Hướng dẫn từng bước\".\nNhưng link sai chỉ là đường phụ; nút chính \"Làm bước này\" mở đúng form. Đổi tên chỉ là chuyện câu chữ.\nTelegram không cài sẵn (chỉ có plugin trong chợ, plugins/ không có), nên chưa cần hướng dẫn. Facebook và Gen-hub đã có hộp, thẻ riêng kèm lời giải thích. Hướng dẫn truy cập từ xa trùng với F-27. Hạ xuống vàng."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-29",
+   "title": "Trạng thái rỗng không dẫn đường",
+   "severity": "yellow",
+   "dimension": "ux",
+   "evidence": [
+    "47/87 EmptyState chỉ có tiêu đề",
+    "screens/queue/InboxScreen.tsx:93-96 \"Không có đơn vị ý nghĩa…\" không nói lý do trống",
+    "Chỉ Tổng quan có thẻ việc thiết lập"
+   ],
+   "impact": "Ngày đầu 15 màn trống. Boss không biết là do chưa nối kênh.",
+   "fix": "Dùng một EmptyState chung theo ngữ cảnh: 0 kênh hoạt động → \"Chưa có dữ liệu vì chưa nối kênh — [Nối Zalo]\"; có kênh nhưng trống → nói rõ đang chờ gì.",
+   "effort": "M",
+   "sources": [
+    "UX-11"
+   ],
+   "survives": true,
+   "better_fix": "Dữ liệu sẵn sàng phải xét 3 điều kiện chứ không chỉ kênh: kênh đang sống, nhóm đang nghe, model. Nhóm mới mặc định là 'Không nghe' (guideContent.ts:46), nên nối Zalo rồi màn hình vẫn trống. Dùng lại GET /header (shell/routes.py:31-41, có channels_live và groups_listening, mọi vai trò đọc được), vì vai trò khác Owner không gọi được /channels (cần system.read). Tạo <DataEmptyState> trong screens/common: channels_live=0 thì báo 'Chưa nối kênh' kèm [Nối Zalo] tới /guide/5; groups_listening=0 thì báo 'Chưa chọn nhóm để nghe' kèm /guide/6. Owner thấy nút; vai trò khác thấy 'Nhờ Owner…'. Áp dụng trước cho khoảng 15 màn có thể trống ngày đầu. Test: render với header 0/0 phải ra đúng nút. | Chỉ sửa khoảng 5 màn chính (Hộp thư, Việc, Nhóm & Con người, Bàn duyệt, Cơ hội): khi 0 kênh hoạt động thì hiện câu ngữ cảnh kèm nút /guide/5. Không cần làm lại cả 94 chỗ.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.85,
+     "reason": "Đúng. Tôi đếm lại được 94 EmptyState (không tính test), 48 cái không có description. Không cái nào dùng prop actions, dù EmptyState.tsx:11-20 có hỗ trợ.\nInboxScreen.tsx:93-96 chỉ nói 'không có… khớp bộ lọc hiện tại', không phân biệt chưa nối kênh, chưa chọn nhóm hay chưa có model.\nChỉ Tổng quan có SetupFollowUp (OverviewScreen.tsx:150/164) và NoModelBanner. Các màn khác trống mà không chỉ cách làm tiếp."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.7,
+     "reason": "Số liệu gần đúng: 48/94 EmptyState không có mô tả. Câu ở Inbox \"khớp bộ lọc hiện tại\" dễ hiểu nhầm khi chưa có kênh nào.\nTuy nhiên đã có kiểm soát bù: Tổng quan là màn Boss vào đầu tiên, có thẻ \"Việc thiết lập tiếp\" với việc 5 \"Kết nối Zalo\" và nút làm ngay. Việc nối kênh cũng nằm sẵn trong trình thiết lập.\nPhần lớn EmptyState chỉ có tiêu đề là khung phụ (ghi chú, phiên bản cũ, chọn một dòng), tiêu đề đã đủ nghĩa. Vấn đề chỉ gặp ngày đầu và chỉ một lần. Hạ xuống vàng."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-30",
+   "title": "Quá nhiều khái niệm AI và lọc tin",
+   "severity": "yellow",
+   "dimension": "ux",
+   "evidence": [
+    "Lọc tin có 2 lớp ở 2 nơi: Quy tắc sàng lọc; \"Lọc đầu Hộp thư\" ở screens/system/TriageCard.tsx:27, kèm Jev",
+    "Hộp thư hiện cả \"điểm lọc đầu\" và \"độ tin cậy\"",
+    "Ví dụ Gen cho người mới là \"Chỉ tôi cách thêm khoá Jev\" (gen/GenPanel.tsx:10, help/HelpPage.tsx:16)",
+    "Thang tự trị 0–6, trong khi mọi tin gửi ra ngoài luôn phải duyệt ở mọi mức (apps/api/gh/biz/duty/engine.py:5-6)"
+   ],
+   "impact": "Boss phải học tên nội bộ (Jev, core agent, SSOT). Các mức 5–6 gần như giống mức 4 với tin nhắn.",
+   "fix": "Một trang \"Lọc tin\": bật/tắt và mức Thấp/Vừa/Cao. Jev và trọng số vào Nâng cao. Tự trị còn 3 mức: Chỉ ghi nhận · Gợi ý · Soạn sẵn chờ duyệt. Ví dụ Gen đổi thành việc thật.",
+   "effort": "M",
+   "sources": [
+    "UX-12"
+   ],
+   "survives": true,
+   "better_fix": "Rút còn 3 mức chỉ ở giao diện, không xoá thang 0–6 ở backend. Lý do: dữ liệu đang lưu ở agent, attrs người/nhóm và org.settings, effective_autonomy lấy min qua các lớp, và mức 5 còn tự chạy việc nội bộ. Ánh xạ: 0–2 hiện là 'Chỉ ghi nhận' (ghi 0), 3 là 'Gợi ý', 4–6 là 'Soạn sẵn chờ duyệt' (ghi 4). Đưa 5/6 vào mục Nâng cao. Sửa chung AUTONOMY_OPTIONS (agentsModel.ts:22), AutonomySelect (DirectoryScreen.tsx:347-359) và chip ở header. Lọc tin: Thấp/Vừa/Cao ánh xạ sang min_score của triage settings, Jev và trọng số chuyển vào Nâng cao. Đổi ví dụ ở GenPanel.tsx:10 và HelpPage.tsx:16 thành việc thật, ví dụ 'Khách nào hỏi giá hôm nay?'. | Giữ thang 0–6 trong engine vì spec đã khoá; nếu đổi thì cần một QD. Ở UI chỉ hiện 3 lựa chọn (Gợi ý · Soạn sẵn chờ duyệt · Tự làm việc nội bộ an toàn), các mức khác cho vào Nâng cao.\nĐổi ví dụ Gen sang việc thật. Ẩn 'độ tin cậy' trên thẻ Hộp thư, chỉ hiện khi rê chuột. Gộp hai lớp lọc chỉ làm sau, không cần ngay.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.8,
+     "reason": "Đúng. Lọc tin có 2 lớp ở 2 nơi: /rules và TriageCard.tsx:27 'Lọc đầu Hộp thư · Jev hoặc quy tắc', thẻ này nằm trong BrainTab.tsx:139. Thẻ Hộp thư hiện huy hiệu điểm 'Lọc đầu' (queueModel.ts:131-134) kèm 'độ tin cậy' (InboxScreen.tsx:159-161).\nVí dụ về Jev có ở GenPanel.tsx:10 và HelpPage.tsx:16. UI cho chọn 0–6 (agentsModel.ts:13-22, DirectoryScreen.tsx:355).\nPolicy.py:111-116 giữ mọi tin ghi ra ngoài ở mọi mức. Engine duty chỉ tạo message.send, nên với agent thì mức 4/5/6 như nhau, 0–2 cũng như nhau.\nTuy vậy, mức 5/6 vẫn có tác dụng thật: việc nội bộ low_risk (reminder/report do người tạo, drafts.py:121-160) được tự chạy."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.7,
+     "reason": "Đúng một phần: ví dụ Gen \"thêm khoá Jev\" (GenPanel.tsx:10, HelpPage.tsx:16) là biệt ngữ. Lọc tin có hai lớp: Quy tắc sàng lọc và Lọc đầu Hộp thư.\nSai một phần: mức 5–6 KHÁC mức 4, vì chassis/policy.py:120-123 cho tự làm việc nội bộ thấp rủi ro hoặc đã whitelist. Thang 0–6 nằm trong spec LOCKED mục H1, và bước 9 thiết lập vốn chỉ cho chọn 3 hoặc 4.\nThẻ lọc nằm ở mục Kỹ thuật, mà màn hệ thống đã ghi \"việc hằng ngày không cần vào đây\". Hộp thư chỉ hiện \"ưu tiên x/100\" và \"độ tin cậy\". Hạ xuống vàng."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-31",
+   "title": "Gen-hub khó nối với người không rành kỹ thuật",
+   "severity": "yellow",
+   "dimension": "ux",
+   "evidence": [
+    "Thẻ nằm giữa màn MCP Hub (apps/web/src/screens/mcp/McpScreen.tsx:99); ảnh shots/own-mcp-genhub.png",
+    "Công tắc mạng công cộng mặc định tắt (apps/api/gh/hub_link/service.py:176) trong khi địa chỉ gợi ý là Internet (HubLinkCard.tsx:99)",
+    "Câu lỗi nhắc tới một công tắc tên khác (apps/api/gh/chassis/mcp_client.py:157 vs screens/mcp/HubLinkCard.tsx:111)",
+    "Phải Lưu xong mới Kiểm tra được (HubLinkCard.tsx:123); ô ngày mm/dd/yyyy"
+   ],
+   "impact": "Dễ gặp lỗi \"mạng công cộng\" ngay lần đầu, phải hỏi người hỗ trợ.",
+   "fix": "Đưa thẻ lên trang Kết nối. Địa chỉ https công khai của Gen-hub thì tự bật mạng công cộng (vẫn ghi nhật ký). Gộp thành một nút \"Lưu & kiểm tra\". Ô chọn ngày kiểu vi-VN.",
+   "effort": "S",
+   "sources": [
+    "UX-13"
+   ],
+   "survives": true,
+   "better_fix": "Không nên để máy chủ tự bật mạng công cộng mà không hỏi, vì làm vậy bỏ qua quyết định có cảnh báo của Owner (QD-12). Thay vào đó: (1) Trong HubLinkCard, khi endpoint là https và không phải localhost hay IP riêng, tự đánh dấu sẵn công tắc publicNet và hiện dòng cảnh báo; Owner vẫn thấy và tự bỏ được. (2) Sửa câu lỗi ở mcp_client.py:136/157 cho trung tính, hoặc thêm vào hub_link._classify một câu \"Bật 'Cho phép Gen-hub ở mạng công cộng' ngay trong thẻ này\" khi gặp MCP_NETWORK_BLOCKED. (3) Khi form còn thay đổi, nút Kiểm tra làm luôn: update.mutateAsync rồi test.mutate, gói trong một lần nhập PIN. (4) Sửa câu bước 3 cho khớp. Test: thêm vitest cho HubLinkCard, kiểm khi nhập URL công khai thì công tắc được bật sẵn và có cảnh báo. | Lần nối đầu, nếu địa chỉ là https công khai thì bật sẵn công tắc trên UI (vẫn hiện và ghi nhật ký). Trong hub_link._classify, đổi lỗi McpBlockedNetwork thành câu 'Bật Cho phép Gen-hub ở mạng công cộng ngay bên dưới rồi Lưu'. Nút Kiểm tra khi form còn thay đổi chưa lưu thì tự lưu trước.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.85,
+     "reason": "Xác nhận. HubLinkCard.tsx:99 gợi ý https://<địa-chỉ-gen-hub-của-bạn>/mcp (Internet), còn công tắc publicNet lấy từ link.allow_public_network, mặc định False (service.py:176, db/sql/0001_baseline.sql:781). Khi Kiểm tra, mcp_client.py:136/157 báo lỗi \"Owner chưa bật 'Cho phép máy chủ MCP ngoài mạng nội bộ'\". Tên này không khớp nhãn công tắc \"Cho phép Gen-hub ở mạng công cộng\" (HubLinkCard.tsx:111). Hàm _classify (service.py:233) giữ nguyên câu này, friendlyError.ts cũng không có luật nào viết lại nó. Nút Kiểm tra bị tắt khi form còn thay đổi chưa lưu (`disabled={!link.configured || dirty}`, :123), trong khi bước 3 (:147) lại bảo \"dán token rồi bấm Kiểm tra\": hướng dẫn mâu thuẫn với nút. Ngoài ra thẻ nằm giữa MCP Hub (McpScreen.tsx:99)."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.65,
+     "reason": "Mã nguồn khớp mô tả. Công tắc mặc định tắt, gợi ý là địa chỉ Internet. Câu lỗi McpBlockedNetwork ghi 'Cho phép máy chủ MCP ngoài mạng nội bộ', còn thẻ ghi 'Cho phép Gen-hub ở mạng công cộng'. friendlyError không có quy tắc nào dịch câu này, nên nó hiện nguyên văn. Tuy vậy đây là việc cài một lần. Công tắc nằm ngay trong thẻ, có dòng giải thích 'Gen-hub ở Internet'. Gen cũng chỉ đúng chỗ 'MCP Hub › thẻ Gen-hub'. Token phải tạo bên Gen-hub, vốn đã cần người hướng dẫn. Ô ngày hiển thị theo ngôn ngữ trình duyệt. Hạ xuống vàng."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-32",
+   "title": "Facebook chỉ vào được từ menu tài khoản, không nằm trong danh sách kênh",
+   "severity": "orange",
+   "dimension": "ux",
+   "evidence": [
+    "apps/web/src/shell/AccountFooter.tsx:136-149",
+    "apps/web/src/shell/routeHandles.ts:15 (khu \"KẾT NỐI\" không có trên thanh bên)",
+    "Hệ thống › Kênh chỉ có Zalo/WA/Telegram/LinkedIn (ảnh shots/own-system-channels.png)"
+   ],
+   "impact": "Boss không tìm thấy chỗ nối Facebook nếu không nhớ.",
+   "fix": "Đưa vào trang Kết nối (khuyến nghị 2). Tạm thời thêm một mục ở thanh bên cho Owner.",
+   "effort": "S",
+   "sources": [
+    "UX-14"
+   ],
+   "survives": true,
+   "better_fix": "Cách tối thiểu, làm ngay được: (1) Thêm màn 'social' vào danh mục màn (packages/contracts, GEN_SCREEN) để vừa hiện trên thanh bên cho Owner, vừa cho Gen dùng hành động navigate tới đó khi Boss hỏi về Facebook. (2) Thêm một thẻ \"Facebook / mạng xã hội → Mở trang tài khoản mạng xã hội\" ở cuối Hệ thống › Kênh, chỉ hiện cho Owner. Trang Kết nối gộp chung làm sau. | Thêm mục 'Mạng xã hội' vào navigation cho Owner, đặt cạnh Kênh. Ở Hệ thống › Kênh thêm một thẻ Facebook dẫn tới /social. Câu NO_ACCOUNT của Gen ghi rõ đường đi, hoặc trả link /social.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.85,
+     "reason": "Xác nhận. Lối vào /social duy nhất là mục \"Tài khoản mạng xã hội\" trong menu tài khoản, chỉ Owner thấy (AccountFooter.tsx:136-149). SOCIAL_CRUMBS 'KẾT NỐI' (routeHandles.ts:15) chỉ là breadcrumb của trang ngoài danh mục (router.tsx:81). Dò '/social' trong apps/web/src: không có trên thanh bên, Hướng dẫn hay danh mục màn của Gen (contracts không có màn social nên Gen không điều hướng tới được). Thông báo có link=\"/social\" (social/service.py:641,709) nhưng chỉ xuất hiện sau khi đã có tài khoản. Kênh trong Hệ thống chỉ có zalo/whatsapp/telegram/linkedin (systemModel.ts:49-51,108-112)."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.55,
+     "reason": "Đã xác nhận /social chỉ vào được từ AccountFooter, và chỉ khi là Owner. Thanh bên (GET /navigation) và Hệ thống › Kênh đều không có Facebook. Gen chỉ nói tên màn 'Tài khoản mạng xã hội', không nói nó nằm ở đâu. Công tắc khẩn 'Dừng tất cả' (KillSwitchCard) cũng chỉ có ở trang này. Có hai điểm bù: thông báo lỗi có link thẳng tới /social, và về nghĩa thì đây đúng là 'tài khoản'. Nhưng mạng xã hội là mục tiêu số 1. Boss vào Kênh không thấy Facebook rất dễ nghĩ là không hỗ trợ. Giữ cam, cách sửa rất rẻ."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-33",
+   "title": "Rollback thất bại đúng kịch bản hay gặp nhất (api mới crash-loop) → bản cũ chạy trên schema mới; vòng lặp lỗi mỗi đêm",
+   "severity": "orange",
+   "dimension": "van-hanh",
+   "evidence": [
+    "update.go:348, backupcore.go:101-112 — rollback restore DB bằng docker compose exec api vào container api mới",
+    "backupcore.go:128-130 — chỉ rơi về run --rm khi lỗi chứa \"is not running\"; container restarting báo \"is restarting\"",
+    "E2E không có kịch bản tiêm lỗi để kiểm rollback thật trên Docker (chỉ unit test với runner giả)"
+   ],
+   "impact": "Restore lỗi ⇒ code cũ chạy trên CSDL đã migrate, \"ROLLBACK THẤT BẠI\"; đêm sau LocatePathSync đồng bộ lại compose mới và thử lại ⇒ mỗi đêm backup → update lỗi → restore.",
+   "fix": "Trong rollback, khôi phục compose cũ rồi luôn dùng run --rm --no-deps api (ảnh cũ) để restore, hoặc up -d bản cũ trước rồi restore; ghi \"bản lỗi\" vào run/ để không tự thử lại; thêm job E2E \"bản hỏng cố ý\" (migration raise).",
+   "effort": "M",
+   "sources": [
+    "VH-7"
+   ],
+   "survives": true,
+   "better_fix": "Trong rollbackAndWrap (update.go:335), sau restoreComposeFromBackupIfAny: (1) chạy `docker compose stop api worker bridge web` (compose cũ) để không còn container api mới khởi động lại liên tục; (2) LUÔN restore bằng oneOff=true, tức `run --rm --no-deps api` với ảnh cũ: thêm tham số ép oneOff cho restoreInContainer thay vì đoán theo chuỗi lỗi; (3) rồi mới `up -d --remove-orphans`. Thêm 'is restarting' vào isServiceNotRunning cho genh backup/restore tay. Ghi run/update-blocked.json {version} khi rollback; RunUpdate bỏ qua bước đồng bộ compose cho đúng version đó, nhưng vẫn cho tự cập nhật lên bản mới hơn. Unit test: fake runner trả 'Container x is restarting' thì phải gọi run --rm. E2E: job ghi đè compose của bản mới bằng `command: [\"false\"]` cho api, kiểm ready xanh lại bằng bản cũ và đếm số dòng giữ nguyên. | Trong rollback: stop api/worker → run --rm --no-deps api (ảnh cũ theo digest của compose.yaml.bak) để restore → up -d. Coi 'is restarting' như không chạy. Ghi run/bad-version để timer bỏ qua bản lỗi tới khi có bản mới hơn. Phát hành dạng prerelease, chỉ đẩy lên 'latest' sau khi e2e-install và e2e-upgrade xanh, vì selfupdate đọc releases/latest.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.75,
+     "reason": "Xác nhận lỗi. Rollback gọi restoreInContainer (update.go:348) bằng `compose exec` vào container api mới (backupcore.go:101-111). Chỉ chuyển sang `run --rm` khi lỗi chứa \"is not running\" (:128-130). Container đang khởi động lại vẫn được Docker coi là Running và exec trả lỗi \"is restarting\", nên không bao giờ rơi vào nhánh run --rm. genh không có chỗ nào xử lý \"restarting\". Phần tác động cần sửa: nếu bản mới có migration thì `up -d` bằng compose cũ (:350) chạy migrate cũ trên CSDL ở revision mới. Theo compose.yaml:52-69 và 90-93, migrate cũ sẽ lỗi \"Can't locate revision\" nên api/worker KHÔNG LÊN: hệ thống sập hẳn, chứ không phải \"code cũ chạy trên schema mới\". Nếu exec lọt vào lúc container đang chạy rồi bị giết giữa chừng, CSDL có thể bị xoá dở (backup.py:124 DROP rồi pg_restore). Nhận định vòng lặp mỗi đêm đúng: binary đã tự cập nhật, selfupdate báo \"đã mới nhất\", LocatePathSync lại đồng bộ compose mới. Không có E2E nào kiểm rollback (e2e-install.yml)."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.75,
+     "reason": "Đã xác nhận trình tự rollback: khôi phục compose cũ → restoreInContainer (exec vào container api đang chạy, tức bản MỚI) → up -d. Khi container đang restarting, Docker báo 'is restarting, wait until the container is running', không chứa chuỗi 'is not running' nên không chuyển sang run --rm. Nếu exec lọt vào lúc container vừa lên thì cũng bị giết khi PID 1 crash. Đêm nào timer cũng chạy update vô điều kiện nên sẽ lặp lại. Nhưng 'hay gặp nhất' là nói quá: migrate lỗi xảy ra trước up -d nên rollback vẫn chạy được. Ngoài ra lỗi crash-loop chỉ xảy ra trên máy Owner mà E2E không bắt được thì hiếm. Dù vậy đây là lưới an toàn của tự cập nhật ban đêm, nên giữ cam."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-34",
+   "title": "Không có khoá loại trừ trên máy chủ; trạng thái \"running\" có thể kẹt; SIGTERM giết giữa chừng",
+   "severity": "yellow",
+   "dimension": "van-hanh",
+   "evidence": [
+    "main.go:505-529 — timer, watcher (handle-requests) và lệnh tay đều gọi runUpdate/runRestore không có flock",
+    "system_api/update.py:117-121 — API chỉ coi \"requested\" là kẹt; update.py:170-171, backups.py:188-189 — Console chặn Cập nhật lẫn Khôi phục",
+    "main.go:306 — chỉ bắt os.Interrupt, không bắt SIGTERM"
+   ],
+   "impact": "Mất điện giữa update ⇒ update-status.json giữ \"running\" ⇒ Console chặn tới lần chạy đêm sau; systemctl stop/đăng xuất ⇒ chết giữa bước, không rollback.",
+   "fix": "flock trên run/genh.lock cho update/restore/import; \"running\" quá 60 phút ⇒ coi là failed; bắt SIGTERM vào cùng context để rollback.",
+   "effort": "S",
+   "sources": [
+    "VH-8"
+   ],
+   "survives": true,
+   "better_fix": "Đề xuất \"bắt SIGTERM vào cùng context\" chưa đủ: ctx bị huỷ thì mọi lệnh docker trong rollback chết ngay. Cần: (1) signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM), và trong rollbackAndWrap dùng context.WithoutCancel(ctx) kèm timeout riêng (~10 phút; go.mod là 1.24 nên có sẵn). (2) Unit systemd (content.go, request.go) thêm KillMode=mixed và TimeoutStopSec=900, để systemd chỉ gửi SIGTERM cho genh, không giết lệnh docker con, và chờ rollback xong. (3) flock trên run/genh.lock lấy ở tiến trình ngoài cùng; tiến trình con chạy với --self-updated thì bỏ qua (hoặc thừa kế fd), tránh tự khoá chính mình. (4) Ở update.py/_state và backups._restore_state: 'running' có started_at quá 60 phút thì trả 'stalled'. Test: huỷ ctx ở bước migrate với fake runner, kiểm lệnh restore/up của rollback vẫn được gọi bằng ctx chưa huỷ. | Dùng flock run/genh.lock trong runUpdate/runRestore/handle-requests (không lấy được khoá thì thoát 0 và ghi log). Trong _state, nếu 'running' quá 60 phút mà PID trong status không còn sống thì trả 'stalled'. Đưa syscall.SIGTERM vào NotifyContext.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.85,
+     "reason": "Xác nhận. Dò apps/genh: không có flock/LOCK/O_EXCL. runHandleRequests (main.go:505-529), timer (content.go:25-27 `update --yes --quiet`) và cron fallback là các unit/lệnh riêng, nên có thể chạy chồng nhau. API chỉ coi 'requested' quá hạn là 'stalled' (update.py:117-121). Trạng thái 'running' kẹt sẽ chặn cả Cập nhật (:170-171) lẫn Khôi phục (backups.py:188-189), tới lần chạy 03:00 sau. Ngoại lệ duy nhất: tiến trình cha ghi 'failed' khi tiến trình con thoát mã ≠0 (main.go:299), không áp dụng khi mất điện. Chỉ bắt os.Interrupt (main.go:306,482). Thêm nữa: rollbackAndWrap dùng đúng ctx đã bị huỷ, mà runner dùng exec.CommandContext (dockercli.go:94), nên kể cả Ctrl+C hôm nay rollback cũng không chạy được."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.6,
+     "reason": "Đã xác nhận: không có flock, chỉ bắt os.Interrupt, API chỉ coi 'requested' là treo. Phần lớn đã có cách bù: timer gọi hostlink.Start trước khi chạy, Console thấy 'running' thì chặn cả Cập nhật lẫn Khôi phục. Chạy song song chỉ xảy ra khi Boss bấm trong vài phút trước 03:00, hoặc tự chạy lệnh tay (Boss không làm). 'running' bị kẹt chỉ khi mất điện hoặc tắt máy đúng lúc đang update (cửa sổ khoảng 5 phút), và đêm sau tự hết. Lần chạy kế tiếp làm lại đủ các bước nên phần lớn tự lành. Sửa rẻ nhưng tác động thấp, hạ xuống vàng."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-35",
+   "title": "Kiểm nâng cấp quá hẹp: chỉ từ N-1, CSDL rỗng, chỉ Ubuntu — máy Owner nhảy nhiều bản, có dữ liệu thật, chạy Fedora",
+   "severity": "orange",
+   "dimension": "van-hanh",
+   "evidence": [
+    "e2e-install.yml:411-423 — e2e-upgrade lấy đúng tags[1], không nạp dữ liệu",
+    "docs/handoff/05-installer.md:159 — tài liệu ghi ma trận Fedora 40/Debian 12 nhưng cài thật chỉ ubuntu-24.04",
+    "e2e-install.yml:284-310 — nút \"Cập nhật ngay\" chỉ thử trường hợp \"đã mới nhất\""
+   ],
+   "impact": "Máy tắt vài ngày sẽ nhảy N-5 → N qua nhiều migration chưa kiểm; không kiểm Fedora (SELinux, firewalld, update-ca-trust, docker.service không tự bật).",
+   "fix": "Ma trận nâng cấp từ N-1, N-5 và \"bản Boss đang chạy\"; make seed-demo trước nâng cấp và so số dòng sau; thêm ô Fedora (container fedora:40 + Docker hoặc runner tự host); kiểm \"docker.service enabled\".",
+   "effort": "M",
+   "sources": [
+    "VH-9"
+   ],
+   "survives": true,
+   "better_fix": "`make seed-demo` chạy bằng .venv ở máy dev, nên trên bản cài thật phải dùng `docker compose exec -T api python -m gh.seed_demo seed` rồi đếm số dòng qua `docker compose exec -T db psql`. Ô Fedora chạy trong container fedora:40 KHÔNG kiểm được đúng những rủi ro đã nêu (SELinux, firewalld, systemd --user, docker.service enabled). Nên dùng Fedora Cloud 40 chạy QEMU/KVM trên runner ubuntu (runner Linux của GitHub có /dev/kvm), hoặc một runner tự host chạy Fedora. Ma trận nâng cấp lấy tags[1], tags[5] và bản cũ nhất còn hỗ trợ (`gh release list --limit 10`). Sửa lại 05-installer.md:159 cho đúng thực tế. | Làm 2 việc trước. (1) Phát hành dạng prerelease/draft, chỉ chuyển sang 'latest' khi e2e-install và e2e-upgrade xanh. (2) Trong e2e-upgrade, chạy seed-demo (exec api python -m gh.seed_demo) trước khi update, sau update so số dòng các bảng chính. Thêm một ô nâng cấp từ tags[3]. Bỏ ô Fedora dạng container, chỉ sửa tài liệu cho đúng.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.85,
+     "reason": "Xác nhận. e2e-install.yml:411-423 chỉ lấy tags[1] (N-1). Job nâng cấp không nạp dữ liệu: chỉ so app_db_password (:534-545). Mọi job cài thật đều runs-on ubuntu-24.04 (:68,:390). installer-matrix.yml:26 chỉ có ubuntu-22.04/24.04, macos-14, windows-2022, lại chỉ là smoke test best-effort, trong khi docs/handoff/05-installer.md:159 ghi có Debian 12 và Fedora 40. Bước \"Cập nhật ngay\" (:284-310) chạy trên chính bản vừa cài nên chỉ thử trường hợp đã mới nhất. compose.yaml không có nhãn SELinux :z cho bind mount; genh có xử lý update-ca-trust (steps_finalize.go:351) nhưng chưa có bài kiểm nào trên Fedora."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.55,
+     "reason": "Đã xác nhận: e2e-upgrade lấy tags[1], DB rỗng, chỉ chạy ubuntu-24.04. Tài liệu 05-installer.md:159 ghi có Fedora/Debian nhưng installer-matrix không có. Bước 'Cập nhật ngay' chỉ thử trường hợp đã mới nhất. Phần N-5 và Fedora ít giá trị: chuỗi alembic vẫn như nhau, phát hành nhiều bản một ngày nên máy Owner vẫn hay nhảy N-2/N-3, và chạy Docker trong container fedora không kiểm được SELinux của máy thật. Lỗ hổng thật là: không có dữ liệu mẫu, và e2e-upgrade chạy SAU khi đã phát hành chứ không chặn được. Máy Owner vẫn lấy releases/latest lúc 03:00. Giữ cam."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-36",
+   "title": "Lỗi mạng tạm thời làm hỏng phát hành; không có retry/cache",
+   "severity": "yellow",
+   "dimension": "van-hanh",
+   "evidence": [
+    "v0.1.30 attempt 1 (run 36741082010, job 109975416642): npm error code ECONNRESET khi build ảnh web → Release dừng, chạy lại tay 27 phút sau",
+    "release.yml:304-306 — 4 ảnh khác đã đẩy :latest lên GHCR dù bản chưa phát hành; build-push không dùng cache"
+   ],
+   "impact": "Phát hành thất bại vì lỗi mạng tạm; :latest trên GHCR lệch bản phát hành thật.",
+   "fix": "npm ci --fetch-retries=5 --fetch-retry-maxtimeout=120000 (tương tự pip --retries), step thử lại if: failure(), cache-from/cache-to type=gha, chỉ gắn :latest sau khi release xong (hoặc bỏ).",
+   "effort": "S",
+   "sources": [
+    "VH-11"
+   ],
+   "survives": true,
+   "better_fix": "(1) Bỏ hẳn dòng tag :latest ở release.yml:306, vì không chỗ nào dùng nó. (2) Ở release.yml, đặt bước build hiện tại thành id build1 với continue-on-error:true. Thêm bước build2 cùng tham số, chạy khi steps.build1.outcome=='failure'. Bước lưu digest (dòng 311) lấy steps.build2.outputs.digest || steps.build1.outputs.digest. (3) Thêm cache-from: type=gha,scope=${{matrix.service}} và cache-to: type=gha,mode=max,scope=${{matrix.service}}. (4) Trong apps/web/Dockerfile:21 và deploy/images/bridge.Dockerfile:5 thêm --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000, kèm RUN --mount=type=cache,target=/root/.npm. Không cần đổi gì cho pip. | Thêm ENV NPM_CONFIG_FETCH_RETRIES=5 NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=120000 trong apps/web/Dockerfile và bridge.Dockerfile (pip đặt --retries 5). Bỏ hẳn tag :latest vì không có ai dùng, đỡ phải dời tag. Có thể thêm cache-from/cache-to type=gha để bớt lượt tải mạng.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.9,
+     "reason": "Đã xác nhận: job 109975416642 (run 36741082010, attempt 1) có log 'npm error code ECONNRESET' ở bước npm ci của apps/web/Dockerfile:20-24. Attempt 2 chạy lúc 16:28:36, tức khoảng 27 phút sau. release.yml:293-306 dùng build-push không có cache-from/to, không bước thử lại; fail-fast:false (dòng 266) nên 4 ảnh còn lại vẫn đẩy :version và :latest. Web Dockerfile và bridge.Dockerfile:5 đều chạy npm ci không có --fetch-retries. Tuy vậy, lệch :latest gần như vô hại: grep toàn repo không thấy chỗ nào dùng gen-harness-*:latest, vì compose.release.yaml ghim theo digest (release.yml:356-361). Ngoài ra pip mặc định đã thử lại 5 lần. Thiệt hại thật chỉ là bản phát hành bị chậm và phải chạy lại tay ở phía CI. Boss và máy đang chạy không bị ảnh hưởng, nên hạ xuống yellow."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.8,
+     "reason": "Lỗi có thật: release.yml không có retry hay cache, và web/Dockerfile chạy npm ci không có --fetch-retries. Nhưng mức ảnh hưởng tới Boss thấp. Job release cần build-images xong mới chạy, nên khi build hỏng thì không có Release và genh 03:00 giữ nguyên bản cũ, an toàn. Người chạy lại là người bảo trì (theo quy trình CLAUDE.md có kiểm genh sau khi phát hành), Boss không phải làm gì. Phần ':latest lệch' không gây hại: không chỗ nào dùng :latest, vì compose.release.yaml ghim theo digest và genh kéo theo digest. Hậu quả thật chỉ là bản sửa đến muộn vài chục phút, nên hạ xuống vàng."
+    }
+   ],
+   "missing_verdict": false
+  },
+  {
+   "id": "F-37",
+   "title": "Log container không giới hạn",
+   "severity": "yellow",
+   "dimension": "van-hanh",
+   "evidence": [
+    "deploy/compose.yaml không có khối logging: cho dịch vụ nào; worker.py:200 cron mỗi phút (social_schedule)",
+    "content.go:27-29 — ~/.gen-harness/logs/auto-update.log chỉ nối thêm"
+   ],
+   "impact": "Driver json-file mặc định không xoay vòng ⇒ log phình chiếm đĩa.",
+   "fix": "Anchor x-logging: {driver: json-file, options: {max-size: 10m, max-file: \"3\"}} cho mọi dịch vụ; genh cắt auto-update.log khi > 5 MB.",
+   "effort": "S",
+   "sources": [
+    "VH-13"
+   ],
+   "survives": true,
+   "better_fix": "Thêm x-logging: &default-logging {driver: json-file, options: {max-size: \"10m\", max-file: \"3\"}} vào deploy/compose.yaml rồi gắn logging: *default-logging cho cả 12 dịch vụ, gồm cả migrate, browser-redis, browser-egress, proxy và redis. Có thể thay bằng driver: local (mặc định đã xoay vòng). Script pin-compose-images.sh thay theo từng dòng văn bản nên giữ được anchor, vì vậy compose.release.yaml và embedded_compose.yaml được hưởng luôn. Thêm test vào apps/genh/internal/compose/compose_test.go để kiểm mọi service đều có logging.max-size. Phần cắt auto-update.log là tùy chọn, ưu tiên thấp. | Đặt anchor x-logging (json-file, max-size 10m, max-file 3) cho mọi dịch vụ. Cắt log ngay tại nguồn: đổi healthcheck web sang /healthz, thêm bộ lọc logging bỏ dòng uvicorn.access cho /api/v1/health. Bỏ phần cắt auto-update.log vì không cần.",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": false,
+     "confidence": 0.85,
+     "reason": "Đã xác nhận: deploy/compose.yaml không có khối logging: hay driver cho dịch vụ nào trong 12 dịch vụ (grep chỉ ra x-app-env ở dòng 11). Toàn repo không có daemon.json, log-opts hay max-size, kể cả trong apps/genh. worker.py:200 có cron social_schedule chạy mỗi phút, và mỗi lần arq đều ghi log. Healthcheck api chạy mỗi 15 giây (api.Dockerfile:68-69). Driver json-file mặc định của docker-ce và Docker tĩnh (rootless) không xoay vòng log. Riêng moby-engine của Fedora mặc định dùng journald nên có xoay vòng, tùy cách cài trên máy Owner. content.go:27-29 xác nhận StandardOutput=append, nhưng tệp này chỉ ghi 1 lần/ngày với --quiet nên tăng không đáng kể. Phần chính về log container là đúng."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.75,
+     "reason": "Đúng là compose.yaml không có logging:. Docker rootless tĩnh mà genh cài dùng json-file và không xoay vòng log. Nguồn log định kỳ có thật: healthcheck web gọi '/' chứ không gọi '/healthz' (chỗ đã tắt access_log), healthcheck api 15s/lần sinh dòng uvicorn.access ở mức INFO, worker chạy cron mỗi phút. Tổng ước 3–4 MB/ngày, khoảng 1–1,5 GB/năm. Lại có cơ chế bù: mỗi bản phát hành build lại ảnh, digest mới làm genh 'up -d' tạo lại container, và log cũ bị xoá theo. Phát hành dày nên rủi ro đầy đĩa thấp, không gấp. Còn auto-update.log chỉ thêm vài dòng mỗi đêm nên không đáng kể. Hạ xuống vàng."
+    }
+   ],
+   "missing_verdict": false
+  }
+ ],
+ "dropped": [
+  {
+   "id": "F-24",
+   "title": "Gen báo \"Đã xác nhận\" nháp tin nhưng tin chưa được gửi",
+   "verdicts": [
+    {
+     "lens": "tai-hien",
+     "refuted": true,
+     "confidence": 0.8,
+     "reason": "Phần lớn sai. Tóm tắt do hệ thống viết proposals.py:217-220: 'Soạn bản nháp tin “…” cho … Bản nháp vào Bàn làm việc chờ duyệt — chưa gửi đi.' và được tính lại khi xác nhận (gen/routes.py:303-304). ProposalCard.tsx:174 hiển thị p.summary ở MỌI trạng thái, kể cả sau 'Đã xác nhận'; tiêu đề thẻ 'Đề xuất · Soạn nháp tin gửi đi' (proposalModel.ts:5) và có nút 'Mở Bàn làm việc' (204-207). Kiểm toán bỏ sót dòng tóm tắt này nên 'Boss tưởng đã nhắn khách' là phóng đại. Chỉ còn điểm nhỏ: chữ 'Đã xác nhận' + biểu tượng máy bay giấy có thể gây hiểu lầm khi lướt nhanh."
+    },
+    {
+     "lens": "tac-dong",
+     "refuted": false,
+     "confidence": 0.7,
+     "reason": "Phần lớn đã có bù trừ: summary do hệ thống viết luôn hiển thị trên thẻ, kể cả sau khi xác nhận: 'Bản nháp vào Bàn làm việc chờ duyệt — chưa gửi đi.' Tiêu đề thẻ là 'Đề xuất · Soạn nháp tin gửi đi', kèm nút 'Mở Bàn làm việc'. Gen cũng không có câu 'Đã gửi' nào.\nCòn lại: icon máy bay giấy cạnh chữ 'Đã xác nhận' có thể khiến Boss đọc lướt hiểu nhầm. Đây là chỉnh chữ nhỏ, không phải 'khách không nhận được gì mà Boss không biết'. Hạ xuống vàng."
+    }
+   ]
+  }
+ ],
+ "yellows": [
+  {
+   "id": "F-38",
+   "title": "Sao chép-dán giữa các cụm (hệ quả của làm song song theo cụm)",
+   "severity": "yellow",
+   "dimension": "kien-truc",
+   "evidence": [
+    "biz/relations/service.py:17, biz/queue/service.py:78, biz/people/service.py:24, biz/market/service.py:38 (person_ref ×4)",
+    "biz/people/service.py:45, biz/market/service.py:62 (USER_ROLE_JOIN ×2)",
+    "refinery/rules.py:41-53 (NFKD) vs refinery/triage.py:87-93 (NFD)",
+    "screens/graph/graphModel.ts, relations/relationsModel.ts, market/marketModel.ts, people/peopleModel.ts, queue/queueModel.ts, data/dataModel.ts (initialsOf ×5, fmtVnd ×4…)",
+    "gen/store.py:32, refinery/triage.py:270 (jsonb_set); setup/routes.py:320, 739 (settings || …)"
+   ],
+   "impact": "Cùng câu tiếng Việt có thể chuẩn hoá khác nhau giữa lọc quy tắc và lọc trùng; trùng lặp helper backend/web; 3 kiểu đọc/ghi core.organizations.settings.",
+   "fix": "Gom vào gh/biz/refs.py, gh/textnorm.py, gh/orgsettings.py, apps/web/src/lib/format.ts.",
+   "effort": "S",
+   "sources": [
+    "KT-13"
+   ]
+  },
+  {
+   "id": "F-39",
+   "title": "RLS: tốn công bảo trì nhưng gần như không bảo vệ gì",
+   "severity": "yellow",
+   "dimension": "kien-truc",
+   "evidence": [
+    "db/sql/0012_p5_rls.sql:47-54 (chính sách cho qua khi app.org_id rỗng)",
+    "gh/auth/deps.py:33 (chỉ đặt biến ở đường request)",
+    "0012_p5_rls.sql:7-11 (mỗi cài đặt chỉ có 1 tổ chức)"
+   ],
+   "impact": "24 bảng có RLS, ~29 bảng có org_id không có; mỗi bảng mới phải nhớ chép khối policy mà không tăng bảo vệ thật.",
+   "fix": "Quyết định một lần: ghi rõ \"chỉ phòng thủ phụ, không mở rộng thêm\" (khuyên) hoặc làm thật (worker đặt org, bỏ nhánh NULL).",
+   "effort": "S",
+   "sources": [
+    "KT-14"
+   ]
+  },
+  {
+   "id": "F-40",
+   "title": "Khung đa-tổ chức không dùng",
+   "severity": "yellow",
+   "dimension": "kien-truc",
+   "evidence": [
+    "worker.py:83, 118, 138",
+    "biz/*/jobs.py",
+    "refinery/scheduler.py:100"
+   ],
+   "impact": "17 vòng SELECT id FROM core.organizations trong job/worker trong khi bootstrap là \"1 bản cài = 1 tổ chức\"; không hại, chỉ thêm nhiễu.",
+   "fix": "Khi viết job mới dùng bootstrap.org_id() một lần.",
+   "effort": "M",
+   "sources": [
+    "KT-15"
+   ]
+  },
+  {
+   "id": "F-41",
+   "title": "Nền tảng plugin không có plugin thật",
+   "severity": "yellow",
+   "dimension": "kien-truc",
+   "evidence": [
+    "plugins/*/manifest.json (9 manifest đều \"entry\": null)",
+    "gh/chassis/plugins.py, sandbox.py, breaker.py, gh/plugins_api/routes.py, apps/web/src/screens/plugins/* (≈1.900 dòng)"
+   ],
+   "impact": "Hạ tầng nạp/ký/sandbox/ngắt mạch + màn Plugin tốn bảo trì mà không có giá trị cho Owner không lập trình.",
+   "fix": "Ẩn màn \"Plugin & Tiện ích\" và đóng băng cho tới khi có plugin thật (S ẩn / M gỡ).",
+   "effort": "S",
+   "sources": [
+    "KT-16"
+   ]
+  },
+  {
+   "id": "F-42",
+   "title": "Hợp đồng Idempotency-Key chỉ có một nửa",
+   "severity": "yellow",
+   "dimension": "kien-truc",
+   "evidence": [
+    "packages/contracts/src/client.ts:116-133",
+    "docs/api/phase-1.md:3",
+    "apps/api/gh (grep idempotency: 0)"
+   ],
+   "impact": "Web gửi header cho mọi request ghi và gửi lại sau PIN nhưng backend không đọc ở đâu — tài liệu hứa điều không có.",
+   "fix": "Làm thật (bảng khoá 24 giờ ở middleware) hoặc xoá khỏi tài liệu.",
+   "effort": "S",
+   "sources": [
+    "KT-17"
+   ]
+  },
+  {
+   "id": "F-43",
+   "title": "Xử lý lỗi rò thông tin kỹ thuật và phân loại sai: lỗi DB lộ SQL/tham số, mọi OSError thành 503, Swagger công khai, email sai ghi vào nhật ký",
+   "severity": "yellow",
+   "dimension": "bao-mat",
+   "evidence": [
+    "apps/api/gh/errors.py:70-80 (db_error_handler); gh/errors.py:79 (str(exc)[:200] trả cho client)",
+    "gh/errors.py:83-92 (mọi OSError → 503)",
+    "apps/api/gh/app.py:194-195",
+    "gh/app.py:199",
+    "apps/api/gh/middleware.py:16",
+    "apps/api/gh/auth/routes.py:79"
+   ],
+   "impact": "db_error_handler trả str(DBAPIError)[:200] kèm SQL, tham số, tên ràng buộc/giá trị cho mọi lỗi DB dưới mã 503; mọi OSError (đĩa đầy, thiếu quyền ghi, thiếu tệp) đều báo \"Mất kết nối CSDL/Redis\" làm chẩn đoán sai; Swagger/OpenAPI công khai không cần đăng nhập; email đăng nhập sai ghi vào Action Log (người dùng hay gõ nhầm mật khẩu vào ô email).",
+   "fix": "Tách ConnectionError/TimeoutError khỏi phần còn lại của OSError; trả mã lỗi chung, ẩn chi tiết DB sau mã lỗi (R4), chỉ ghi chi tiết ở log server; tắt docs ở production hoặc yêu cầu đăng nhập; che email trong dòng nhật ký đăng nhập thất bại.",
+   "effort": "S",
+   "sources": [
+    "BM-13",
+    "KT-18"
+   ]
+  },
+  {
+   "id": "F-44",
+   "title": "Vệ sinh migration/lược đồ; embedded_compose.yaml lệch deploy/compose.yaml (~100 dòng, thiếu dịch vụ browser)",
+   "severity": "yellow",
+   "dimension": "kien-truc",
+   "evidence": [
+    "0012_p5_rls.sql:47 (CREATE POLICY không DROP … IF EXISTS)",
+    "0001_baseline.sql (chỉ mục không tên)",
+    "docs/handoff/schema.sql (986 dòng, diff 40 dòng với baseline)",
+    "apps/genh/internal/compose/embedded_compose.yaml lệch deploy/compose.yaml (thiếu dịch vụ browser từ v0.1.29)",
+    "diff deploy/compose.yaml apps/genh/internal/compose/embedded_compose.yaml (thiếu browser, browser-redis, browser-egress, gh_browser_key, mạng browser*)",
+    "embed.go:14-17 (\"bản sao y hệt\")"
+   ],
+   "impact": "20/22 downgrade là pass nhưng 0002/0003 có downgrade thật (không nhất quán); hai nguồn sự thật cho schema; ai go build tay sẽ có genh nhúng compose cũ, thiếu dịch vụ browser (chỉ ảnh hưởng bản build tay).",
+   "fix": "Bỏ schema.sql (hoặc sinh tự động); thêm kiểm tra CI so embedded_compose.yaml với deploy/compose.yaml, hoặc thay embedded_compose.yaml bằng stub báo lỗi rõ \"chỉ dùng bản release\".",
+   "effort": "S",
+   "sources": [
+    "KT-19",
+    "VH-19"
+   ]
+  },
+  {
+   "id": "F-45",
+   "title": "Lịch cron worker đặt sai giờ: theo UTC (job nặng rơi vào giờ làm việc VN) và không tránh cửa sổ cập nhật đêm 03:00",
+   "severity": "yellow",
+   "dimension": "kien-truc",
+   "evidence": [
+    "gh/worker.py:192",
+    "gh/biz/people/jobs.py:162",
+    "worker.py:195-198 (cron 03:15/03:40/03:45)",
+    "content.go:42-44 (cập nhật đêm 03:00 ±30')"
+   ],
+   "impact": "Job nặng hằng ngày rơi vào giờ làm việc ở VN: verify_action_log và people_review_recompute 02:30 UTC = 09:30, nén sổ tay 10:15, purge 10:40/10:45. Đồng thời báo cáo vận hành chỉ ra cập nhật đêm 03:00 ±30' trùng cửa sổ cron 03:15/03:40/03:45 — restart worker làm bỏ lỡ job dọn dẹp/backup ngày đó (arq không chạy bù). Hai báo cáo đọc múi giờ cron khác nhau (UTC vs giờ máy) — cần đối chiếu khi sửa.",
+   "fix": "Đặt timezone cho WorkerSettings theo múi giờ tổ chức (hoặc ghi rõ UTC), rồi dời job nặng/dọn dẹp ra khỏi giờ làm việc VN (vd 17:00–20:00 UTC) và tránh cửa sổ cập nhật 03:00 ±30' giờ VN (vd 04:30); bỏ restart khi không có bản mới (xem F-10).",
+   "effort": "S",
+   "sources": [
+    "KT-20",
+    "VH-22"
+   ]
+  },
+  {
+   "id": "F-46",
+   "title": "Số phiên bản không thống nhất: VERSION v0.1.31 nhưng package.json/pyproject/gh/__init__.py = 0.1.0; ảnh không nhãn OCI version",
+   "severity": "yellow",
+   "dimension": "van-hanh",
+   "evidence": [
+    "gh/__init__.py:3 (cứng 0.1.0)",
+    "pyproject.toml:3",
+    "apps/web/package.json:3",
+    "gh/app.py:175, 193 (log \"Gen-Harness API 0.1.0 sẵn sàng\", OpenAPI)",
+    "grep version"
+   ],
+   "impact": "Log khởi động và OpenAPI luôn báo 0.1.0 dù VERSION là v0.1.31; không biết container đang chạy bản nào khi chẩn đoán.",
+   "fix": "build-arg VERSION → env GH_VERSION + LABEL org.opencontainers.image.version; gh/__init__.py, pyproject, package.json đọc từ VERSION/hostlink; /system/about trả cả version ảnh lẫn genh.",
+   "effort": "S",
+   "sources": [
+    "VH-18",
+    "KT-21"
+   ]
+  },
+  {
+   "id": "F-47",
+   "title": "Mảnh rỗng/đặt nhầm chỗ",
+   "severity": "yellow",
+   "dimension": "kien-truc",
+   "evidence": [
+    "biz/core/jobs.py, biz/relations/jobs.py (HOOKS/JOBS rỗng)",
+    "biz/duty/routes.py (router rỗng)",
+    "social/permit.py",
+    "biz/queue/jobs.py:255-258 (job lọc đầu của refinery đăng ký ở đây)",
+    "gh/audit/routes.py:125, gh/system_api/routes.py:824 (/audit và /audit-log cùng một hàm); audit/routes.py:28 (cơ chế phạm vi riêng)",
+    "docs/reports/HANDOFF-v0.1.1.md (1.053 dòng, chứa v0.1.2→v0.1.31)"
+   ],
+   "impact": "Nhiễu cấu trúc; hai endpoint nhật ký với cơ chế phạm vi khác scope_for; tài liệu thay đổi dồn một tệp.",
+   "fix": "Dọn khi tiện; đổi tên thành CHANGELOG.md và tách \"ghi chú bàn giao\" theo bản.",
+   "effort": "S",
+   "sources": [
+    "KT-22"
+   ]
+  },
+  {
+   "id": "F-48",
+   "title": "Web không chia gói theo màn",
+   "severity": "yellow",
+   "dimension": "kien-truc",
+   "evidence": [
+    "apps/web/src/screens/ScreenPage.tsx:1-40"
+   ],
+   "impact": "Import tĩnh mọi màn (kể cả d3-force) → một bundle lớn; ưu tiên thấp (LAN/máy tự host).",
+   "fix": "Dùng React.lazy theo cụm khi cần.",
+   "effort": "S",
+   "sources": [
+    "KT-23"
+   ]
+  },
+  {
+   "id": "F-49",
+   "title": "SSRF từ cấu hình: máy chủ MCP thường và endpoint nhà cung cấp",
+   "severity": "yellow",
+   "dimension": "bao-mat",
+   "evidence": [
+    "apps/api/gh/mcp_api/routes.py:48-49",
+    "apps/api/gh/chassis/mcp_client.py:52-69, 151-157",
+    "apps/api/gh/system_api/routes.py:343-353",
+    "apps/api/gh/providers/clients.py:86-100"
+   ],
+   "impact": "MCP thường không ghim DNS; link-local (169.254.169.254) vẫn gọi được khi công tắc mạng công cộng tắt, bật thì bỏ mọi kiểm tra; tên dịch vụ compose được phép; endpoint openai_compat không kiểm, lỗi phản chiếu 300 ký tự thân phản hồi; token MCP gửi qua http thường. VPS đám mây + phiên Owner bị lấy → đọc metadata IAM, dò dịch vụ nội bộ.",
+   "fix": "Dùng pin_endpoint cho mọi máy chủ MCP và nhà cung cấp; luôn cấm link-local, unspecified và tên dịch vụ compose; bắt buộc https khi có token.",
+   "effort": "S",
+   "sources": [
+    "BM-07"
+   ]
+  },
+  {
+   "id": "F-50",
+   "title": "Redis chính không xác thực, dùng chung với bridge",
+   "severity": "yellow",
+   "dimension": "bao-mat",
+   "evidence": [
+    "deploy/compose.yaml:248-251",
+    "apps/bridge/package.json",
+    "apps/web/src/screens/system/CliCard.tsx:55"
+   ],
+   "impact": "Redis không requirepass/ACL, bridge (zca-js/Baileys xử lý dữ liệu Internet) cùng mạng default. Bridge bị RCE → publish sự kiện cli.login giả có url lừa đảo hiển thị trong thẻ CLI, đầu độc bộ đệm Kho (prompt injection vào Gen), sửa trường đề xuất đang chờ.",
+   "fix": "ACL Redis theo dịch vụ (bridge chỉ ~gh:bridge:*, cấm PUBLISH gh.ws); requirepass qua Docker secret; tách mạng bridge.",
+   "effort": "M",
+   "sources": [
+    "BM-08"
+   ]
+  },
+  {
+   "id": "F-51",
+   "title": "Thông tin superuser CSDL nằm trong api/worker; RLS chỉ là lớp mỏng",
+   "severity": "yellow",
+   "dimension": "bao-mat",
+   "evidence": [
+    "deploy/compose.yaml:80, 102",
+    "db/sql/0012_p5_rls.sql:38-46"
+   ],
+   "impact": "GH_ADMIN_DATABASE_URL (superuser) trong env api/worker; RLS cho qua khi chưa đặt app.org_id, không áp cho core.users/sessions/roles, một bản cài = một org. Superuser vô hiệu được trigger chỉ-ghi-thêm. RCE ở api → sửa/xoá Nhật ký hành động, đọc toàn bộ dữ liệu.",
+   "fix": "Chuyển backup/partman sang sidecar hoặc tác vụ một lần giữ superuser; api/worker chỉ giữ gh_app; role dump tối thiểu (pg_read_all_data); REVOKE UPDATE/DELETE trên bảng chỉ-ghi-thêm cho gh_app.",
+   "effort": "M",
+   "sources": [
+    "BM-09"
+   ]
+  },
+  {
+   "id": "F-52",
+   "title": "Hộp thư máy chủ run/ để 0777 — user khác trên máy hoặc container bị chiếm có thể thả yêu cầu cập nhật/khôi phục hoặc ghi đè tệp qua symlink",
+   "severity": "yellow",
+   "dimension": "bao-mat",
+   "evidence": [
+    "apps/genh/internal/hostlink/hostlink.go:57-72",
+    "apps/genh/internal/hostlink/hostlink.go:95-104",
+    "apps/genh/internal/ops/backup.go:253-265"
+   ],
+   "impact": "Thư mục 0777 không sticky bit, writeJSON ghi .tmp theo symlink, genh (user Owner) thực thi request/restore.json và update.json. User khác trên máy hoặc container api bị chiếm đặt symlink update-status.json.tmp → secrets.json → genh ghi đè → mất khoá master; hoặc thả restore.json để khôi phục về bản cũ, hay kích hoạt cập nhật (khoá restore có regex chặt nên rủi ro kích hoạt khôi phục tuỳ ý thấp).",
+   "fix": "Quyền 0770, chown/group chung với uid container 10001 (hoặc ACL) thay vì 0777; mở tệp bằng O_NOFOLLOW/CreateTemp; kiểm chủ sở hữu tệp yêu cầu.",
+   "effort": "S",
+   "sources": [
+    "BM-10",
+    "VH-25"
+   ]
+  },
+  {
+   "id": "F-53",
+   "title": "CA nội bộ không giới hạn tên miền được cài vào kho tin cậy",
+   "severity": "yellow",
+   "dimension": "bao-mat",
+   "evidence": [
+    "apps/genh/internal/install/steps_finalize.go:423",
+    "apps/genh/internal/install/steps_finalize.go:439",
+    "apps/genh/internal/install/steps_finalize.go:450",
+    "apps/genh/internal/install/steps_finalize.go:348-366"
+   ],
+   "impact": "genh cài CA gốc tls internal của Caddy vào NSS, keychain trustRoot, Windows Root, kho hệ thống; khoá riêng CA trong volume caddy_data. Lộ caddy_data (proxy ra mạng, ảnh trôi tag) → ký chứng chỉ cho tên miền bất kỳ (ngân hàng, Gmail) mà trình duyệt Owner tin → MITM.",
+   "fix": "Dùng CA riêng của genh (apps/genh/internal/secretgen/ca.go) với NameConstraints (localhost, 127.0.0.1, địa chỉ site); chỉ đưa cho Caddy chứng chỉ lá/intermediate.",
+   "effort": "M",
+   "sources": [
+    "BM-11"
+   ]
+  },
+  {
+   "id": "F-54",
+   "title": "Bí mật và nội dung nằm trên dòng lệnh",
+   "severity": "yellow",
+   "dimension": "bao-mat",
+   "evidence": [
+    "apps/api/gh/backup.py:255",
+    "apps/api/gh/backup.py:318",
+    "apps/api/gh/providers/clients.py:259"
+   ],
+   "impact": "pg_dump/pg_restore nhận URL chứa mật khẩu superuser trên argv; prompt agy trên argv; tiến trình trong container hiện trong ps của máy chủ → lộ bí mật và nội dung cho mọi user trên máy.",
+   "fix": "Truyền mật khẩu qua PGPASSWORD/PGPASSFILE trong env tiến trình con; prompt qua stdin.",
+   "effort": "S",
+   "sources": [
+    "BM-12"
+   ]
+  },
+  {
+   "id": "F-55",
+   "title": "WebSocket",
+   "severity": "yellow",
+   "dimension": "bao-mat",
+   "evidence": [
+    "apps/api/gh/realtime.py:143-172"
+   ],
+   "impact": "/api/v1/ws không kiểm Origin; quyền chụp lúc kết nối → phiên đã thu hồi, đổi vai trò hay bị khoá vẫn nhận sự kiện (vd raw.new chứa nội dung tin) cho tới khi ngắt; không áp must_change_password.",
+   "fix": "Kiểm Origin khớp public_url; nạp lại phiên mỗi 60 giây; phát sự kiện thu hồi để đóng socket ngay.",
+   "effort": "S",
+   "sources": [
+    "BM-14"
+   ]
+  },
+  {
+   "id": "F-56",
+   "title": "Mã đăng nhập CLI ghi thẳng vào PTY",
+   "severity": "yellow",
+   "dimension": "bao-mat",
+   "evidence": [
+    "apps/api/gh/system_api/routes.py:587-588",
+    "apps/api/gh/providers/cli.py:595",
+    "apps/api/gh/providers/cli.py:585-587"
+   ],
+   "impact": "CodeIn nhận 4–500 ký tự bất kỳ rồi ghi code + \"\\r\" vào terminal, kèm cơ chế tự trả lời \"y\" cho mọi câu hỏi y/n ở bước verifying → ký tự điều khiển có thể điều khiển tiến trình CLI.",
+   "fix": "Regex ^[A-Za-z0-9._~#/+=-]{4,500}$, loại mọi ký tự điều khiển.",
+   "effort": "S",
+   "sources": [
+    "BM-15"
+   ]
+  },
+  {
+   "id": "F-57",
+   "title": "Nhật ký MCP lưu dữ liệu thô",
+   "severity": "yellow",
+   "dimension": "bao-mat",
+   "evidence": [
+    "apps/api/gh/mcp_api/invoke.py:82-97, 122-123, 196"
+   ],
+   "impact": "Với máy chủ MCP thường, agent.mcp_calls.args và result_summary (500 ký tự kết quả thô) lưu nguyên; Auditor (system.read = all) và sự kiện WS mcp.call đều xem được. Chỉ Gen-hub được che.",
+   "fix": "Áp mask_for_model cho mọi máy chủ; lưu digest của args thay vì nguyên văn.",
+   "effort": "S",
+   "sources": [
+    "BM-16"
+   ]
+  },
+  {
+   "id": "F-58",
+   "title": "Phân quyền system.manage chưa đồng nhất",
+   "severity": "yellow",
+   "dimension": "bao-mat",
+   "evidence": [
+    "apps/api/gh/system_api/routes.py:33",
+    "apps/api/gh/system_api/backups.py:39",
+    "apps/api/gh/system_api/update.py:33",
+    "apps/api/gh/system_api/org.py:26"
+   ],
+   "impact": "mcp/plugins/hub/social/agents đòi rbac.ALL nhưng system_api/backups/update/org dùng phạm vi mặc định ASSIGNED. Owner cấp system.manage = team cho Manager thì Manager được sao lưu, cập nhật, sửa nhà cung cấp, đăng nhập kênh… nhưng không được MCP → khó lường.",
+   "fix": "Thống nhất require(\"system.manage\", rbac.ALL); thêm test bảng.",
+   "effort": "S",
+   "sources": [
+    "BM-17"
+   ]
+  },
+  {
+   "id": "F-59",
+   "title": "Vùng xám chính sách QD-12 ở trình duyệt mạng xã hội",
+   "severity": "yellow",
+   "dimension": "bao-mat",
+   "evidence": [
+    "apps/browser/ghb/runner.py:76-77",
+    "apps/browser/ghb/config.py:40",
+    "deploy/images/browser.Dockerfile:89-90",
+    "GH_BROWSER_HEADLESS: \"0\" trong compose"
+   ],
+   "impact": "Trễ ngẫu nhiên 2–6 giây giữa thao tác và chạy có giao diện trong Xvfb thay vì headless là kỹ thuật thường dùng để né phát hiện bot → dễ bị hiểu là trái luật cứng \"không lách chống bot\".",
+   "fix": "Ghi lý do vào QD (giới hạn tốc độ để lịch sự; cần cửa sổ thật để Owner tự đăng nhập), hoặc đổi sang trễ cố định.",
+   "effort": "S",
+   "sources": [
+    "BM-18"
+   ]
+  },
+  {
+   "id": "F-60",
+   "title": "Giới hạn cần nói rõ với Boss",
+   "severity": "yellow",
+   "dimension": "bao-mat",
+   "evidence": [
+    "apps/api/gh/auth/account.py:164-182"
+   ],
+   "impact": "PIN không phải yếu tố thứ hai: đặt lại PIN chỉ cần mật khẩu, PIN chống người mượn phiên đang mở chứ không chống người đã biết mật khẩu. Đánh giá nhân sự có thể bị thao túng: điểm do LLM chấm từ hội thoại → nhân viên chèn câu lệnh vào tin nhắn để làm lệch điểm.",
+   "fix": "Nói rõ giới hạn PIN với Boss; với đánh giá nhân sự, yêu cầu chứng cứ giúp giảm rủi ro và nên thêm cờ \"đáng ngờ\" như phần mạng xã hội (SUSPICIOUS).",
+   "effort": "S",
+   "sources": [
+    "BM-19"
+   ]
+  },
+  {
+   "id": "F-61",
+   "title": "Bản sao và khai báo hai nơi (a2)",
+   "severity": "yellow",
+   "dimension": "ux",
+   "evidence": [
+    "screens/system/SystemScreen.tsx:108, screens/system/BrainTab.tsx:135, screens/api/ApiScreen.tsx:95-96, setup/Step4Brain.tsx:337 (tài khoản Google/CLI ở 4 nơi)",
+    "ApiScreen.tsx:416 \"Chuỗi ưu tiên\" vs BrainTab.tsx:93 \"Chuỗi chuyển hướng\"",
+    "account/AccountPage.tsx:71, SystemScreen.tsx:74,107 (PIN 2 nơi)",
+    "screens/queue/OverviewScreen.tsx:162, help/HelpPage.tsx:92, screens/system/StorageTab.tsx:30 (Cập nhật 3 nơi)",
+    "shell/headerModel.ts:2-10, screens/agents/agentsModel.ts:13-21, screens/relations/relationsModel.ts:66 (thang tự trị khai 3 lần)",
+    "screens.ts:5 tự ghi \"không khai báo hai nơi\" nhưng khai ở cả screens.ts và navigation.py"
+   ],
+   "impact": "Mỗi bản sao là một chỗ dễ lệch nhau; các lỗi gần đây (đổi tài khoản Google, nút cập nhật biến mất, hướng dẫn biến mất) đều thuộc loại này.",
+   "fix": "Gộp lại: mỗi thứ chỉ một thẻ, chỗ khác để liên kết. Danh mục chỉ sinh từ một nguồn (API trả, web giữ icon và đường dẫn). Gộp 3 nơi khai thang tự trị.",
+   "effort": "M",
+   "sources": [
+    "UX-15"
+   ]
+  },
+  {
+   "id": "F-62",
+   "title": "Tiếng Anh và chữ kỹ thuật còn sót trên giao diện (a3)",
+   "severity": "yellow",
+   "dimension": "ux",
+   "evidence": [
+    "Tooltip thanh bên luôn kèm tiếng Anh kể cả khi tắt \"Phụ đề tiếng Anh\" (shell/navModel.ts:126-128, Sidebar.tsx:187)",
+    "Logo vẫn ghi \"v2.2\" (shell/Logo.tsx:37)",
+    "Nút \"Tìm theo ý định\" (shell/Header.tsx:85) khác tên màn \"Kho hội thoại\"",
+    "\"Kho sạch SSOT\" (screens/data/dataModel.ts:143, navigation.py:55); \"đơn vị ý nghĩa\" (screens/queue/InboxScreen.tsx:96)",
+    "Ghi chú phát hành vẫn dạng \"feat(providers): …\" (update/updateModel.ts:85-99 chỉ bỏ link và tên người)"
+   ],
+   "impact": "Boss đọc phải chữ kỹ thuật/tiếng Anh (Kỹ thuật · Backend, SSOT, whitelist, persona, Template, Pipeline, Endpoint…), phiên bản sai ở logo.",
+   "fix": "Tooltip thanh bên chỉ tiếng Việt. Logo lấy phiên bản thật. Một tên cho nút tìm kiếm và màn. Việt hoá các nhãn kỹ thuật, làm sạch ghi chú phát hành.",
+   "effort": "S",
+   "sources": [
+    "UX-16"
+   ]
+  },
+  {
+   "id": "F-63",
+   "title": "Bỏ \"Phụ đề tiếng Anh\" khỏi menu tài khoản",
+   "severity": "yellow",
+   "dimension": "ux",
+   "evidence": [
+    "apps/web/src/shell/AccountFooter.tsx:188-201"
+   ],
+   "impact": "Ít giá trị, thêm một mục cần giữ cho đồng bộ.",
+   "fix": "Bỏ mục \"Phụ đề tiếng Anh\" khỏi menu tài khoản.",
+   "effort": "S",
+   "sources": [
+    "UX-17"
+   ]
+  },
+  {
+   "id": "F-64",
+   "title": "Tổng quan quá nhiều số: 11 thẻ, 2 thẻ độ trễ trùng nhau",
+   "severity": "yellow",
+   "dimension": "ux",
+   "evidence": [
+    "\"Độ trễ xử lý\" và \"Độ trễ xử lý của hệ thống\" là cùng một số (apps/api/gh/biz/queue/routes.py:449, 460)",
+    "Operator cũng thấy số kỹ thuật (plugin, độ trễ); ảnh shots/own-overview-full.png, shots/op-overview.png"
+   ],
+   "impact": "Tổng quan rối, Boss và Operator thấy số kỹ thuật không cần.",
+   "fix": "Còn 4 số kinh doanh. Số kỹ thuật chuyển sang Sức khoẻ hệ thống. Bỏ 1 thẻ độ trễ trùng.",
+   "effort": "S",
+   "sources": [
+    "UX-18"
+   ]
+  },
+  {
+   "id": "F-65",
+   "title": "\"Hồ sơ sống\" là màn chi tiết nhưng nằm ở menu",
+   "severity": "yellow",
+   "dimension": "ux",
+   "evidence": [
+    "apps/api/gh/shell/navigation.py:36",
+    "ProfileScreen.tsx:21 (\"Chưa chọn hồ sơ\")"
+   ],
+   "impact": "Bấm từ menu là gặp \"Chưa chọn hồ sơ\" — ngõ cụt.",
+   "fix": "Bỏ khỏi menu, chỉ mở từ danh sách.",
+   "effort": "S",
+   "sources": [
+    "UX-19"
+   ]
+  },
+  {
+   "id": "F-66",
+   "title": "/guide và /guide/:n không có tiêu đề ở header",
+   "severity": "yellow",
+   "dimension": "ux",
+   "evidence": [
+    "apps/web/src/router.tsx:74-75 thiếu handle"
+   ],
+   "impact": "Header trang Hướng dẫn trống tiêu đề.",
+   "fix": "Thêm handle cho route /guide và /guide/:n.",
+   "effort": "S",
+   "sources": [
+    "UX-20"
+   ]
+  },
+  {
+   "id": "F-67",
+   "title": "Lỗi đánh bóng tồn từ rà soát v0.1.27 chưa xử lý: dải tab Hệ thống tràn ở 1440px (V6), nút header khó hiểu (L10), logo (L1), tên hướng dẫn (L15), \"Hộp thư ý nghĩa\" (L16)",
+   "severity": "yellow",
+   "dimension": "ux",
+   "evidence": [
+    "scratchpad/ux-audit/ux-audit.md (bản v0.1.27): L1 (logo), L15 (tên hướng dẫn), L16 (\"Hộp thư ý nghĩa\" nghe như dịch máy), V6 (tab tràn), L10 (biểu tượng ở header)",
+    "Ảnh shots/own-system-channels.png: \"Dữ liệu & lưu trữ sao lưu · c…\" — lỗi V6 cũ còn",
+    "shell/headerModel.ts:2-10 (viên thuốc tự trị \"tự trị 4\", khiên \"78%\", \"Góc nhìn đã lưu\") — lỗi L10 cũ còn"
+   ],
+   "impact": "Các lỗi đánh bóng đã nêu từ v0.1.27 vẫn chưa được xử lý: tab Hệ thống bị cắt chữ, khó đọc ngay cả ở màn hình lớn; Boss không hiểu các nút ở header.",
+   "fix": "Xử lý dứt điểm 5 mục cũ: sửa bố cục dải tab Hệ thống để không tràn ở 1440px; đưa các nút \"tự trị\", khiên %, \"Góc nhìn đã lưu\" ở header vào Nâng cao; logo phiên bản thật; một tên hướng dẫn; đổi tên \"Hộp thư ý nghĩa\".",
+   "effort": "S",
+   "sources": [
+    "UX-24",
+    "UX-21",
+    "UX-22"
+   ]
+  },
+  {
+   "id": "F-68",
+   "title": "Gen chỉ dành cho Owner, không có chỗ bật cho người khác",
+   "severity": "yellow",
+   "dimension": "ux",
+   "evidence": [
+    "apps/api/gh/gen/store.py:18",
+    "API /gen/settings (apps/api/gh/gen/routes.py:47-57) chưa có giao diện"
+   ],
+   "impact": "Không bật được Gen cho vai trò khác dù API đã có.",
+   "fix": "Thêm công tắc ở Hệ thống › Tổ chức khi Boss muốn.",
+   "effort": "S",
+   "sources": [
+    "UX-23"
+   ]
+  },
+  {
+   "id": "F-69",
+   "title": "HANDOFF-v0.1.1.md phình mãi và tên gây hiểu nhầm: 1 053 dòng / 124 KB chứa v0.1.1→v0.1.31, trùng mục v0.1.30, CLAUDE.md bắt ghi tiếp",
+   "severity": "yellow",
+   "dimension": "van-hanh",
+   "evidence": [
+    "docs/reports/HANDOFF-v0.1.1.md (hai mục cùng tên v0.1.30 ở dòng 917 và 952)"
+   ],
+   "impact": "Mỗi phiên tốn ~35k token nếu đọc; tên ghi v0.1.1 nhưng chứa v0.1.2→v0.1.31, khó tra cứu; hai mục trùng tên \"v0.1.30\".",
+   "fix": "CHANGELOG.md ngắn (3–5 dòng/bản) + docs/releases/vX.Y.Z.md chi tiết; HANDOFF chỉ giữ hiện trạng + việc dở ≤ 200 dòng; gộp/sửa hai mục v0.1.30; sửa CLAUDE.md (Boss duyệt).",
+   "effort": "S",
+   "sources": [
+    "VH-16",
+    "LT-42"
+   ]
+  },
+  {
+   "id": "F-70",
+   "title": "Nhánh cũ chưa dọn: 11 nhánh claude/* trên origin (9 đã merge squash), ~45 nhánh worktree-agent-* local; 30/100 lần CI bị huỷ do push wip liên tục",
+   "severity": "yellow",
+   "dimension": "van-hanh",
+   "evidence": [
+    "list_branches, git rev-list (cli-models-wip, hardening-wip, hublink-wip, refinery-wip, social-wip, ux-wip, phase-1-2-nen-du-lieu 0 ahead/113 behind; project-thread-bnesk5 11 ahead/114 behind; zen-lovelace-ph1qa2 1 ahead/63 behind)",
+    "origin: cli-models-wip, hardening-wip, hublink-wip, refinery-wip, social-wip, ux-wip, phase-1-2-nen-du-lieu, project-thread-bnesk5, zen-lovelace-ph1qa2, admiring-goodall-6dmk8k, effort-wip",
+    "PHIEN-8 (Gen-workplace đã bật tự xoá nhánh khi merge)"
+   ],
+   "impact": "Repo rác nhánh gây nhầm lẫn; CI lãng phí vì bị huỷ liên tục; Gen-Harness chưa kiểm cài đặt tự xoá nhánh khi merge.",
+   "fix": "Xoá 10 nhánh claude/* đã merge và nhánh worktree-agent-* local; bật \"Automatically delete head branches\" (cần Boss cho phép); paths-ignore: docs/** cho ci.yml.",
+   "effort": "S",
+   "sources": [
+    "VH-20",
+    "LT-17"
+   ]
+  },
+  {
+   "id": "F-71",
+   "title": "GitHub Actions: cảnh báo Node 20 khai tử, action ghim theo tag không SHA, ci.yml không khai permissions",
+   "severity": "yellow",
+   "dimension": "van-hanh",
+   "evidence": [
+    "log job 109975416642 (checkout@v4, docker/*@v3/v6, setup-uv@v6; softprops/action-gh-release@v2 có contents: write)"
+   ],
+   "impact": "Action sẽ ngừng chạy khi Node 20 bị gỡ; rủi ro chuỗi cung ứng với action không ghim SHA.",
+   "fix": "Nâng phiên bản action, ghim SHA (Dependabot tự nâng), permissions: contents: read.",
+   "effort": "S",
+   "sources": [
+    "VH-21"
+   ]
+  },
+  {
+   "id": "F-72",
+   "title": "Tải binary genh timeout 20 giây cho cả tệp — mạng chậm ⇒ tự cập nhật hỏng âm thầm",
+   "severity": "yellow",
+   "dimension": "van-hanh",
+   "evidence": [
+    "selfupdate.go:90 (http.Client.Timeout)",
+    "main.go:358-363"
+   ],
+   "impact": "Mạng chậm ⇒ tự cập nhật binary thất bại âm thầm, chạy tiếp bản cũ.",
+   "fix": "Timeout theo thời gian rảnh + thử lại 3 lần.",
+   "effort": "S",
+   "sources": [
+    "VH-23"
+   ]
+  },
+  {
+   "id": "F-73",
+   "title": "Không kiểm \"tự lên sau khi bật lại máy\": docker.service enabled, linger chỉ cảnh báo lúc cài",
+   "severity": "yellow",
+   "dimension": "van-hanh",
+   "evidence": [
+    "systemd.go:246-248",
+    "grep is-enabled docker: không có"
+   ],
+   "impact": "Nếu thiếu linger/docker enabled, timer/watcher không chạy khi Boss chưa đăng nhập.",
+   "fix": "genh doctor/status + Console hiện 2 mục này; cần kiểm 1 lần trên máy Owner.",
+   "effort": "S",
+   "sources": [
+    "VH-24"
+   ]
+  },
+  {
+   "id": "F-74",
+   "title": "Gen-hub thật chưa nghiệm thu: Boss chưa tạo token, chưa bấm Kiểm tra",
+   "severity": "yellow",
+   "dimension": "lo-trinh",
+   "evidence": [
+    "PHIEN-6 \"Đang bàn\"",
+    "gh/hub_link/{routes,service}.py (KHO_READ_SUFFIXES dòng 39)",
+    "migration 0020"
+   ],
+   "impact": "D1 chỉ có mã và test giả; quy tắc che dữ liệu Kho là heuristic, chưa chỉnh theo dữ liệu thật.",
+   "fix": "Boss dán token Gen-hub → bấm Kiểm tra; chỉnh quy tắc che dữ liệu theo dữ liệu thật; Claude sửa lỗi lộ ra.",
+   "effort": "S",
+   "sources": [
+    "LT-1"
+   ]
+  },
+  {
+   "id": "F-75",
+   "title": "Facebook thật chưa nghiệm thu: chưa đăng nhập và đọc 1 lần, selector chỉ thử trang mẫu",
+   "severity": "yellow",
+   "dimension": "lo-trinh",
+   "evidence": [
+    "HANDOFF v0.1.29",
+    "gh/social/*",
+    "apps/browser/ghb/**",
+    "migration 0021"
+   ],
+   "impact": "D3 lát đọc chưa chứng minh chạy với Facebook thật; ảnh arm64 chưa chạy thử.",
+   "fix": "Boss đăng nhập FB trong app → Đọc ngay; chạy thử ảnh arm64; sửa selector theo trang thật.",
+   "effort": "S",
+   "sources": [
+    "LT-2"
+   ]
+  },
+  {
+   "id": "F-76",
+   "title": "Antigravity CLI + Google thật chưa kiểm: tài khoản thứ hai, định dạng agy models, mã model Claude",
+   "severity": "yellow",
+   "dimension": "lo-trinh",
+   "evidence": [
+    "HANDOFF v0.1.30",
+    "HANDOFF v0.1.31",
+    "gh/providers/cli.py",
+    "CliCard.tsx"
+   ],
+   "impact": "Luồng đăng nhập, tệp phiên, mã model Claude qua agy đều chưa xác minh; nguồn CLI mong manh.",
+   "fix": "Thêm tài khoản Google thứ hai và đổi qua lại; đối chiếu định dạng `agy models` khi đã đăng nhập và mã model Claude qua Antigravity.",
+   "effort": "S",
+   "sources": [
+    "LT-3"
+   ]
+  },
+  {
+   "id": "F-77",
+   "title": "Claude Code CLI: đăng nhập thật tới cuối và tệp .credentials.json chưa kiểm",
+   "severity": "yellow",
+   "dimension": "lo-trinh",
+   "evidence": [
+    "HANDOFF v0.1.31 \"Chưa kiểm\"",
+    "gh/providers/{catalog,cli,router}.py",
+    "migration 0022"
+   ],
+   "impact": "Nguồn Claude Code CLI (gói Pro/Max) chưa chứng minh chạy được thật.",
+   "fix": "Boss đăng nhập Claude Code CLI thật tới cuối → Gọi thử; kiểm tệp `.credentials.json`.",
+   "effort": "S",
+   "sources": [
+    "LT-4"
+   ]
+  },
+  {
+   "id": "F-78",
+   "title": "Jev chưa có khoá thật; schema và mã model là giả định",
+   "severity": "yellow",
+   "dimension": "lo-trinh",
+   "evidence": [
+    "gh/gen/jev.py:11 TODO(jev-schema)",
+    "PHIEN-6 \"Cách gọi Jev chưa thử với Jev thật\"",
+    "QD-10 \"Jev chưa cần dùng lúc này\""
+   ],
+   "impact": "A3/C1 phần Jev chỉ chạy bằng quy tắc; model mặc định `typesafe/jev-1.13` chưa đối chiếu.",
+   "fix": "Kiểm 1 lần với khoá thật (tuỳ chọn); lỗi thì ẩn thẻ Jev; không làm riêng thêm cho Jev.",
+   "effort": "S",
+   "sources": [
+    "LT-5"
+   ]
+  },
+  {
+   "id": "F-79",
+   "title": "Ghi lên mạng xã hội (đăng/trả lời/nhắn) chưa làm, trễ hẹn 2 lần (QD-12 v0.1.30, ROADMAP v0.1.31)",
+   "severity": "yellow",
+   "dimension": "lo-trinh",
+   "evidence": [
+    "gh/social/permit.py (issue() ném WriteNotEnabled)",
+    "ghb/adapters/base.py:24-27 (NotImplementedError)",
+    "gh/social/platforms.py (write_kinds=())",
+    "QD-12",
+    "ROADMAP dòng 73"
+   ],
+   "impact": "Lời hứa chính của D3 vẫn là chỗ cắm ném lỗi; v0.1.30 và v0.1.31 dồn vào sửa lỗi và nguồn CLI.",
+   "fix": "Làm theo Mốc 5 thứ tự rủi ro tăng dần; điều kiện trước: ảnh chụp/trace mỗi việc (thiết kế §3.3), xử lý/chốt sandbox Chromium (mục 12).",
+   "effort": "L",
+   "sources": [
+    "LT-6"
+   ]
+  },
+  {
+   "id": "F-80",
+   "title": "Cổng API chính thức cho Trang FB, IG chuyên nghiệp, Zalo OA (TikTok, LinkedIn, X) chưa có dòng mã nào",
+   "severity": "yellow",
+   "dimension": "lo-trinh",
+   "evidence": [
+    "gh/social/platforms.py chỉ có facebook_personal",
+    "gen-browser-agent.md §5 hẹn v0.1.29–v0.1.31",
+    "gen-browser-agent.md §6.3"
+   ],
+   "impact": "Thiết kế §5 trượt toàn bộ; chưa biết Boss có Trang/OA cần dùng không.",
+   "fix": "Boss trả lời trước câu §6.3 (có Trang/OA đang dùng không); đóng băng tới khi FB cá nhân chạy thật ≥ 2 tuần.",
+   "effort": "L",
+   "sources": [
+    "LT-7"
+   ]
+  },
+  {
+   "id": "F-81",
+   "title": "Gen ghi sang Gen-hub (kanban/warroom, ghi Phiên/Việc vào Kho) chờ Boss cho phép",
+   "severity": "yellow",
+   "dimension": "lo-trinh",
+   "evidence": [
+    "QD-11(3)",
+    "QD-12 \"Gen-hub nối để sau\""
+   ],
+   "impact": "Gen không có trí nhớ ngoài hội thoại, không tự ghi phiên/việc; sổ phiên Kho bị hụt.",
+   "fix": "Boss duyệt phạm vi; làm bước (a) của Mốc 5: ghi Phiên/Việc vào Kho qua khung permit chung.",
+   "effort": "M",
+   "sources": [
+    "LT-8"
+   ]
+  },
+  {
+   "id": "F-82",
+   "title": "Phương án B (Gen-hub đọc Gen-Harness) và Playwright cho agent vòng ngoài: chờ Boss",
+   "severity": "yellow",
+   "dimension": "lo-trinh",
+   "evidence": [
+    "QD-11(3)"
+   ],
+   "impact": "Chưa ai cần dùng; Playwright vòng ngoài nay trùng một phần với D3.",
+   "fix": "Cắt khỏi lộ trình gần; ghi rõ trạng thái trong ROADMAP.",
+   "effort": "S",
+   "sources": [
+    "LT-9"
+   ]
+  },
+  {
+   "id": "F-83",
+   "title": "Ngắt mạch 60 s cho Gen-hub; kiểm phiên MXH tự động hằng ngày; Jev phân loại từng tin MXH chưa làm",
+   "severity": "yellow",
+   "dimension": "lo-trinh",
+   "evidence": [
+    "không có breaker trong gh/hub_link",
+    "HANDOFF v0.1.26/27 \"Chưa làm\"",
+    "social/service.py:465 (kiểm phiên chỉ khi bấm tay)",
+    "gen-browser-agent.md §3.2, §4"
+   ],
+   "impact": "Thiếu phần bảo vệ và tự động hoá đã hứa trong thiết kế D1/D3.",
+   "fix": "Thêm breaker riêng cho Gen-hub; job kiểm phiên hằng ngày; Jev phân loại chỉ khi đã kiểm thật.",
+   "effort": "M",
+   "sources": [
+    "LT-10"
+   ]
+  },
+  {
+   "id": "F-84",
+   "title": "Gen thiếu đánh giá Hữu ích/số đo, duyệt nháp, đề xuất Deal/Vụ việc, vai trò khác, stream; Lọc đầu và UX còn lại",
+   "severity": "yellow",
+   "dimension": "lo-trinh",
+   "evidence": [
+    "gen-v1 §6",
+    "không có trường đánh giá trong gh/gen, web/src/gen",
+    "gh/providers không stream",
+    "store.py:17 roles: [\"owner\"]",
+    "HANDOFF v0.1.24 \"Chưa làm\"",
+    "HANDOFF v0.1.25",
+    "HANDOFF v0.1.28 \"Để lại\"",
+    "ROADMAP dòng v0.1.28"
+   ],
+   "impact": "Thiếu eval cho Gen; nút \"Không phải rác\", gộp trùng, ghi chú phát hành tiếng Việt, số đếm Hộp thư (V8), các mục Nhẹ L1–L3, L5, L6, L8–L16 chưa làm.",
+   "fix": "Ưu tiên đánh giá Hữu ích/Không hữu ích và số đo (Mốc 4); các mục khác xếp vào ROADMAP mục Nợ, mở Gen cho vai trò khác thì cắt khỏi lộ trình gần.",
+   "effort": "M",
+   "sources": [
+    "LT-11"
+   ]
+  },
+  {
+   "id": "F-85",
+   "title": "Sandbox Chromium đang TẮT, đang bù bằng cách ly container và Redis riêng",
+   "severity": "yellow",
+   "dimension": "lo-trinh",
+   "evidence": [
+    "deploy/compose.yaml:139-140",
+    "docs/api/browser-protocol.md:12,31"
+   ],
+   "impact": "Rủi ro bảo mật khi cho ghi lên mạng xã hội qua trình duyệt.",
+   "fix": "Bật sandbox Chromium hoặc Boss chốt chấp nhận rủi ro bằng văn bản trước khi cho ghi lên MXH.",
+   "effort": "M",
+   "sources": [
+    "LT-12"
+   ]
+  },
+  {
+   "id": "F-86",
+   "title": "Claude Code CLI dùng gói Pro/Max qua app tự động: rủi ro hạn chế theo điều khoản",
+   "severity": "yellow",
+   "dimension": "lo-trinh",
+   "evidence": [
+    "HANDOFF v0.1.31",
+    "QD-12"
+   ],
+   "impact": "QD-12 đã chấp nhận cho Owner tự quyết, nhưng việc nền dùng CLI cá nhân có thể bị hạn chế.",
+   "fix": "Việc nền (lọc đầu, đọc theo lịch, bản tin) đi bằng khoá API; CLI chỉ cho Owner hỏi trực tiếp.",
+   "effort": "S",
+   "sources": [
+    "LT-13"
+   ]
+  },
+  {
+   "id": "F-87",
+   "title": "Kho lệch thực tế Gen-Harness: QD-12 vẫn hẹn v0.1.30, DA-1 mô tả cũ và không có Việc, thiếu PHIEN v0.1.28–v0.1.32",
+   "severity": "yellow",
+   "dimension": "lo-trinh",
+   "evidence": [
+    "QD-12 \"v0.1.30: đăng/trả lời/nhắn\"",
+    "DA-1 \"Console cho SME… 6 giai đoạn đầu xong\"",
+    "DA-1 Việc: []",
+    "bảng Việc tìm \"Gen-Harness\" 0 kết quả",
+    "ROADMAP.md",
+    "QD-6",
+    "PHIEN-6 (v0.1.23–v0.1.27)",
+    "PHIEN-6 \"Ghi Kho từ phiên Claude Code bị lớp kiểm soát quyền chặn cho tới khi Boss nói 'ghi Kho đi'\""
+   ],
+   "impact": "Kho không còn là bản gốc của lịch sử phiên và tiến độ Gen-Harness: thiếu PHIEN cho v0.1.28–v0.1.32; tồn đọng chỉ nằm trong ROADMAP.md, trái tinh thần QD-6 (Việc có bản gốc ở Kho); QD-12 hạn đã trượt và DA-1 chưa chốt vai trò trợ lý của Gen.",
+   "fix": "Cần Boss cho phép ghi Kho: ghi PHIEN cho v0.1.28–v0.1.32; tạo VIEC cho danh sách nợ và ROADMAP thêm mục Nợ khớp với VIEC; cập nhật QD-12 (hạn đã trượt); cập nhật mô tả DA-1 và chốt câu định vị \"Gen là mặt tiền chính\".",
+   "effort": "S",
+   "sources": [
+    "LT-45",
+    "LT-14",
+    "LT-15",
+    "LT-16"
+   ]
+  },
+  {
+   "id": "F-88",
+   "title": "v0.1.32 (effort-wip) đang dở: cần làm xong hoặc gác lại rõ ràng",
+   "severity": "yellow",
+   "dimension": "lo-trinh",
+   "evidence": [
+    "nhánh origin/claude/effort-wip (5 commit, 01/10 17:30, có migration 0023)"
+   ],
+   "impact": "Bản thứ 3 liên tiếp cho ống nước CLI, treo lửng lộ trình.",
+   "fix": "Làm xong hoặc gác rõ v0.1.32; ngừng đánh bóng thêm nguồn CLI sau đó.",
+   "effort": "S",
+   "sources": [
+    "LT-18"
+   ]
+  },
+  {
+   "id": "F-89",
+   "title": "Việc phía Gen-hub G1–G4 chưa kiểm (expires_at, 2 token song song, hướng dẫn MCP, ghi chú Tri thức)",
+   "severity": "yellow",
+   "dimension": "lo-trinh",
+   "evidence": [
+    "gen-hub-link.md §3.2"
+   ],
+   "impact": "Nhắc hạn token và luân chuyển token phụ thuộc repo Gen-hub, chưa xác minh.",
+   "fix": "Kiểm G1–G4 trong repo Gen-hub khi nghiệm thu Gen-hub thật.",
+   "effort": "S",
+   "sources": [
+    "LT-19"
+   ]
+  },
+  {
+   "id": "F-90",
+   "title": "Tài liệu lệch mã và Kho: ROADMAP, ba tài liệu thiết kế (gen-browser-agent, gen-hub-link, gen-v1), README, ARCHITECTURE/PLAN",
+   "severity": "yellow",
+   "dimension": "lo-trinh",
+   "evidence": [
+    "Mục (e) báo cáo lộ trình",
+    "docs/ROADMAP.md dòng 1: tiêu đề ghi \"cập nhật 30/09\" nhưng đã chứa v0.1.31 (01/10)",
+    "docs/ROADMAP.md dòng 73: \"Tiếp: v0.1.31 ghi có xác nhận\" sai — v0.1.31 là bản model CLI; QD-12 ghi v0.1.30",
+    "docs/ROADMAP.md dòng 12: bảng vai trò ghi \"Vòng ngoài … (+ Playwright sau)\", trong khi Playwright nay dùng cho Gen (D3)",
+    "docs/ROADMAP.md dòng 66: \"repo Gen-hub, cần mở quyền repo cho phiên này\" đã cũ vì D1 không cần sửa Gen-hub",
+    "docs/ROADMAP.md: chưa có mục cho các bản phản ứng (v0.1.30–0.1.32) và không có mục \"Nợ\"",
+    "docs/design/gen-browser-agent.md dòng 3, 11: vừa ghi \"ĐÃ LÀM ở v0.1.29\" vừa ghi \"Chỉ là thiết kế — chưa có dòng code nào\"",
+    "docs/design/gen-browser-agent.md dòng 23, §5: \"Bản đầu v0.1.28\", bảng §5 hẹn v0.1.29/30/31 — trượt toàn bộ",
+    "docs/design/gen-browser-agent.md dòng 76: §3.1 dùng arq / gh.social.browser_worker, thực tế là apps/browser/ghb + Redis Stream",
+    "docs/design/gen-browser-agent.md dòng 136: §3.7 \"Cờ tổng social.enabled\" trái với ghi chú đầu tài liệu (\"không có cờ\")",
+    "docs/design/gen-browser-agent.md dòng 170, 181: ghi migration 0021_v0128_social và quyền social.read/manage, thực tế 0021_v0129_social và require_owner",
+    "docs/design/gen-hub-link.md dòng 3: trạng thái vẫn \"NHÁP để Boss duyệt\"",
+    "docs/design/gen-hub-link.md dòng 28, §4.1: bảng vai trò vẫn có Jules worker, §4.1 mô tả Jules chi tiết (đã bỏ theo QD-10, QD-11(2))",
+    "docs/design/gen-hub-link.md dòng 29: \"Gen không dùng Playwright\" trái với D3",
+    "docs/design/gen-v1.md dòng 3: trạng thái vẫn \"NHÁP để Sếp duyệt\"",
+    "docs/design/gen-v1.md dòng 159: \"cờ gen.enabled (tắt mặc định tới lát 4)\", thực tế mặc định BẬT",
+    "docs/design/gen-v1.md dòng 178, §3.3: \"Gen không dùng Playwright\" trái với D3; prefill chưa ghi là đã thay bằng propose (gh/gen/envelope.py không có prefill)",
+    "README.md dòng 18-20: \"Giai đoạn 6 … dự kiến thêm genh\" trong khi genh đã là đường cài chính",
+    "README.md dòng 34: \"8 dịch vụ\", thực tế 11 trong deploy/compose.yaml (thêm browser, browser-egress, browser-redis)",
+    "README.md dòng 125: link chết docs/reports/HANDOFF-v0.1.2.md",
+    "README.md :155, :188, :191: số dịch vụ/test sai; không có runbook sự cố",
+    "README.md toàn tệp: không nhắc Gen, Gen-hub, mạng xã hội, Claude Code CLI; bước 4 chỉ ghi \"API key\"",
+    "docs/handoff/05-installer.md:30,159",
+    "docs/ARCHITECTURE.md dòng 290, docs/PLAN.md: không có Gen, Gen-hub, mạng xã hội, Jev, Claude Code CLI; §11 chỉ liệt kê provider cũ"
+   ],
+   "impact": "Tài liệu không còn là nguồn sự thật về tiến độ: ROADMAP sai ngày, hứa sai bản, mô tả vai trò lệch, thiếu mục Nợ và các bản phản ứng; ba tài liệu thiết kế tự mâu thuẫn, trạng thái \"NHÁP\" dù đã làm, mô tả kiến trúc/migration/quyền/cờ lệch mã, vẫn mô tả Jules đã bỏ; README sai số dịch vụ/test, gọi genh là \"dự kiến\", link chết, không nhắc Gen/Gen-hub/MXH/CLI, không có runbook sự cố nên Boss không tìm được lệnh cài; ARCHITECTURE/PLAN thiếu toàn bộ phần từ v0.1.21.",
+   "fix": "Đồng bộ tài liệu theo mục (e), thuộc Mốc 1. ROADMAP: sửa ngày cập nhật, sửa mục Tiếp theo thực tế, cập nhật bảng vai trò, bỏ ghi chú repo Gen-hub, thêm mục cho bản phản ứng và mục Nợ khớp VIEC trên Kho — ROADMAP là nguồn sự thật duy nhất về tiến độ. Mỗi tài liệu thiết kế: một dòng trạng thái đầu tệp (\"Đã làm tới vX; phần còn lại xem ROADMAP\"), bỏ số phiên bản hẹn và trỏ sang ROADMAP, sửa §3.1/§3.7/migration/quyền/cờ gen.enabled theo mã thật, bỏ hoặc đánh dấu \"lịch sử\" các đoạn Jules và câu \"Gen không dùng Playwright\", ghi rõ prefill đã thay bằng propose + Xác nhận. README: viết lại 2 phần \"Dành cho Boss\" và \"Dành cho dev\" (dịch vụ, genh, Gen), sửa link (cân nhắc đổi tên nhật ký thành docs/CHANGELOG.md, cần sửa CLAUDE.md, Boss duyệt); thêm docs/runbook.md. ARCHITECTURE/PLAN: cập nhật hoặc trỏ sang tài liệu thiết kế + ROADMAP.",
+   "effort": "M",
+   "sources": [
+    "LT-20",
+    "LT-21",
+    "LT-22",
+    "LT-23",
+    "LT-24",
+    "LT-25",
+    "LT-26",
+    "LT-27",
+    "LT-28",
+    "LT-29",
+    "LT-30",
+    "LT-31",
+    "LT-32",
+    "LT-33",
+    "LT-34",
+    "LT-35",
+    "LT-36",
+    "LT-37",
+    "LT-38",
+    "LT-39",
+    "LT-40",
+    "LT-41",
+    "VH-17"
+   ]
+  },
+  {
+   "id": "F-91",
+   "title": "HANDOFF v0.1.29 \"Để lại: ghi có xác nhận (v0.1.30…)\" đã trượt hẹn",
+   "severity": "yellow",
+   "dimension": "lo-trinh",
+   "evidence": [
+    "docs/reports/HANDOFF-v0.1.1.md mục v0.1.29"
+   ],
+   "impact": "Lời hẹn trong nhật ký không còn đúng.",
+   "fix": "Ghi chú đã trượt, trỏ sang ROADMAP mục Nợ.",
+   "effort": "S",
+   "sources": [
+    "LT-43"
+   ]
+  },
+  {
+   "id": "F-92",
+   "title": "Chú thích trong mã hứa phiên bản \"CHỖ CẮM v0.1.30\", \"v0.1.30: 'post' …\" đã trượt",
+   "severity": "yellow",
+   "dimension": "lo-trinh",
+   "evidence": [
+    "gh/social/permit.py:1",
+    "gh/social/platforms.py (write_kinds)",
+    "ghb/adapters/base.py:27"
+   ],
+   "impact": "Mã hứa bản không đúng thực tế.",
+   "fix": "Bỏ con số phiên bản ra khỏi chú thích (ghi \"bản sau\" kèm VIEC-n).",
+   "effort": "S",
+   "sources": [
+    "LT-44"
+   ]
+  }
+ ]
+}

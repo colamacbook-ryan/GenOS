@@ -1,0 +1,328 @@
+/* @gen-harness/ui — bộ thành phần Mặt tiền Owner (v0.1.59, G2).
+ *
+ * MỌI CSS của thành phần mới nằm ở đây (lớp tiền tố `kit-`); packages/ui/src/styles.css (Console) KHÔNG đổi. Import một dòng ở
+ * apps/web/src/main.tsx ngay sau styles.css. Lớp `kit-` không đụng Console; riêng vùng `.kit-scope` (OwnerShell, trang Thiết
+ * lập một màn) đổi số đo của Card/EmptyState/Button sẵn có sang hệ mới.
+ *
+ * LUẬT (lính gác apps/web/test/unit/design-guard-v0159.test.ts quét tệp này và apps/web/src/owner/**\/*.css):
+ *   - chỉ var() từ packages/tokens (tokens.css) — không mã hex, không rgb()/hsl();
+ *   - chữ chỉ 12/14/18/28px (var(--fs-*)), hai độ đậm var(--fw-400) / var(--fw-600), không chữ hoa toàn bộ, letter-spacing 0;
+ *   - mobile-first: chỉ @media (min-width: 760px) và (min-width: 1024px) — không max-width, không điểm gãy khác;
+ *   - vùng chạm ≥ 44px (var(--tap)); màu luôn kèm chữ/icon.
+ *
+ * Lưới chung (mục 3 tài liệu thiết kế): ≥1024px 12 cột, khoảng cách 24 · 760–1023px 8 cột, 16 · <760px 4 cột, lề 16.
+ * Dùng: <div class="kit-grid"><div class="kit-c3 kit-tb4 kit-m2">…</div>…</div> (c3 = 3/12 cột ở ≥1024, tb4 = 4/8 cột ở
+ * 760–1023, m2 = 2/4 cột ở <760; không ghi lớp = cả hàng).
+ */
+
+/* ── 0. Vùng Mặt tiền ───────────────────────────────────────────────────────────────────────────────────────────────── */
+.kit-scope {
+  --kit-pad: var(--sp-3);
+  --kit-gap: var(--sp-3);
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--fs-14);
+  line-height: var(--lh-14);
+  font-weight: var(--fw-400);
+  -webkit-font-smoothing: antialiased;
+}
+@media (min-width: 1024px) {
+  .kit-scope { --kit-pad: var(--sp-4); --kit-gap: var(--sp-4); }
+}
+.kit-scope :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Chữ chỉ dành cho trình đọc màn hình. */
+.kit-sr {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* ── 1. Lưới + khối xếp chồng ──────────────────────────────────────────────────────────────────────────────────────── */
+.kit-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--kit-gap); }
+.kit-grid > * { grid-column: 1 / -1; min-width: 0; }
+.kit-grid > .kit-m2 { grid-column: span 2; }
+.kit-stack { display: flex; flex-direction: column; gap: var(--kit-gap); min-width: 0; }
+@media (min-width: 760px) {
+  .kit-grid { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+  .kit-grid > .kit-tb4 { grid-column: span 4; }
+}
+@media (min-width: 1024px) {
+  .kit-grid { grid-template-columns: repeat(12, minmax(0, 1fr)); }
+  .kit-grid > .kit-c3 { grid-column: span 3; }
+  .kit-grid > .kit-c4 { grid-column: span 4; }
+  .kit-grid > .kit-c5 { grid-column: span 5; }
+  .kit-grid > .kit-c6 { grid-column: span 6; }
+  .kit-grid > .kit-c7 { grid-column: span 7; }
+  .kit-grid > .kit-c8 { grid-column: span 8; }
+  .kit-grid > .kit-c12 { grid-column: 1 / -1; }
+}
+
+/* ── 2. Card / EmptyState sẵn có, số đo mới trong vùng .kit-scope ──────────────────────────────────────────────────── */
+.kit-scope .gh-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-8); overflow: hidden;
+}
+.kit-scope .gh-card__header {
+  min-height: var(--sp-5); padding: var(--kit-pad); border-bottom: 0; gap: var(--sp-2);
+}
+.kit-scope .gh-card__title {
+  font-size: var(--fs-14); line-height: var(--lh-14); font-weight: var(--fw-600); color: var(--text);
+}
+.kit-scope .gh-card__kicker {
+  margin-top: 0; font-size: var(--fs-12); line-height: var(--lh-12); font-weight: var(--fw-400);
+  letter-spacing: 0; text-transform: none; color: var(--text-3);
+}
+.kit-scope .gh-card__body { padding: var(--kit-pad); }
+.kit-scope .gh-card__header + .gh-card__body { padding-top: 0; }
+.kit-card__footer { padding: var(--sp-3) var(--kit-pad); border-top: 1px solid var(--border); }
+.kit-card__state { display: flex; flex-direction: column; gap: var(--sp-2); min-width: 0; color: var(--text-2); }
+.kit-card__state--error { color: var(--text); }
+
+.kit-scope .gh-state {
+  flex-direction: column; align-items: center; gap: var(--sp-2); padding: var(--sp-5) var(--sp-3); text-align: center;
+}
+.kit-scope .gh-state__tile {
+  width: var(--sp-6); height: var(--sp-6); border-radius: var(--r-8); border: 0;
+  background: var(--neutral-100); color: var(--text-3);
+}
+.kit-scope .gh-state--error .gh-state__tile { background: var(--bad-soft); color: var(--bad-ink); }
+.kit-scope .gh-state__text { display: flex; flex-direction: column; align-items: center; gap: var(--sp-1); }
+.kit-scope .gh-state__title {
+  font-size: var(--fs-14); line-height: var(--lh-14); font-weight: var(--fw-600); color: var(--text);
+}
+.kit-scope .gh-state__desc {
+  margin-top: 0; font-size: var(--fs-14); line-height: var(--lh-14); color: var(--text-2); max-width: 560px;
+}
+.kit-scope .gh-state__actions { justify-content: center; flex-wrap: wrap; margin-top: var(--sp-2); }
+
+/* ── 3. Nút + liên kết (dùng cho FirstRunCard, ngăn, màn Mặt tiền) ────────────────────────────────────────────────── */
+.kit-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-2);
+  min-height: var(--tap); padding: 0 var(--sp-3); border: 1px solid transparent; border-radius: var(--r-8);
+  background: transparent; color: var(--text); font: inherit; font-size: var(--fs-14); line-height: var(--lh-14);
+  font-weight: var(--fw-600); text-decoration: none; white-space: nowrap; cursor: pointer;
+}
+.kit-btn:hover { background: var(--hover); }
+.kit-btn--primary { background: var(--accent); color: var(--on-accent); }
+.kit-btn--primary:hover { background: var(--accent-hover); }
+.kit-btn--secondary { background: var(--surface); border-color: var(--border-strong); }
+.kit-btn--secondary:hover { background: var(--hover); }
+.kit-btn--ghost { color: var(--text-2); }
+.kit-btn--block { width: 100%; }
+.kit-btn:disabled, .kit-btn[aria-disabled='true'] { opacity: 0.55; cursor: default; }
+.kit-link {
+  display: inline-flex; align-items: center; gap: var(--sp-1); min-height: var(--tap); padding: 0; border: 0;
+  background: none; color: var(--accent-ink); font: inherit; font-size: var(--fs-14); line-height: var(--lh-14);
+  font-weight: var(--fw-600); text-decoration: none; cursor: pointer;
+}
+.kit-link:hover { text-decoration: underline; }
+@media (min-width: 760px) {
+  .kit-btn { min-height: calc(var(--tap) - var(--sp-1)); }
+  .kit-link { min-height: var(--sp-4); }
+}
+
+/* ── 4. StatTile + chênh lệch + Sparkline ──────────────────────────────────────────────────────────────────────────── */
+.kit-stat {
+  display: flex; flex-direction: column; gap: var(--sp-2); min-width: 0; padding: var(--kit-pad);
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-8);
+  color: inherit; text-align: left; text-decoration: none;
+}
+.kit-stat--link { cursor: pointer; }
+.kit-stat--link:hover { background: var(--hover); }
+.kit-stat__label { color: var(--text-2); }
+.kit-stat__value {
+  font-size: var(--fs-28); line-height: var(--lh-28); font-weight: var(--fw-600); font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.kit-stat__unit { font-size: var(--fs-14); line-height: var(--lh-14); font-weight: var(--fw-400); color: var(--text-2); }
+.kit-stat__delta {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2);
+  font-size: var(--fs-12); line-height: var(--lh-12); color: var(--text-3);
+}
+.kit-stat__foot {
+  margin-top: auto; padding-top: var(--sp-2); display: flex; flex-wrap: wrap; align-items: center;
+  justify-content: space-between; gap: var(--sp-2); font-size: var(--fs-12); line-height: var(--lh-12); color: var(--text-3);
+}
+.kit-stat__note { flex: 1 1 112px; min-width: 0; }
+.kit-delta {
+  display: inline-flex; align-items: center; gap: var(--sp-1); height: 20px; padding: 0 var(--sp-2) 0 var(--sp-1);
+  border-radius: var(--r-999); font-size: var(--fs-12); line-height: var(--lh-12); font-weight: var(--fw-600); white-space: nowrap;
+}
+.kit-delta--ok { background: var(--ok-soft); color: var(--ok-ink); }
+.kit-delta--warn { background: var(--warn-soft); color: var(--warn-ink); }
+.kit-delta--flat, .kit-delta--new { padding-left: var(--sp-2); background: var(--neutral-100); color: var(--text-2); }
+.kit-spark { display: block; width: 80px; height: 24px; flex: none; }
+.kit-spark__line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.kit-spark__dot { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
+
+/* ── 5. Badge (Mức · Trạng thái · Đếm) ─────────────────────────────────────────────────────────────────────────────── */
+.kit-badge {
+  display: inline-flex; align-items: center; gap: var(--sp-1); height: 20px; padding: 0 var(--sp-2); flex: none;
+  border-radius: var(--r-999); font-size: var(--fs-12); line-height: var(--lh-12); font-weight: var(--fw-600); white-space: nowrap;
+}
+.kit-badge--bad { background: var(--bad-soft); color: var(--bad-ink); }
+.kit-badge--warn { background: var(--warn-soft); color: var(--warn-ink); }
+.kit-badge--ok { background: var(--ok-soft); color: var(--ok-ink); }
+.kit-badge--info { background: var(--info-soft); color: var(--info-ink); }
+.kit-badge--accent { background: var(--accent-soft); color: var(--accent-ink); }
+.kit-badge--neutral { background: var(--neutral-100); color: var(--text-2); }
+.kit-badge--count { min-width: 20px; justify-content: center; }
+.kit-badge--count.kit-badge--accent { background: var(--accent); color: var(--on-accent); }
+
+/* ── 6. Dòng danh sách (ListRow) + Avatar + danh sách xếp chồng (DataTable < 760px) ────────────────────────────────── */
+.kit-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; min-width: 0; }
+.kit-row { display: flex; align-items: stretch; min-width: 0; border-top: 1px solid var(--border); }
+.kit-row__main {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--sp-3); min-height: var(--tap);
+  padding: var(--sp-3) var(--kit-pad); border: 0; background: none; color: inherit; font: inherit;
+  text-align: left; text-decoration: none;
+}
+a.kit-row__main, button.kit-row__main { cursor: pointer; }
+a.kit-row__main:hover, button.kit-row__main:hover { background: var(--hover); }
+.kit-row--selected .kit-row__main { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.kit-row__body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); }
+.kit-row__title { font-weight: var(--fw-600); overflow-wrap: anywhere; }
+.kit-row__meta { font-size: var(--fs-12); line-height: var(--lh-12); color: var(--text-3); overflow-wrap: anywhere; }
+.kit-row__pairs { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); }
+.kit-row__pair { display: inline-flex; gap: var(--sp-1); min-width: 0; }
+.kit-row__k { color: var(--text-3); }
+.kit-row__v { color: var(--text-2); overflow-wrap: anywhere; }
+.kit-row__right { flex: none; display: flex; align-items: center; gap: var(--sp-2); color: var(--text-2); max-width: 44%; }
+.kit-row__go { flex: none; color: var(--text-3); }
+.kit-row__actions { flex: none; display: flex; align-items: center; gap: var(--sp-2); padding-right: var(--kit-pad); }
+.kit-avatar {
+  flex: none; width: var(--sp-5); height: var(--sp-5); display: grid; place-items: center; border-radius: 50%;
+  background: var(--accent-soft); color: var(--accent-ink); font-size: var(--fs-14); line-height: var(--lh-14); font-weight: var(--fw-600);
+}
+
+/* ── 7. DataTable ≥ 760px ──────────────────────────────────────────────────────────────────────────────────────────── */
+.kit-table-wrap { overflow-x: auto; }
+.kit-table { width: 100%; border-collapse: collapse; }
+.kit-table th {
+  padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border); font-size: var(--fs-12); line-height: var(--lh-12);
+  font-weight: var(--fw-600); color: var(--text-3); text-align: left; white-space: nowrap;
+}
+.kit-table td { padding: var(--sp-3); border-bottom: 1px solid var(--border); vertical-align: middle; }
+.kit-table th:first-child, .kit-table td:first-child { padding-left: var(--kit-pad); }
+.kit-table th:last-child, .kit-table td:last-child { padding-right: var(--kit-pad); }
+.kit-table tbody tr:last-child td { border-bottom: 0; }
+.kit-table [data-align='right'] { text-align: right; font-variant-numeric: tabular-nums; }
+.kit-table [data-align='center'] { text-align: center; }
+.kit-table__main { font-weight: var(--fw-600); }
+.kit-table--click tbody tr { cursor: pointer; }
+.kit-table--click tbody tr:hover { background: var(--hover); }
+.kit-table tbody tr[aria-selected='true'] { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.kit-table-empty__text { margin: 0; padding: var(--sp-3) var(--kit-pad); color: var(--text-3); }
+
+/* ── 8. TrendChart + HBar ──────────────────────────────────────────────────────────────────────────────────────────── */
+.kit-chart { position: relative; width: 100%; min-width: 0; }
+.kit-chart__svg { display: block; overflow: visible; max-width: 100%; }
+.kit-chart__grid { stroke: var(--chart-grid); stroke-width: 1; }
+.kit-chart__base { stroke: var(--chart-base); stroke-width: 1; }
+.kit-chart__t { fill: var(--text-3); font-family: var(--font-sans); font-size: var(--fs-12); }
+.kit-chart__empty { fill: var(--text-3); font-family: var(--font-sans); font-size: var(--fs-14); }
+.kit-chart__bar { fill: var(--accent); transition: opacity 0.12s; }
+.kit-chart[data-active] .kit-chart__bar { opacity: 0.45; }
+.kit-chart[data-active] .kit-chart__bar.is-on { opacity: 1; }
+.kit-chart__line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.kit-chart__pt { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
+.kit-chart__prev { fill: none; stroke: var(--chart-prev); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.kit-chart__dot { fill: var(--chart-prev); stroke: var(--surface); stroke-width: 2; }
+.kit-chart__thr { stroke: var(--warn); stroke-width: 2; }
+.kit-chart__hit { fill: transparent; cursor: pointer; outline: none; }
+.kit-chart__hit:focus-visible { stroke: var(--accent); stroke-width: 2; }
+.kit-chart__tip {
+  position: absolute; z-index: 2; pointer-events: none; display: flex; flex-direction: column; min-width: 120px;
+  padding: var(--sp-2) var(--sp-3); border-radius: var(--r-8); border: 1px solid var(--border); background: var(--surface);
+  box-shadow: var(--shadow-pop); font-size: var(--fs-12); line-height: var(--lh-12); color: var(--text-3);
+}
+.kit-chart__tip strong { font-size: var(--fs-14); line-height: var(--lh-14); font-weight: var(--fw-600); color: var(--text); }
+.kit-chart__tiprow { display: flex; align-items: center; gap: var(--sp-2); }
+.kit-chart__legend {
+  display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); margin-top: var(--sp-2);
+  font-size: var(--fs-12); line-height: var(--lh-12); color: var(--text-3);
+}
+.kit-chart__legend span { display: inline-flex; align-items: center; gap: var(--sp-2); white-space: nowrap; }
+.kit-chart__key { display: inline-block; flex: none; }
+.kit-chart__key--bar { width: 10px; height: 10px; border-radius: 2px; background: var(--accent); }
+.kit-chart__key--cur { width: var(--sp-3); height: 2px; border-radius: 1px; background: var(--accent); }
+.kit-chart__key--prev { width: var(--sp-3); height: 2px; border-radius: 1px; background: var(--chart-prev); }
+.kit-chart__key--thr { width: var(--sp-3); height: 2px; border-radius: 1px; background: var(--warn); }
+
+.kit-hbar { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-3); }
+.kit-hbar__head { display: flex; justify-content: space-between; gap: var(--sp-3); margin-bottom: var(--sp-2); }
+.kit-hbar__label { min-width: 0; overflow-wrap: anywhere; }
+.kit-hbar__value { flex: none; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--text-2); }
+.kit-hbar__track { height: var(--sp-2); }
+.kit-hbar__fill { height: var(--sp-2); min-width: var(--sp-1); border-radius: 0 var(--sp-1) var(--sp-1) 0; background: var(--accent); }
+
+/* ── 9. DetailSheet: ngăn phải 480px ≥ 760px · toàn màn hình < 760px ───────────────────────────────────────────────── */
+.kit-sheet { position: fixed; inset: 0; z-index: 40; }
+.kit-sheet[data-spot='on'] { visibility: hidden; }
+.kit-sheet__scrim { position: absolute; inset: 0; background: var(--scrim); }
+.kit-sheet__panel {
+  position: absolute; inset: 0; display: flex; flex-direction: column; min-width: 0; background: var(--surface);
+  color: var(--text); font-size: var(--fs-14); line-height: var(--lh-14);
+}
+.kit-sheet__panel:focus { outline: none; }
+.kit-sheet__head {
+  flex: none; display: flex; align-items: center; gap: var(--sp-2); min-height: var(--top-h);
+  padding: var(--sp-1) var(--sp-2); border-bottom: 1px solid var(--border);
+}
+.kit-sheet__back {
+  display: inline-flex; align-items: center; gap: var(--sp-1); min-height: var(--tap); padding: 0 var(--sp-2);
+  border: 0; border-radius: var(--r-8); background: none; color: var(--accent-ink); font: inherit;
+  font-size: var(--fs-14); line-height: var(--lh-14); font-weight: var(--fw-600); cursor: pointer;
+}
+.kit-sheet__back:hover, .kit-sheet__close:hover { background: var(--hover); }
+.kit-sheet__title {
+  flex: 1; min-width: 0; margin: 0; font-size: var(--fs-18); line-height: var(--lh-18); font-weight: var(--fw-600);
+  overflow-wrap: anywhere;
+}
+.kit-sheet__close {
+  display: none; place-items: center; flex: none; width: var(--tap); height: var(--tap); padding: 0; border: 0;
+  border-radius: var(--r-8); background: none; color: var(--text-2); cursor: pointer;
+}
+.kit-sheet__body {
+  flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--sp-3);
+  padding-bottom: calc(var(--sp-3) + env(safe-area-inset-bottom, 0px));
+}
+.kit-sheet__body--bare { padding: 0; display: flex; flex-direction: column; overflow: hidden; }
+@media (min-width: 760px) {
+  .kit-sheet__panel {
+    left: auto; width: min(var(--drawer-w), 100%); border-left: 1px solid var(--border); box-shadow: var(--shadow-pop);
+  }
+  .kit-sheet__head { padding-left: var(--sp-4); }
+  .kit-sheet__back { display: none; }
+  .kit-sheet__close { display: grid; }
+  .kit-sheet__body { padding: var(--sp-4); }
+  .kit-sheet__body--bare { padding: 0; }
+}
+
+/* ── 10. Chip lọc + nút chọn kỳ (khối dựng sẵn cho các màn Thông tin / Phân tích) ──────────────────────────────────── */
+.kit-chips { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.kit-chip {
+  display: inline-flex; align-items: center; gap: var(--sp-2); min-height: var(--tap); padding: 0 var(--sp-3);
+  border: 1px solid var(--border-strong); border-radius: var(--r-999); background: var(--surface); color: var(--text-2);
+  font: inherit; font-size: var(--fs-14); line-height: var(--lh-14); white-space: nowrap; cursor: pointer;
+}
+.kit-chip:hover { background: var(--hover); color: var(--text); }
+.kit-chip[aria-pressed='true'] { background: var(--text); border-color: var(--text); color: var(--surface); font-weight: var(--fw-600); }
+.kit-chip__n { font-size: var(--fs-12); line-height: var(--lh-12); color: inherit; }
+.kit-seg {
+  display: inline-flex; gap: var(--sp-1); padding: var(--sp-1); border: 1px solid var(--border); border-radius: var(--r-8);
+  background: var(--surface);
+}
+.kit-seg button {
+  min-height: var(--sp-6); padding: 0 var(--sp-3); border: 0; border-radius: var(--r-8); background: transparent;
+  color: var(--text-2); font: inherit; font-size: var(--fs-14); line-height: var(--lh-14); white-space: nowrap; cursor: pointer;
+}
+.kit-seg button[aria-pressed='true'] { background: var(--accent-soft); color: var(--accent-ink); font-weight: var(--fw-600); }
+@media (min-width: 760px) {
+  .kit-chip { min-height: var(--sp-5); }
+  .kit-seg button { min-height: var(--sp-5); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kit-chart__bar { transition: none; }
+}

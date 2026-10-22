@@ -1,0 +1,26 @@
+{
+  "package": "@gen/chassis-bus",
+  "name": "Event Bus",
+  "version": "2.2.0",
+  "layer": "chassis",
+  "entry": null,
+  "description": "Redis Streams: phát, nhận, ack, phát lại sự kiện giữa các thành phần.",
+  "permissions": [],
+  "events": {
+    "subscribe": [],
+    "publish": []
+  },
+  "settings_schema": {},
+  "sandbox": {
+    "mode": "inprocess",
+    "memory_mb": 512,
+    "timeout_s": 30,
+    "net": "internal"
+  },
+  "dependencies": {
+    "@gen/chassis-kernel": "^2.2.0"
+  },
+  "load_order": 2,
+  "removable": false,
+  "can_disable": false
+}

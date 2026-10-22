@@ -1,0 +1,26 @@
+{
+  "package": "@gen/chassis-store",
+  "name": "Store · SSOT",
+  "version": "2.2.0",
+  "layer": "chassis",
+  "entry": null,
+  "description": "PostgreSQL là nguồn sự thật duy nhất; kho thô và action log chỉ INSERT.",
+  "permissions": [],
+  "events": {
+    "subscribe": [],
+    "publish": []
+  },
+  "settings_schema": {},
+  "sandbox": {
+    "mode": "inprocess",
+    "memory_mb": 512,
+    "timeout_s": 30,
+    "net": "internal"
+  },
+  "dependencies": {
+    "@gen/chassis-bus": "^2.2.0"
+  },
+  "load_order": 3,
+  "removable": false,
+  "can_disable": false
+}

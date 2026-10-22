@@ -1,0 +1,85 @@
+/* v0.1.59 (G3) — màn Việc (/owner/viec). Mobile-first; CHỈ token (không mã màu cứng), chữ 12/14/18/28px, hai độ đậm, không chữ
+ * hoa toàn bộ, điểm gãy duy nhất min-width 760px / 1024px (lính gác: test/unit/design-guard-v0159.test.ts). Vùng chạm ≥ 44px
+ * ở điện thoại (var(--tap)). Thẻ là `Card` của @gen-harness/ui; lưới `kit-grid` + `kit-c7` / `kit-c5` của owner-kit.css. */
+
+.work-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; min-width: 0; }
+.work-list > li { border-top: 1px solid var(--border); min-width: 0; }
+.work-btn { flex: none; white-space: nowrap; }
+.work-link { min-height: var(--tap); }
+.work-error { padding: 0 var(--kit-pad) var(--sp-2); }
+.work-note { margin: 0; padding: 0 var(--kit-pad) var(--sp-2); }
+
+/* ── Cần Sếp quyết ── */
+.work-decide__head { display: flex; flex-direction: column; gap: var(--sp-2); padding: 0 var(--kit-pad) var(--sp-3); }
+.work-decide__count { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-2); color: var(--text-2); }
+.work-big {
+  font-size: var(--fs-28); line-height: var(--lh-28); font-weight: var(--fw-600); color: var(--text); font-variant-numeric: tabular-nums;
+}
+.work-pin { margin: 0; display: flex; align-items: flex-start; gap: var(--sp-2); font-size: var(--fs-12); line-height: var(--lh-12); color: var(--text-3); }
+.work-pin svg { flex: none; }
+
+.work-draft { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-3) var(--kit-pad); }
+.work-draft__head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-3); min-width: 0; }
+.work-draft__text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); }
+.work-draft__title { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); font-weight: var(--fw-600); overflow-wrap: anywhere; }
+.work-draft__meta { font-size: var(--fs-12); line-height: var(--lh-12); color: var(--text-3); overflow-wrap: anywhere; }
+.work-draft__quote {
+  margin: 0; padding: 0 var(--sp-2) 0 var(--sp-3); border-left: 2px solid var(--border-strong); color: var(--text); white-space: pre-line;
+  overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+}
+.work-draft__hold {
+  margin: 0; display: flex; align-items: flex-start; gap: var(--sp-2); font-size: var(--fs-12); line-height: var(--lh-12); color: var(--warn-ink);
+  overflow-wrap: anywhere;
+}
+.work-draft__hold svg { flex: none; }
+/* DraftDecide / ProposalDecide đã có khung riêng — trong dòng danh sách bỏ viền và đệm ngoài để không lồng khung. */
+.work-draft .owner-act, .work-proposal .owner-act { border: 0; padding: var(--sp-2) 0 0; background: transparent; }
+.work-proposal { padding: var(--sp-2) var(--kit-pad) var(--sp-3); }
+
+/* ── Việc hôm nay ── */
+.work-task { display: flex; align-items: flex-start; gap: var(--sp-1); padding: var(--sp-1) var(--kit-pad) var(--sp-2) var(--sp-1); }
+.work-task[aria-busy='true'] { opacity: 0.6; }
+.work-task__body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); padding-top: var(--sp-2); }
+.work-task__title { font-weight: var(--fw-600); overflow-wrap: anywhere; }
+.work-task__meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); font-size: var(--fs-12); line-height: var(--lh-12); color: var(--text-3); }
+.work-task__actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-3); }
+.work-task__actions .kit-link:disabled { opacity: 0.55; cursor: default; }
+
+/* Ô tick "Xong": vùng chạm 44px, ô vẽ 24px ở giữa. */
+.work-check {
+  appearance: none; -webkit-appearance: none; position: relative; flex: none; width: var(--tap); height: var(--tap); margin: 0;
+  border: 0; background: transparent; cursor: pointer;
+}
+.work-check::before {
+  content: ''; position: absolute; left: calc((var(--tap) - var(--sp-4)) / 2); top: calc((var(--tap) - var(--sp-4)) / 2);
+  width: var(--sp-4); height: var(--sp-4); box-sizing: border-box; border: 2px solid var(--border-strong); border-radius: var(--r-8);
+  background: var(--surface);
+}
+.work-check:hover::before { border-color: var(--accent); }
+.work-check:checked::before { background: var(--accent); border-color: var(--accent); }
+.work-check:checked::after {
+  content: '✓'; position: absolute; inset: 0; display: grid; place-items: center; color: var(--on-accent);
+  font-size: var(--fs-14); line-height: var(--lh-14); font-weight: var(--fw-600);
+}
+.work-check:disabled { cursor: default; }
+
+/* ── Gen đề xuất ── */
+.work-suggest__row { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); padding: var(--sp-3) var(--kit-pad); }
+.work-suggest__text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-1); }
+.work-suggest__done { flex: none; font-size: var(--fs-14); line-height: var(--lh-14); font-weight: var(--fw-600); color: var(--ok-ink); }
+
+/* Tên đề xuất của Gen: cùng cỡ với tên nháp (14px) — khối ProposalDecide mặc định dùng 18px cho tiêu đề ngăn. */
+.work-proposal .owner-act__title { font-size: var(--fs-14); line-height: var(--lh-14); }
+
+/* Điện thoại: chọn mục bằng Segmented (Console) — số đo Mặt tiền, vùng chạm ≥ 44px, ba mục vừa một hàng.
+ * Nhãn KHÔNG xuống dòng: ba tab cùng chiều cao; nếu không vừa thì khung Segmented tự cuộn ngang (trang không cuộn). */
+.work .gh-seg { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; gap: var(--sp-1); padding: var(--sp-1); border-color: var(--border); border-radius: var(--r-8); background: var(--surface); }
+.work .gh-seg::-webkit-scrollbar { display: none; }
+.work .gh-seg__opt {
+  height: auto; min-height: var(--tap); align-self: stretch; padding: 0 var(--sp-2); border-radius: var(--r-8);
+  font-size: var(--fs-14); line-height: var(--lh-14); color: var(--text-2);
+  flex: 1 0 auto; min-width: 0; white-space: nowrap;
+}
+.work-seg__n { font-size: var(--fs-12); line-height: var(--lh-12); font-weight: var(--fw-400); color: var(--text-3); }
+.work .gh-seg__opt:hover { color: var(--text); }
+.work .gh-seg__opt[aria-checked='true'] { background: var(--accent-soft); color: var(--accent-ink); font-weight: var(--fw-600); }

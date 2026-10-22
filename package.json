@@ -1,0 +1,15 @@
+{
+  "name": "gen-harness",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": ["apps/web", "apps/bridge", "packages/*"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev": "npm run dev -w @gen-harness/web",
+    "build": "npm run build -w @gen-harness/web",
+    "test": "npm test -w @gen-harness/web",
+    "lint": "npm run lint -w @gen-harness/web",
+    "typecheck": "npm run typecheck -w @gen-harness/web",
+    "tokens": "npm run generate -w @gen-harness/tokens"
+  }
+}

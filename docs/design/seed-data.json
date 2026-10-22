@@ -1,0 +1,5614 @@
+{
+  "kpis": [
+    {
+      "label": "Cần xử lý ngay",
+      "value": "9",
+      "unit": "mục",
+      "sub": "3 cơ hội nóng · 4 cảnh báo · 2 chờ duyệt"
+    },
+    {
+      "label": "Tín hiệu cơ hội mới",
+      "value": "41",
+      "unit": "/ 24 giờ",
+      "sub": "18 đã xác thực · 7 chưa ai nhận"
+    },
+    {
+      "label": "Quan hệ đang lạnh",
+      "value": "23",
+      "unit": "hồ sơ",
+      "sub": "6 khách chưa có người phụ trách"
+    },
+    {
+      "label": "Nhóm đang nóng",
+      "value": "7",
+      "unit": "/ 42 nhóm",
+      "sub": "3.184 sự kiện hôm nay"
+    },
+    {
+      "label": "Hành động chờ duyệt",
+      "value": "6",
+      "unit": "bản nháp",
+      "sub": "Tự trị mức 4 · hệ thống không tự gửi"
+    },
+    {
+      "label": "Tin cậy dữ liệu",
+      "value": "78",
+      "unit": "%",
+      "sub": "12 danh tính chờ hợp nhất"
+    }
+  ],
+  "queue": [
+    {
+      "band": "P1",
+      "kind": "Cơ hội",
+      "title": "Xưởng gỗ Bình Dương hỏi 3 container ván MDF, cần báo giá trong hôm nay",
+      "id": "OPP-1842",
+      "source": "Group Ngành gỗ Miền Nam · Zalo",
+      "age": "18 phút",
+      "score": "91",
+      "action": "Nhận xử lý"
+    },
+    {
+      "band": "P1",
+      "kind": "Cảnh báo",
+      "title": "Khách Thành Phát nhắn ba lần chưa ai trả lời, giọng đã gay gắt",
+      "id": "ALR-0233",
+      "source": "Nhóm Đối tác in ấn · Zalo",
+      "age": "2 giờ 14 phút",
+      "score": "87",
+      "action": "Mở hồ sơ"
+    },
+    {
+      "band": "P1",
+      "kind": "Chờ duyệt",
+      "title": "Báo giá 84.000.000 ₫ cho hợp đồng in ấn quý 4 đã soạn sẵn",
+      "id": "ACT-0231",
+      "source": "Agent Trợ lý thương mại",
+      "age": "47 phút",
+      "score": "—",
+      "action": "Xem bản nháp"
+    },
+    {
+      "band": "P2",
+      "kind": "Cảnh báo",
+      "title": "Nguyễn Thu Hà phản hồi chậm bất thường 3 ngày liên tiếp",
+      "id": "ALR-0234",
+      "source": "People Observation",
+      "age": "5 giờ",
+      "score": "62",
+      "action": "Xem chứng cứ"
+    },
+    {
+      "band": "P2",
+      "kind": "Cơ hội",
+      "title": "Ứng viên trong group tuyển dụng khớp vị trí Key Account đang trống",
+      "id": "OPP-1839",
+      "source": "Group Nhân sự Logistics · Zalo",
+      "age": "6 giờ",
+      "score": "74",
+      "action": "Ráp khớp"
+    },
+    {
+      "band": "P3",
+      "kind": "Đến hạn",
+      "title": "Lịch giao ban thứ Hai chưa có nội dung, hệ thống đã soạn nháp",
+      "id": "TSK-0412",
+      "source": "Nhóm Điều hành",
+      "age": "1 ngày",
+      "score": "—",
+      "action": "Mở việc"
+    }
+  ],
+  "spotlight": [
+    {
+      "name": "Xưởng gỗ Bình Dương",
+      "initials": "XG",
+      "why": "Cơ hội nóng 91 điểm, chưa ai nhận",
+      "score": "91",
+      "trend": "up"
+    },
+    {
+      "name": "Công ty in Thành Phát",
+      "initials": "TP",
+      "why": "Rủi ro mất khách, 3 tin chưa trả lời",
+      "score": "87",
+      "trend": "down"
+    },
+    {
+      "name": "Nguyễn Thu Hà",
+      "initials": "TH",
+      "why": "Nhân viên: tốc độ phản hồi tụt 41%",
+      "score": "62",
+      "trend": "down"
+    },
+    {
+      "name": "Trần Minh Khoa",
+      "initials": "MK",
+      "why": "Đang ôm 14 quan hệ, quá tải",
+      "score": "71",
+      "trend": "flat"
+    },
+    {
+      "name": "An Khang Logistics",
+      "initials": "AK",
+      "why": "Đối tác: đàm phán sang vòng ba",
+      "score": "78",
+      "trend": "up"
+    }
+  ],
+  "signals": [
+    {
+      "name": "Giá ván MDF và gỗ công nghiệp",
+      "delta": "+142%"
+    },
+    {
+      "name": "Tìm đối tác vận chuyển lạnh",
+      "delta": "+64%"
+    },
+    {
+      "name": "Than phiền chậm giao hàng",
+      "delta": "+38%"
+    },
+    {
+      "name": "Tuyển Key Account ngành logistics",
+      "delta": "+21%"
+    },
+    {
+      "name": "Đối thủ Minh Long xuất hiện",
+      "delta": "+18%"
+    }
+  ],
+  "health": [
+    {
+      "name": "Event Bus · Store (SSOT)",
+      "metric": "4ms"
+    },
+    {
+      "name": "Kênh Zalo",
+      "metric": "99,9%"
+    },
+    {
+      "name": "Kênh WhatsApp",
+      "metric": "chờ QR"
+    },
+    {
+      "name": "Intent & Score Engine",
+      "metric": "1,2s"
+    },
+    {
+      "name": "Provider Antigravity",
+      "metric": "0 ₫"
+    },
+    {
+      "name": "Provider DeepSeek",
+      "metric": "18%"
+    }
+  ],
+  "dataQuality": [
+    {
+      "label": "Hồ sơ còn thiếu danh tính đa kênh",
+      "value": "12%"
+    },
+    {
+      "label": "Điểm số có độ tin cậy thấp",
+      "value": "9%"
+    },
+    {
+      "label": "Sự kiện chưa gắn được đối tượng",
+      "value": "4%"
+    },
+    {
+      "label": "Dữ liệu mâu thuẫn giữa chat và CRM",
+      "value": "3 vụ"
+    }
+  ],
+  "hourly": [
+    {
+      "title": "00:00 — 15 sự kiện"
+    },
+    {
+      "title": "01:00 — 7 sự kiện"
+    },
+    {
+      "title": "02:00 — 4 sự kiện"
+    },
+    {
+      "title": "03:00 — 4 sự kiện"
+    },
+    {
+      "title": "04:00 — 7 sự kiện"
+    },
+    {
+      "title": "05:00 — 22 sự kiện"
+    },
+    {
+      "title": "06:00 — 67 sự kiện"
+    },
+    {
+      "title": "07:00 — 126 sự kiện"
+    },
+    {
+      "title": "08:00 — 229 sự kiện"
+    },
+    {
+      "title": "09:00 — 289 sự kiện"
+    },
+    {
+      "title": "10:00 — 311 sự kiện"
+    },
+    {
+      "title": "11:00 — 263 sự kiện"
+    },
+    {
+      "title": "12:00 — 178 sự kiện"
+    },
+    {
+      "title": "13:00 — 244 sự kiện"
+    },
+    {
+      "title": "14:00 — 340 sự kiện"
+    },
+    {
+      "title": "15:00 — 326 sự kiện"
+    },
+    {
+      "title": "16:00 — 274 sự kiện"
+    },
+    {
+      "title": "17:00 — 215 sự kiện"
+    },
+    {
+      "title": "18:00 — 152 sự kiện"
+    },
+    {
+      "title": "19:00 — 107 sự kiện"
+    },
+    {
+      "title": "20:00 — 81 sự kiện"
+    },
+    {
+      "title": "21:00 — 59 sự kiện"
+    },
+    {
+      "title": "22:00 — 41 sự kiện"
+    },
+    {
+      "title": "23:00 — 26 sự kiện"
+    }
+  ],
+  "inboxTabs": [
+    {
+      "label": "Tất cả",
+      "count": "28"
+    },
+    {
+      "label": "Cơ hội",
+      "count": "9"
+    },
+    {
+      "label": "Cảnh báo",
+      "count": "7"
+    },
+    {
+      "label": "Chờ duyệt",
+      "count": "6"
+    },
+    {
+      "label": "Cần soạn",
+      "count": "4"
+    },
+    {
+      "label": "Ứng viên",
+      "count": "2"
+    }
+  ],
+  "meaningItems": [
+    {
+      "kind": "Cơ hội",
+      "id": "OPP-1842",
+      "source": "Group Ngành gỗ Miền Nam · 412 thành viên",
+      "ch": "zalo",
+      "age": "18 phút",
+      "title": "Xưởng gỗ Bình Dương cần 3 container ván MDF loại E1, giao trong tháng 10",
+      "summary": "Người hỏi là chủ xưởng, đã từng hỏi giá hai lần trong sáu tháng qua nhưng chưa chốt. Lần này nêu rõ số lượng, quy cách và mốc giao, kèm ngân sách khoảng 1,2 tỷ ₫.",
+      "evidence": "\"Bên nào có sẵn MDF E1 17mm khổ 1220x2440 cho em 3 cont trong tháng 10 không ạ, ngân sách tầm 1.2 tỷ, ưu tiên giao tận xưởng Bình Dương.\"",
+      "score": "91",
+      "scoreLabel": "độ nóng",
+      "confidence": "cao",
+      "action": "Nhận và ráp khớp nhà cung cấp"
+    },
+    {
+      "kind": "Cảnh báo",
+      "id": "ALR-0233",
+      "source": "Nhóm Đối tác in ấn Thành Phát",
+      "ch": "zalo",
+      "age": "2 giờ 14 phút",
+      "title": "Khách nhắn ba lần chưa ai trả lời, thái độ đã chuyển sang gay gắt",
+      "summary": "Sau khi nhận báo giá ngày 18/09, khách hỏi lại ba lần về tiến độ mà không ai phản hồi. Mẫu hành vi này trong sáu tháng qua dẫn tới mất khách trong 4 trên 5 trường hợp.",
+      "evidence": "\"Anh hỏi ba lần rồi mà không ai trả lời. Nếu bên mình không làm được thì nói thẳng để anh tìm chỗ khác nhé.\"",
+      "score": "87",
+      "scoreLabel": "rủi ro mất khách",
+      "confidence": "cao",
+      "action": "Mở hồ sơ và gán người xử lý"
+    },
+    {
+      "kind": "Chờ duyệt",
+      "id": "ACT-0231",
+      "source": "Agent Trợ lý thương mại · tự trị mức 4",
+      "ch": "agent",
+      "age": "47 phút",
+      "title": "Bản nháp báo giá 84.000.000 ₫ cho hợp đồng in ấn quý 4 đã soạn xong",
+      "summary": "Agent đã đối chiếu ba báo giá và chọn Thành Phát vì thấp nhất. Khoản này vượt ngưỡng 50 triệu ₫ nên hệ thống dừng lại chờ Sếp duyệt, không tự gửi.",
+      "evidence": "Nguồn dữ liệu: báo giá Thành Phát 84 triệu, An Khang 91 triệu, Minh Long 88 triệu · biểu giá quý 4 · tồn kho ERP ngày 21/09.",
+      "score": "—",
+      "scoreLabel": "chờ thẩm quyền",
+      "confidence": "cao",
+      "action": "Xem bản nháp và duyệt"
+    },
+    {
+      "kind": "Cảnh báo",
+      "id": "ALR-0234",
+      "source": "People Observation · Ban Tài chính",
+      "ch": "agent",
+      "age": "5 giờ",
+      "title": "Nguyễn Thu Hà phản hồi chậm bất thường ba ngày liên tiếp",
+      "summary": "Trung vị thời gian phản hồi tăng từ 12 phút lên 84 phút, đồng thời số khách đang phụ trách tăng từ 6 lên 11. Tín hiệu thiên về quá tải hơn là thờ ơ.",
+      "evidence": "9 trên 14 tin nhắn của khách trong ba ngày qua được trả lời sau hơn 60 phút, tập trung vào khung 14:00–17:00.",
+      "score": "62",
+      "scoreLabel": "điểm chăm sóc",
+      "confidence": "trung bình",
+      "action": "Xem chứng cứ và đề xuất coaching"
+    },
+    {
+      "kind": "Ứng viên",
+      "id": "OPP-1839",
+      "source": "Group Nhân sự Logistics Miền Nam",
+      "ch": "zalo",
+      "age": "6 giờ",
+      "title": "Một người trong group khớp vị trí Key Account đang trống của Ban Kinh doanh",
+      "summary": "Người này trả lời câu hỏi nghiệp vụ trong group ba lần trong tuần, cách diễn đạt nhất quán và có dấu hiệu đang tìm việc. Chưa có tiếp xúc trực tiếp nào.",
+      "evidence": "\"Mình làm key account ngành lạnh 5 năm, đang tính đổi hướng sang gỗ nội thất, ai cần tư vấn tuyến Bình Dương thì inbox mình.\"",
+      "score": "74",
+      "scoreLabel": "độ phù hợp",
+      "confidence": "thấp",
+      "action": "Mở hồ sơ ứng viên"
+    }
+  ],
+  "graphModes": [
+    {
+      "label": "Danh sách"
+    },
+    {
+      "label": "Người ↔ Người"
+    },
+    {
+      "label": "Nhóm ↔ Nhóm"
+    },
+    {
+      "label": "Luồng chủ đề"
+    }
+  ],
+  "graphFilters": [
+    {
+      "label": "Loại",
+      "value": "Khách + Đối tác"
+    },
+    {
+      "label": "Kênh",
+      "value": "Tất cả"
+    },
+    {
+      "label": "Độ nóng",
+      "value": "≥ 40"
+    },
+    {
+      "label": "Tiềm năng",
+      "value": "Tất cả"
+    },
+    {
+      "label": "Rủi ro",
+      "value": "Tất cả"
+    },
+    {
+      "label": "Phụ trách",
+      "value": "Tất cả"
+    },
+    {
+      "label": "Chạm gần nhất",
+      "value": "90 ngày"
+    }
+  ],
+  "nodes": [
+    {
+      "name": "Xưởng gỗ Bình Dương",
+      "org": "Trần Văn Hậu · chủ xưởng",
+      "initials": "XG",
+      "type": "Khách",
+      "stage": "Tín hiệu đã xác thực",
+      "ch": [
+        "z"
+      ],
+      "owner": "Chưa có người",
+      "ownerless": true,
+      "heat": "91",
+      "potential": "1,2 tỷ ₫",
+      "risk": "Thấp",
+      "last": "18 phút",
+      "channels": [
+        {}
+      ]
+    },
+    {
+      "name": "Công ty in Thành Phát",
+      "org": "Nguyễn Văn Bảo · giám đốc",
+      "initials": "TP",
+      "type": "Khách",
+      "stage": "Đang đàm phán",
+      "ch": [
+        "z",
+        "w"
+      ],
+      "owner": "Nguyễn Thu Hà",
+      "heat": "87",
+      "potential": "84 triệu ₫",
+      "risk": "Cao",
+      "last": "2 giờ",
+      "channels": [
+        {},
+        {}
+      ]
+    },
+    {
+      "name": "An Khang Logistics",
+      "org": "Hoàng Thị Lan · sales director",
+      "initials": "AK",
+      "type": "Đối tác",
+      "stage": "Đàm phán vòng ba",
+      "ch": [
+        "z",
+        "w"
+      ],
+      "owner": "Trần Minh Khoa",
+      "heat": "78",
+      "potential": "128 triệu ₫",
+      "risk": "Trung bình",
+      "last": "4 giờ",
+      "channels": [
+        {},
+        {}
+      ]
+    },
+    {
+      "name": "Nội thất Minh Long",
+      "org": "Phạm Quốc Minh",
+      "initials": "ML",
+      "type": "Khách",
+      "stage": "Đang tiếp cận",
+      "ch": [
+        "z"
+      ],
+      "owner": "Vũ Hải Đăng",
+      "heat": "64",
+      "potential": "310 triệu ₫",
+      "risk": "Trung bình",
+      "last": "1 ngày",
+      "channels": [
+        {}
+      ]
+    },
+    {
+      "name": "Kho lạnh Tân Cảng",
+      "org": "Lê Thị Bích",
+      "initials": "TC",
+      "type": "Khách",
+      "stage": "Tín hiệu thô",
+      "ch": [
+        "w"
+      ],
+      "owner": "Chưa có người",
+      "ownerless": true,
+      "heat": "58",
+      "potential": "chưa rõ",
+      "risk": "Thấp",
+      "last": "2 ngày",
+      "channels": [
+        {}
+      ]
+    },
+    {
+      "name": "Nguyễn Thu Hà",
+      "org": "Nội bộ · Trưởng ban Tài chính",
+      "initials": "TH",
+      "type": "Nhân viên",
+      "stage": "Đang phụ trách 11 khách",
+      "ch": [
+        "z",
+        "w"
+      ],
+      "owner": "Anh Nguyễn Văn A",
+      "heat": "62",
+      "potential": "—",
+      "risk": "Cao",
+      "last": "35 phút",
+      "channels": [
+        {},
+        {}
+      ]
+    },
+    {
+      "name": "Trần Minh Khoa",
+      "org": "Nội bộ · Giám đốc vận hành",
+      "initials": "MK",
+      "type": "Nhân viên",
+      "stage": "Đang phụ trách 14 khách",
+      "ch": [
+        "z",
+        "w"
+      ],
+      "owner": "Anh Nguyễn Văn A",
+      "heat": "71",
+      "potential": "—",
+      "risk": "Trung bình",
+      "last": "12 phút",
+      "channels": [
+        {},
+        {}
+      ]
+    },
+    {
+      "name": "Võ Thanh Sơn",
+      "org": "Ứng viên · Key Account ngành lạnh",
+      "initials": "VS",
+      "type": "Ứng viên",
+      "stage": "Chưa tiếp xúc",
+      "ch": [
+        "z"
+      ],
+      "owner": "Chưa có người",
+      "ownerless": true,
+      "heat": "74",
+      "potential": "—",
+      "risk": "Thấp",
+      "last": "6 giờ",
+      "channels": [
+        {}
+      ]
+    },
+    {
+      "name": "Gỗ Đông Phương",
+      "org": "Đặng Hữu Trí",
+      "initials": "ĐP",
+      "type": "Khách",
+      "stage": "Ngủ đông",
+      "ch": [
+        "z"
+      ],
+      "owner": "Vũ Hải Đăng",
+      "heat": "22",
+      "potential": "540 triệu ₫",
+      "risk": "Cao",
+      "last": "74 ngày",
+      "cold": true,
+      "channels": [
+        {}
+      ]
+    },
+    {
+      "name": "Bao bì Sài Gòn Mới",
+      "org": "Trịnh Mỹ Duyên",
+      "initials": "SG",
+      "type": "Khách",
+      "stage": "Đang lạnh",
+      "ch": [
+        "z",
+        "w"
+      ],
+      "owner": "Đỗ Thanh Mai",
+      "heat": "18",
+      "potential": "96 triệu ₫",
+      "risk": "Cao",
+      "last": "41 ngày",
+      "cold": true,
+      "channels": [
+        {},
+        {}
+      ]
+    }
+  ],
+  "graphRows": [
+    {
+      "from": "Nguyễn Thu Hà",
+      "to": "Công ty in Thành Phát",
+      "topic": "hợp đồng in ấn quý 4",
+      "weight": "87",
+      "w": 5,
+      "fromDot": "width:8px;height:8px;flex:none;border-radius:50%;background:var(--color-accent-400,#b5abfc);",
+      "toDot": "width:8px;height:8px;flex:none;border-radius:50%;background:oklch(0.76 0.15 24);"
+    },
+    {
+      "from": "Trần Minh Khoa",
+      "to": "An Khang Logistics",
+      "topic": "tuyến vận chuyển lạnh",
+      "weight": "78",
+      "w": 4,
+      "fromDot": "width:8px;height:8px;flex:none;border-radius:50%;background:var(--color-accent-400,#b5abfc);",
+      "toDot": "width:8px;height:8px;flex:none;border-radius:50%;background:oklch(0.76 0.12 162);"
+    },
+    {
+      "from": "Group Ngành gỗ",
+      "to": "Xưởng gỗ Bình Dương",
+      "topic": "ván MDF E1",
+      "weight": "91",
+      "w": 5,
+      "fromDot": "width:8px;height:8px;flex:none;border-radius:50%;background:var(--color-accent-400,#b5abfc);",
+      "toDot": "width:8px;height:8px;flex:none;border-radius:50%;background:oklch(0.76 0.12 162);"
+    },
+    {
+      "from": "Vũ Hải Đăng",
+      "to": "Nội thất Minh Long",
+      "topic": "báo giá nội thất",
+      "weight": "64",
+      "w": 3,
+      "fromDot": "width:8px;height:8px;flex:none;border-radius:50%;background:var(--color-accent-400,#b5abfc);",
+      "toDot": "width:8px;height:8px;flex:none;border-radius:50%;background:oklch(0.84 0.13 84);"
+    },
+    {
+      "from": "Đỗ Thanh Mai",
+      "to": "Bao bì Sài Gòn Mới",
+      "topic": "im lặng 41 ngày",
+      "weight": "18",
+      "w": 1,
+      "fromDot": "width:8px;height:8px;flex:none;border-radius:50%;background:var(--color-accent-400,#b5abfc);",
+      "toDot": "width:8px;height:8px;flex:none;border-radius:50%;background:var(--color-neutral-400,#b2b6ca);"
+    },
+    {
+      "from": "Vũ Hải Đăng",
+      "to": "Gỗ Đông Phương",
+      "topic": "im lặng 74 ngày",
+      "weight": "22",
+      "w": 1,
+      "fromDot": "width:8px;height:8px;flex:none;border-radius:50%;background:var(--color-accent-400,#b5abfc);",
+      "toDot": "width:8px;height:8px;flex:none;border-radius:50%;background:var(--color-neutral-400,#b2b6ca);"
+    }
+  ],
+  "bridges": [
+    {
+      "name": "Trần Minh Khoa",
+      "meta": "9 nhóm · nối 4 ban"
+    },
+    {
+      "name": "Hoàng Thị Lan (An Khang)",
+      "meta": "3 nhóm ngành · nối 11 khách"
+    },
+    {
+      "name": "Nguyễn Thu Hà",
+      "meta": "7 nhóm · nối tài chính ↔ đối tác"
+    },
+    {
+      "name": "Group Ngành gỗ Miền Nam",
+      "meta": "412 người · nguồn 18 cơ hội"
+    }
+  ],
+  "ballLoad": [
+    {
+      "name": "Trần Minh Khoa"
+    },
+    {
+      "name": "Nguyễn Thu Hà"
+    },
+    {
+      "name": "Vũ Hải Đăng"
+    },
+    {
+      "name": "Đỗ Thanh Mai"
+    },
+    {
+      "name": "Chưa có người"
+    }
+  ],
+  "profileScores": [
+    {
+      "label": "Độ nóng",
+      "value": "87",
+      "unit": "/100",
+      "note": "Ba tin chưa trả lời trong 2 giờ",
+      "trend": "up"
+    },
+    {
+      "label": "Tiềm năng",
+      "value": "74",
+      "unit": "/100",
+      "note": "Ba deal đã chốt trong 18 tháng",
+      "trend": "flat"
+    },
+    {
+      "label": "Rủi ro churn",
+      "value": "81",
+      "unit": "/100",
+      "note": "Mẫu hành vi giống 4 ca đã mất",
+      "trend": "up"
+    },
+    {
+      "label": "Điểm chăm sóc",
+      "value": "48",
+      "unit": "/100",
+      "note": "Follow sau báo giá bị bỏ 2 lần",
+      "trend": "down"
+    },
+    {
+      "label": "Tin cậy dữ liệu",
+      "value": "92",
+      "unit": "%",
+      "note": "214 sự kiện · 3 kênh đã hợp nhất",
+      "trend": "flat"
+    }
+  ],
+  "profileSummary": [
+    {
+      "text": "Khách in ấn đã mua ba lần trong 18 tháng, tổng giá trị khoảng 240 triệu ₫, luôn thanh toán đúng hạn."
+    },
+    {
+      "text": "Người quyết định là anh Nguyễn Văn Bảo, giám đốc. Anh Bảo tự trả lời tin nhắn, không qua trợ lý."
+    },
+    {
+      "text": "Phong cách giao tiếp ngắn, trực tiếp. Phản ứng xấu với câu trả lời vòng vo hoặc hứa không rõ mốc thời gian."
+    },
+    {
+      "text": "Ngân sách quý 4 ước lượng 84 triệu ₫, dựa trên báo giá đang đàm phán và mức chi ba quý trước."
+    },
+    {
+      "text": "Rủi ro hiện tại: ba tin nhắn chưa được trả lời trong hơn hai giờ, giọng điệu đã chuyển sang gay gắt."
+    },
+    {
+      "text": "Mẫu hành vi này trong sáu tháng qua dẫn tới mất khách ở 4 trên 5 trường hợp tương tự."
+    },
+    {
+      "text": "Đối thủ Minh Long đã xuất hiện hai lần trong hội thoại của khách này trong ba tuần qua."
+    },
+    {
+      "text": "Hệ thống chưa đủ dữ liệu về nhu cầu năm sau: không có tín hiệu nào về kế hoạch 2027."
+    }
+  ],
+  "timeline": [
+    {
+      "time": "21/09 15:04",
+      "event": "Complained",
+      "detail": "Nhắc lần thứ ba, giọng gay gắt, nêu khả năng tìm nhà cung cấp khác",
+      "kind": "bad"
+    },
+    {
+      "time": "21/09 11:20",
+      "event": "AskedStatus",
+      "detail": "Hỏi tiến độ hợp đồng in ấn quý 4 lần thứ hai",
+      "kind": "warn"
+    },
+    {
+      "time": "20/09 09:12",
+      "event": "AskedStatus",
+      "detail": "Hỏi tiến độ lần thứ nhất, chưa ai trả lời",
+      "kind": "warn"
+    },
+    {
+      "time": "18/09 16:40",
+      "event": "SentQuotation",
+      "detail": "Ban Tài chính gửi báo giá 84.000.000 ₫ cho quý 4",
+      "kind": "ok"
+    },
+    {
+      "time": "18/09 10:02",
+      "event": "AskedPrice",
+      "detail": "Hỏi giá in catalogue 5.000 bản, giấy C300",
+      "kind": "ok"
+    },
+    {
+      "time": "12/09 14:31",
+      "event": "MentionsCompetitor",
+      "detail": "Nhắc Minh Long đang chào giá thấp hơn 4%",
+      "kind": "warn"
+    },
+    {
+      "time": "04/09 09:50",
+      "event": "PromisedDelivery",
+      "detail": "Bên mình hứa giao mẫu trong 3 ngày, đã thực hiện đúng",
+      "kind": "ok"
+    },
+    {
+      "time": "22/08 11:14",
+      "event": "DealWon",
+      "detail": "Chốt đơn in bao bì 96.000.000 ₫, thanh toán đủ",
+      "kind": "ok"
+    },
+    {
+      "time": "05/08 15:28",
+      "event": "ScheduledMeeting",
+      "detail": "Hẹn gặp tại xưởng, Trần Minh Khoa dự",
+      "kind": "ok"
+    }
+  ],
+  "autonomySteps": [
+    {
+      "title": "Mức 0 — Chỉ ghi nhận"
+    },
+    {
+      "title": "Mức 1 — Tóm tắt"
+    },
+    {
+      "title": "Mức 2 — Chấm điểm + giải thích"
+    },
+    {
+      "title": "Mức 3 — Gợi ý hành động"
+    },
+    {
+      "title": "Mức 4 — Soạn sẵn chờ duyệt"
+    },
+    {
+      "title": "Mức 5 — Tự làm việc thấp rủi ro"
+    },
+    {
+      "title": "Mức 6 — Tự làm việc đã whitelist"
+    }
+  ],
+  "profileDocs": [
+    {
+      "name": "BaoGia_ThanhPhat_Q4.docx",
+      "meta": "18/09 · gửi qua Zalo · agent soạn"
+    },
+    {
+      "name": "HopDong_ThanhPhat_ban_sua.docx",
+      "meta": "21/09 · khách gửi lại"
+    },
+    {
+      "name": "DonHang_BaoBi_T8.xlsx",
+      "meta": "22/08 · đã ghi vào ERP"
+    },
+    {
+      "name": "BienBan_GapXuong_05-08.docx",
+      "meta": "05/08 · Trần Minh Khoa"
+    }
+  ],
+  "touchpoints": [
+    {
+      "name": "Nguyễn Thu Hà",
+      "initials": "TH",
+      "meta": "đang phụ trách · 34 lượt"
+    },
+    {
+      "name": "Trần Minh Khoa",
+      "initials": "MK",
+      "meta": "đã chạm · 12 lượt"
+    },
+    {
+      "name": "Agent Trợ lý thương mại",
+      "initials": "AG",
+      "meta": "đã soạn 3 tài liệu"
+    },
+    {
+      "name": "Đỗ Thanh Mai",
+      "initials": "TM",
+      "meta": "đã chạm · 4 lượt"
+    }
+  ],
+  "idStats": [
+    {
+      "label": "Danh tính đã hợp nhất",
+      "value": "136",
+      "unit": "người",
+      "sub": "trên 148 hồ sơ đang sống"
+    },
+    {
+      "label": "Chờ Sếp xác nhận",
+      "value": "12",
+      "unit": "cặp",
+      "sub": "hệ thống không tự gộp"
+    },
+    {
+      "label": "Đã tách tay",
+      "value": "4",
+      "unit": "lần",
+      "sub": "giữ nguyên lịch sử thao tác"
+    },
+    {
+      "label": "Tài khoản chưa gắn người",
+      "value": "31",
+      "unit": "tài khoản",
+      "sub": "phần lớn là người lạ trong group ngành"
+    }
+  ],
+  "idPairs": [
+    {
+      "aName": "Nguyễn Văn Bảo",
+      "aMeta": "Zalo · +84 903 xxx 118",
+      "aCh": "z",
+      "bName": "Bao Nguyen (Thanh Phat Printing)",
+      "bMeta": "LinkedIn · thanhphat-printing",
+      "bCh": "l",
+      "confidence": "96%",
+      "basis": "trùng số điện thoại và tên công ty",
+      "conf": "high"
+    },
+    {
+      "aName": "Trần Văn Hậu",
+      "aMeta": "Zalo · Group Ngành gỗ",
+      "aCh": "z",
+      "bName": "Hậu Xưởng Gỗ BD",
+      "bMeta": "WhatsApp · +84 918 xxx 407",
+      "bCh": "w",
+      "confidence": "88%",
+      "basis": "trùng cách viết, cùng nhắc xưởng Bình Dương",
+      "conf": "high"
+    },
+    {
+      "aName": "Hoàng Thị Lan",
+      "aMeta": "Zalo · An Khang Logistics",
+      "aCh": "z",
+      "bName": "Lan H. (An Khang)",
+      "bMeta": "WhatsApp · +84 907 xxx 662",
+      "bCh": "w",
+      "confidence": "71%",
+      "basis": "cùng ký tên Lan, cùng chủ đề tuyến lạnh",
+      "conf": "mid"
+    },
+    {
+      "aName": "Phạm Quốc Minh",
+      "aMeta": "Zalo · Nội thất Minh Long",
+      "aCh": "z",
+      "bName": "Minh Pham",
+      "bMeta": "Zalo · số máy thứ hai",
+      "bCh": "z",
+      "confidence": "54%",
+      "basis": "chỉ trùng tên, chưa có tín hiệu khác",
+      "conf": "low"
+    }
+  ],
+  "searchFacets": [
+    {
+      "label": "Ý định: hỏi giá",
+      "on": true
+    },
+    {
+      "label": "Ngành: gỗ công nghiệp",
+      "on": true
+    },
+    {
+      "label": "Giá: ≥ 500 triệu ₫",
+      "on": true
+    },
+    {
+      "label": "Trạng thái: chưa chốt",
+      "on": true
+    },
+    {
+      "label": "Thời gian: 6 tháng",
+      "on": true
+    },
+    {
+      "label": "Thái độ: bất kỳ",
+      "on": false
+    }
+  ],
+  "savedQueries": [
+    "khách hỏi giá rồi im lặng trên 30 ngày",
+    "nhân viên nào xử lý tốt khiếu nại giao hàng",
+    "group nào đang nhắc đối thủ nhiều nhất",
+    "ứng viên có tín hiệu đang tìm việc"
+  ],
+  "searchResults": [
+    {
+      "name": "Gỗ Đông Phương",
+      "org": "Đặng Hữu Trí",
+      "intent": "AskedPrice",
+      "price": "540 triệu ₫",
+      "times": "3 lần",
+      "mood": "Trung tính",
+      "potential": "68",
+      "pot": "ok"
+    },
+    {
+      "name": "Nội thất Minh Long",
+      "org": "Phạm Quốc Minh",
+      "intent": "AskedPrice",
+      "price": "310 triệu ₫",
+      "times": "2 lần",
+      "mood": "Tích cực",
+      "potential": "64",
+      "pot": "ok"
+    },
+    {
+      "name": "Xưởng gỗ Bình Dương",
+      "org": "Trần Văn Hậu",
+      "intent": "AskedPrice",
+      "price": "1,2 tỷ ₫",
+      "times": "3 lần",
+      "mood": "Tích cực",
+      "potential": "91",
+      "pot": "ok"
+    },
+    {
+      "name": "Nội thất Hoà Bình",
+      "org": "Lý Thị Vân",
+      "intent": "RequestedSample",
+      "price": "620 triệu ₫",
+      "times": "1 lần",
+      "mood": "Trung tính",
+      "potential": "57",
+      "pot": "warn"
+    },
+    {
+      "name": "Gỗ Trường Thành Mới",
+      "org": "Bùi Đức Thắng",
+      "intent": "AskedPrice",
+      "price": "880 triệu ₫",
+      "times": "4 lần",
+      "mood": "Sốt ruột",
+      "potential": "72",
+      "pot": "ok"
+    },
+    {
+      "name": "Bao bì Sài Gòn Mới",
+      "org": "Trịnh Mỹ Duyên",
+      "intent": "WentSilent",
+      "price": "510 triệu ₫",
+      "times": "2 lần",
+      "mood": "Lạnh",
+      "potential": "31",
+      "pot": "bad"
+    },
+    {
+      "name": "Nội thất An Cư",
+      "org": "Ngô Hoàng Nam",
+      "intent": "ComparedVendor",
+      "price": "740 triệu ₫",
+      "times": "2 lần",
+      "mood": "Nghi ngại",
+      "potential": "49",
+      "pot": "warn"
+    },
+    {
+      "name": "Gỗ Phú Thịnh",
+      "org": "Hà Văn Lộc",
+      "intent": "AskedPrice",
+      "price": "560 triệu ₫",
+      "times": "1 lần",
+      "mood": "Trung tính",
+      "potential": "44",
+      "pot": "warn"
+    }
+  ],
+  "patterns": [
+    {
+      "pct": "72%",
+      "text": "Khách hỏi giá trên 500 triệu ₫ nhưng không chốt đều bị bỏ follow sau lần báo giá thứ nhất."
+    },
+    {
+      "pct": "61%",
+      "text": "Nhóm này phản hồi nhanh nhất trong khung 08:00–10:00, chậm nhất sau 16:00."
+    },
+    {
+      "pct": "44%",
+      "text": "Có nhắc tới đối thủ Minh Long trong vòng ba tuần trước khi im lặng."
+    },
+    {
+      "pct": "28%",
+      "text": "Từng yêu cầu mẫu nhưng chưa ai gửi mẫu — việc bị rơi giữa hai ban."
+    }
+  ],
+  "bulkActions": [
+    {
+      "label": "Gán người phụ trách"
+    },
+    {
+      "label": "Soạn tin follow chờ duyệt"
+    },
+    {
+      "label": "Đưa vào bảng cơ hội"
+    },
+    {
+      "label": "Lưu thành góc nhìn theo dõi"
+    }
+  ],
+  "oppColumns": [
+    {
+      "name": "Tín hiệu thô",
+      "count": "14",
+      "value": "≈ 1,9 tỷ ₫",
+      "cards": [
+        {
+          "id": "OPP-1851",
+          "heat": "58",
+          "need": "Cần kho lạnh 400 pallet khu vực Tân Cảng",
+          "who": "Lê Thị Bích · WhatsApp",
+          "value": "chưa rõ",
+          "confidence": "thấp",
+          "match": "Chưa ráp được nguồn cung",
+          "matchOk": false,
+          "hasRisk": false
+        },
+        {
+          "id": "OPP-1849",
+          "heat": "44",
+          "need": "Hỏi nguồn ván phủ melamine giá sỉ",
+          "who": "Người lạ · Group Ngành gỗ",
+          "value": "≈ 200 triệu ₫",
+          "confidence": "thấp",
+          "match": "Chờ xác thực danh tính",
+          "matchOk": false,
+          "hasRisk": false
+        }
+      ]
+    },
+    {
+      "name": "Đã xác thực",
+      "count": "9",
+      "value": "≈ 1,4 tỷ ₫",
+      "cards": [
+        {
+          "id": "OPP-1842",
+          "heat": "91",
+          "need": "3 container ván MDF E1 17mm, giao tháng 10",
+          "who": "Xưởng gỗ Bình Dương · Trần Văn Hậu",
+          "value": "1,2 tỷ ₫",
+          "confidence": "cao",
+          "match": "Khớp 2 nhà cung cấp trong kho",
+          "matchOk": true,
+          "risk": "Chưa ai nhận sau 18 phút. Cơ hội dạng này thường nguội trong 4 giờ.",
+          "hasRisk": true
+        },
+        {
+          "id": "OPP-1839",
+          "heat": "74",
+          "need": "Ứng viên Key Account ngành lạnh",
+          "who": "Võ Thanh Sơn · Group Nhân sự",
+          "value": "—",
+          "confidence": "trung bình",
+          "match": "Khớp vị trí đang trống Ban Kinh doanh",
+          "matchOk": true,
+          "hasRisk": false
+        }
+      ]
+    },
+    {
+      "name": "Đã ráp khớp",
+      "count": "6",
+      "value": "≈ 720 triệu ₫",
+      "cards": [
+        {
+          "id": "OPP-1836",
+          "heat": "68",
+          "need": "Ván MDF 540 triệu ₫ cho đơn nội thất",
+          "who": "Gỗ Đông Phương · Đặng Hữu Trí",
+          "value": "540 triệu ₫",
+          "confidence": "cao",
+          "match": "Ghép Vũ Hải Đăng + kho Bình Dương",
+          "matchOk": true,
+          "hasRisk": false
+        }
+      ]
+    },
+    {
+      "name": "Đang tiếp cận",
+      "count": "5",
+      "value": "≈ 410 triệu ₫",
+      "cards": [
+        {
+          "id": "OPP-1828",
+          "heat": "64",
+          "need": "Báo giá nội thất văn phòng trọn gói",
+          "who": "Nội thất Minh Long · Phạm Quốc Minh",
+          "value": "310 triệu ₫",
+          "confidence": "cao",
+          "match": "Vũ Hải Đăng đang phụ trách",
+          "matchOk": true,
+          "hasRisk": false
+        }
+      ]
+    },
+    {
+      "name": "Đang đàm phán",
+      "count": "4",
+      "value": "≈ 212 triệu ₫",
+      "cards": [
+        {
+          "id": "OPP-1815",
+          "heat": "87",
+          "need": "Hợp đồng in ấn quý 4",
+          "who": "Công ty in Thành Phát · Nguyễn Văn Bảo",
+          "value": "84 triệu ₫",
+          "confidence": "cao",
+          "match": "Nguyễn Thu Hà đang phụ trách",
+          "matchOk": true,
+          "risk": "Ba tin chưa trả lời. Đối thủ Minh Long đã xuất hiện hai lần.",
+          "hasRisk": true
+        },
+        {
+          "id": "OPP-1811",
+          "heat": "78",
+          "need": "Tuyến vận chuyển lạnh quý 4",
+          "who": "An Khang Logistics · Hoàng Thị Lan",
+          "value": "128 triệu ₫",
+          "confidence": "cao",
+          "match": "Trần Minh Khoa · vòng ba",
+          "matchOk": true,
+          "hasRisk": false
+        }
+      ]
+    },
+    {
+      "name": "Đã chuyển nội bộ",
+      "count": "3",
+      "value": "≈ 186 triệu ₫",
+      "cards": [
+        {
+          "id": "OPP-1802",
+          "heat": "52",
+          "need": "Đơn in bao bì 5.000 bản",
+          "who": "Bao bì Sài Gòn Mới",
+          "value": "96 triệu ₫",
+          "confidence": "trung bình",
+          "match": "Đã giao Đỗ Thanh Mai",
+          "matchOk": true,
+          "hasRisk": false
+        }
+      ]
+    },
+    {
+      "name": "Thắng · Trượt · Ngủ đông",
+      "count": "18",
+      "value": "9 thắng · 4 trượt",
+      "cards": [
+        {
+          "id": "OPP-1764",
+          "heat": "—",
+          "need": "Đơn in bao bì tháng 8 — đã thắng",
+          "who": "Công ty in Thành Phát",
+          "value": "96 triệu ₫",
+          "confidence": "cao",
+          "match": "Đã ghi vào ERP",
+          "matchOk": true,
+          "hasRisk": false
+        },
+        {
+          "id": "OPP-1749",
+          "heat": "—",
+          "need": "Ván MDF 510 triệu ₫ — ngủ đông",
+          "who": "Bao bì Sài Gòn Mới",
+          "value": "510 triệu ₫",
+          "confidence": "thấp",
+          "match": "Im lặng 41 ngày",
+          "matchOk": false,
+          "risk": "Mất do không ai follow sau báo giá đầu tiên.",
+          "hasRisk": true
+        }
+      ]
+    }
+  ],
+  "peopleTabs": [
+    {
+      "label": "Nhân viên",
+      "count": "28"
+    },
+    {
+      "label": "Khách hàng",
+      "count": "96"
+    },
+    {
+      "label": "Ứng viên",
+      "count": "11"
+    },
+    {
+      "label": "Học viên",
+      "count": "13"
+    }
+  ],
+  "reviewRows": [
+    {
+      "name": "Nguyễn Thu Hà",
+      "initials": "TH",
+      "role": "Trưởng ban Tài chính · 11 khách",
+      "score": "62",
+      "trend": "down",
+      "signal": "Trung vị phản hồi tăng từ 12 lên 84 phút. Ba khách nhắc lại mà chưa được trả lời, trong đó có Thành Phát 87 điểm rủi ro.",
+      "rec": "Giảm tải: chuyển 4 khách sang Đỗ Thanh Mai. Đây là dấu hiệu quá tải, không phải thờ ơ."
+    },
+    {
+      "name": "Trần Minh Khoa",
+      "initials": "MK",
+      "role": "Giám đốc vận hành · 14 khách",
+      "score": "71",
+      "trend": "flat",
+      "signal": "Chất lượng chăm sóc tốt nhưng đang là cầu nối của 9 nhóm và ôm 14 quan hệ — rủi ro tập trung một người.",
+      "rec": "Phân bổ lại 3 quan hệ đối tác cho Vũ Hải Đăng để giảm rủi ro phụ thuộc."
+    },
+    {
+      "name": "Vũ Hải Đăng",
+      "initials": "HĐ",
+      "role": "Trưởng phòng Kinh doanh · 8 khách",
+      "score": "84",
+      "trend": "up",
+      "signal": "Tỷ lệ follow sau báo giá đạt 92%, cao nhất tổ chức. Hai khách lạnh được làm ấm lại trong tuần.",
+      "rec": "Lấy kịch bản follow của người này làm mẫu chuẩn cho ban kinh doanh."
+    },
+    {
+      "name": "Đỗ Thanh Mai",
+      "initials": "TM",
+      "role": "Kế toán trưởng · 6 khách",
+      "score": "78",
+      "trend": "up",
+      "signal": "Phản hồi đều trong giờ hành chính, không có tin nào quá 30 phút. Ngoài giờ không trả lời — phù hợp giờ im lặng.",
+      "rec": "Còn dư tải, có thể nhận thêm 3–4 khách từ Ban Tài chính."
+    },
+    {
+      "name": "Phạm Anh Tú",
+      "initials": "AT",
+      "role": "Quản lý kho · 4 khách",
+      "score": "54",
+      "trend": "down",
+      "signal": "Hai lần hứa mốc giao hàng rồi không cập nhật lại. Một khách phải tự hỏi tiến độ ba lần.",
+      "rec": "Bật nhắc tự động cho mọi lời hứa có mốc thời gian của người này."
+    }
+  ],
+  "careKpis": [
+    {
+      "label": "Trung vị phản hồi",
+      "value": "24",
+      "unit": "phút",
+      "sub": "Mục tiêu dưới 15 phút"
+    },
+    {
+      "label": "Follow sau báo giá",
+      "value": "68",
+      "unit": "%",
+      "sub": "32% báo giá không ai follow lại"
+    },
+    {
+      "label": "Hứa rồi quên",
+      "value": "11",
+      "unit": "lần / 30 ngày",
+      "sub": "Tập trung ở 2 người"
+    },
+    {
+      "label": "Khách bị bỏ rơi",
+      "value": "6",
+      "unit": "khách",
+      "sub": "Không ai chạm trên 30 ngày"
+    },
+    {
+      "label": "Độ phủ follow-up",
+      "value": "81",
+      "unit": "%",
+      "sub": "↑ 7 điểm so với tháng trước"
+    }
+  ],
+  "careHours": [
+    "08",
+    "10",
+    "12",
+    "14",
+    "16",
+    "18",
+    "20",
+    "22"
+  ],
+  "careGrid": [
+    {
+      "name": "Nguyễn Thu Hà",
+      "cells": [
+        {
+          "v": "14",
+          "title": "Nguyễn Thu Hà · 08:00 — 14 phút"
+        },
+        {
+          "v": "22",
+          "title": "Nguyễn Thu Hà · 10:00 — 22 phút"
+        },
+        {
+          "v": "38",
+          "title": "Nguyễn Thu Hà · 12:00 — 38 phút"
+        },
+        {
+          "v": "84",
+          "title": "Nguyễn Thu Hà · 14:00 — 84 phút"
+        },
+        {
+          "v": "96",
+          "title": "Nguyễn Thu Hà · 16:00 — 96 phút"
+        },
+        {
+          "v": "62",
+          "title": "Nguyễn Thu Hà · 18:00 — 62 phút"
+        },
+        {
+          "v": "—",
+          "title": "Nguyễn Thu Hà · 20:00 — không hoạt động"
+        },
+        {
+          "v": "—",
+          "title": "Nguyễn Thu Hà · 22:00 — không hoạt động"
+        }
+      ]
+    },
+    {
+      "name": "Trần Minh Khoa",
+      "cells": [
+        {
+          "v": "8",
+          "title": "Trần Minh Khoa · 08:00 — 8 phút"
+        },
+        {
+          "v": "11",
+          "title": "Trần Minh Khoa · 10:00 — 11 phút"
+        },
+        {
+          "v": "24",
+          "title": "Trần Minh Khoa · 12:00 — 24 phút"
+        },
+        {
+          "v": "18",
+          "title": "Trần Minh Khoa · 14:00 — 18 phút"
+        },
+        {
+          "v": "22",
+          "title": "Trần Minh Khoa · 16:00 — 22 phút"
+        },
+        {
+          "v": "26",
+          "title": "Trần Minh Khoa · 18:00 — 26 phút"
+        },
+        {
+          "v": "34",
+          "title": "Trần Minh Khoa · 20:00 — 34 phút"
+        },
+        {
+          "v": "41",
+          "title": "Trần Minh Khoa · 22:00 — 41 phút"
+        }
+      ]
+    },
+    {
+      "name": "Vũ Hải Đăng",
+      "cells": [
+        {
+          "v": "6",
+          "title": "Vũ Hải Đăng · 08:00 — 6 phút"
+        },
+        {
+          "v": "9",
+          "title": "Vũ Hải Đăng · 10:00 — 9 phút"
+        },
+        {
+          "v": "14",
+          "title": "Vũ Hải Đăng · 12:00 — 14 phút"
+        },
+        {
+          "v": "12",
+          "title": "Vũ Hải Đăng · 14:00 — 12 phút"
+        },
+        {
+          "v": "11",
+          "title": "Vũ Hải Đăng · 16:00 — 11 phút"
+        },
+        {
+          "v": "16",
+          "title": "Vũ Hải Đăng · 18:00 — 16 phút"
+        },
+        {
+          "v": "—",
+          "title": "Vũ Hải Đăng · 20:00 — không hoạt động"
+        },
+        {
+          "v": "—",
+          "title": "Vũ Hải Đăng · 22:00 — không hoạt động"
+        }
+      ]
+    },
+    {
+      "name": "Đỗ Thanh Mai",
+      "cells": [
+        {
+          "v": "11",
+          "title": "Đỗ Thanh Mai · 08:00 — 11 phút"
+        },
+        {
+          "v": "13",
+          "title": "Đỗ Thanh Mai · 10:00 — 13 phút"
+        },
+        {
+          "v": "21",
+          "title": "Đỗ Thanh Mai · 12:00 — 21 phút"
+        },
+        {
+          "v": "19",
+          "title": "Đỗ Thanh Mai · 14:00 — 19 phút"
+        },
+        {
+          "v": "24",
+          "title": "Đỗ Thanh Mai · 16:00 — 24 phút"
+        },
+        {
+          "v": "—",
+          "title": "Đỗ Thanh Mai · 18:00 — không hoạt động"
+        },
+        {
+          "v": "—",
+          "title": "Đỗ Thanh Mai · 20:00 — không hoạt động"
+        },
+        {
+          "v": "—",
+          "title": "Đỗ Thanh Mai · 22:00 — không hoạt động"
+        }
+      ]
+    },
+    {
+      "name": "Phạm Anh Tú",
+      "cells": [
+        {
+          "v": "18",
+          "title": "Phạm Anh Tú · 08:00 — 18 phút"
+        },
+        {
+          "v": "26",
+          "title": "Phạm Anh Tú · 10:00 — 26 phút"
+        },
+        {
+          "v": "44",
+          "title": "Phạm Anh Tú · 12:00 — 44 phút"
+        },
+        {
+          "v": "51",
+          "title": "Phạm Anh Tú · 14:00 — 51 phút"
+        },
+        {
+          "v": "68",
+          "title": "Phạm Anh Tú · 16:00 — 68 phút"
+        },
+        {
+          "v": "72",
+          "title": "Phạm Anh Tú · 18:00 — 72 phút"
+        },
+        {
+          "v": "—",
+          "title": "Phạm Anh Tú · 20:00 — không hoạt động"
+        },
+        {
+          "v": "—",
+          "title": "Phạm Anh Tú · 22:00 — không hoạt động"
+        }
+      ]
+    }
+  ],
+  "carePatterns": [
+    {
+      "label": "Quên khách sau khi gửi báo giá"
+    },
+    {
+      "label": "Hứa mốc thời gian rồi không cập nhật"
+    },
+    {
+      "label": "Follow quá muộn (sau 7 ngày)"
+    },
+    {
+      "label": "Follow quá sớm (dưới 2 giờ, gây phiền)"
+    },
+    {
+      "label": "Giọng điệu gây khó chịu"
+    },
+    {
+      "label": "Chăm sóc tốt rồi biến mất"
+    }
+  ],
+  "scripts": [
+    {
+      "text": "Báo giá kèm mốc giao cụ thể, follow lại đúng ngày đã hứa — thắng 74% các ca áp dụng.",
+      "meta": "32 ca · kịch bản thắng"
+    },
+    {
+      "text": "Gửi mẫu trước khi khách hỏi giá lần hai — thắng 61%.",
+      "meta": "18 ca · kịch bản thắng"
+    },
+    {
+      "text": "Trả lời sau hơn 60 phút ba lần liên tiếp — mất khách 80%.",
+      "meta": "15 ca · kịch bản mất"
+    },
+    {
+      "text": "Để khách tự hỏi tiến độ từ lần thứ hai trở đi — mất khách 68%.",
+      "meta": "22 ca · kịch bản mất"
+    }
+  ],
+  "drafts": [
+    {
+      "id": "ACT-0231",
+      "kind": "Báo giá",
+      "title": "Báo giá hợp đồng in ấn quý 4 cho Thành Phát",
+      "agent": "Trợ lý thương mại",
+      "age": "47 phút",
+      "active": true
+    },
+    {
+      "id": "ACT-0232",
+      "kind": "Tin nhắn",
+      "title": "Trả lời anh Bảo về tiến độ, xin lỗi vì chậm phản hồi",
+      "agent": "Trợ lý thương mại",
+      "age": "12 phút"
+    },
+    {
+      "id": "ACT-0233",
+      "kind": "Tin nhắn",
+      "title": "Chào hỏi Xưởng gỗ Bình Dương về đơn 3 container MDF",
+      "agent": "Key Account junior",
+      "age": "18 phút"
+    },
+    {
+      "id": "ACT-0234",
+      "kind": "Hợp đồng",
+      "title": "Biên bản đàm phán tuyến lạnh An Khang vòng ba",
+      "agent": "Admin hậu cần",
+      "age": "2 giờ"
+    },
+    {
+      "id": "ACT-0235",
+      "kind": "Nhắc việc",
+      "title": "Nhắc Phạm Anh Tú cập nhật mốc giao đã hứa",
+      "agent": "Thư ký cá nhân",
+      "age": "3 giờ"
+    },
+    {
+      "id": "ACT-0236",
+      "kind": "Báo cáo",
+      "title": "Tổng hợp tuần 38 cho họp giao ban thứ Hai",
+      "agent": "Admin hậu cần",
+      "age": "5 giờ"
+    }
+  ],
+  "draftBody": [
+    "Cảm ơn anh đã kiên nhẫn chờ phản hồi. Em xin lỗi về việc chậm trả lời ba tin nhắn gần nhất của anh.",
+    "Về đơn in catalogue 5.000 bản giấy C300 quý 4, bên em xác nhận mức giá 84.000.000 ₫, đã bao gồm VAT và giao tận xưởng.",
+    "Mốc giao: 12 ngày kể từ ngày anh xác nhận, tức ngày 03/10/2026 nếu chốt trong hôm nay. Bên em cam kết mốc này bằng văn bản trong hợp đồng.",
+    "Về mức giá Minh Long anh nhắc tới, em xin giải thích: phần chênh 4% nằm ở loại giấy và bảo hành màu, em có thể gửi mẫu so sánh để anh tự đánh giá.",
+    "Nếu anh cần gấp hơn 12 ngày, em xin phép trao đổi lại với xưởng và trả lời anh trong hôm nay."
+  ],
+  "draftSources": [
+    {
+      "label": "Hồ sơ Thành Phát · 214 sự kiện"
+    },
+    {
+      "label": "Biểu giá quý 4"
+    },
+    {
+      "label": "Tồn kho ERP 21/09"
+    },
+    {
+      "label": "3 báo giá đối chiếu"
+    },
+    {
+      "label": "Ghi chú tay của Sếp"
+    }
+  ],
+  "wbContext": [
+    {
+      "key": "đối tượng",
+      "value": "Công ty in Thành Phát · Nguyễn Văn Bảo"
+    },
+    {
+      "key": "độ nóng",
+      "value": "87 — ba tin chưa trả lời"
+    },
+    {
+      "key": "rủi ro churn",
+      "value": "81 — mẫu giống 4 ca đã mất"
+    },
+    {
+      "key": "giai đoạn",
+      "value": "Đang đàm phán · vòng hai"
+    },
+    {
+      "key": "phong cách",
+      "value": "Ngắn, trực tiếp, không vòng vo"
+    },
+    {
+      "key": "ghi chú Sếp",
+      "value": "Đừng để junior follow khách này"
+    }
+  ],
+  "wbSideActions": [
+    {
+      "label": "Ghi vào CRM và cập nhật pipeline",
+      "on": true
+    },
+    {
+      "label": "Tạo việc theo dõi hạn giao 03/10",
+      "on": true
+    },
+    {
+      "label": "Đặt nhắc follow sau 48 giờ",
+      "on": true
+    },
+    {
+      "label": "Gửi kèm bảng so sánh giấy C300",
+      "on": false
+    },
+    {
+      "label": "Tạo đơn nháp trong ERP",
+      "on": false
+    }
+  ],
+  "agents": [
+    {
+      "name": "Trợ lý thương mại",
+      "role": "Báo giá, hợp đồng, follow khách",
+      "on": true,
+      "autonomy": "mức 4",
+      "spoke": "18 phát ngôn hôm nay",
+      "fields": [
+        {
+          "key": "Xưng hô",
+          "value": "gọi Sếp là \"Sếp Nguyễn Văn A\", tự gọi \"em\""
+        },
+        {
+          "key": "Giọng",
+          "value": "lễ phép, ngắn gọn, không hứa mốc chưa xác nhận"
+        },
+        {
+          "key": "Kênh",
+          "value": "Zalo · 12 nhóm kinh doanh"
+        },
+        {
+          "key": "Được nói",
+          "value": "khi được tag, hoặc khi khách hỏi giá"
+        },
+        {
+          "key": "Cấm",
+          "value": "không tự cam kết giá, không đàm phán điều khoản"
+        }
+      ]
+    },
+    {
+      "name": "Key Account junior",
+      "role": "Canh group ngành, bắt tín hiệu cơ hội",
+      "on": true,
+      "autonomy": "mức 3",
+      "spoke": "6 phát ngôn hôm nay",
+      "fields": [
+        {
+          "key": "Xưng hô",
+          "value": "gọi khách là \"anh/chị\", tự gọi \"mình\""
+        },
+        {
+          "key": "Giọng",
+          "value": "thân thiện, đúng mực, không chào hàng lộ liễu"
+        },
+        {
+          "key": "Kênh",
+          "value": "Zalo · 9 group ngành bên ngoài"
+        },
+        {
+          "key": "Được nói",
+          "value": "chỉ khi có tín hiệu hỏi giá rõ ràng"
+        },
+        {
+          "key": "Cấm",
+          "value": "không nhắn riêng người chưa từng tương tác"
+        }
+      ]
+    },
+    {
+      "name": "Admin hậu cần",
+      "role": "Biên bản, nhắc lịch, chứng từ",
+      "on": true,
+      "autonomy": "mức 5",
+      "spoke": "22 phát ngôn hôm nay",
+      "fields": [
+        {
+          "key": "Xưng hô",
+          "value": "trung tính, văn phong hành chính"
+        },
+        {
+          "key": "Giọng",
+          "value": "khô, chính xác, luôn kèm mốc thời gian"
+        },
+        {
+          "key": "Kênh",
+          "value": "Zalo nội bộ · Console"
+        },
+        {
+          "key": "Được nói",
+          "value": "tự nhắc lịch và chứng từ trong phạm vi nội bộ"
+        },
+        {
+          "key": "Cấm",
+          "value": "không liên hệ khách hàng bên ngoài"
+        }
+      ]
+    },
+    {
+      "name": "CSKH ca chiều",
+      "role": "Bắt tín hiệu bất mãn, giữ khách",
+      "on": true,
+      "autonomy": "mức 3",
+      "spoke": "4 phát ngôn hôm nay",
+      "fields": [
+        {
+          "key": "Xưng hô",
+          "value": "gọi khách là \"anh/chị\", tự gọi \"em\""
+        },
+        {
+          "key": "Giọng",
+          "value": "mềm, xin lỗi trước khi giải thích"
+        },
+        {
+          "key": "Kênh",
+          "value": "Zalo · WhatsApp · giờ 13:00–21:00"
+        },
+        {
+          "key": "Được nói",
+          "value": "khi phát hiện tín hiệu bất mãn"
+        },
+        {
+          "key": "Cấm",
+          "value": "không hứa bồi thường, không nhận lỗi thay công ty"
+        }
+      ]
+    },
+    {
+      "name": "Recruiter",
+      "role": "Sàng ứng viên từ group nhân sự",
+      "on": false,
+      "autonomy": "mức 2",
+      "spoke": "đang tắt",
+      "fields": [
+        {
+          "key": "Xưng hô",
+          "value": "trung tính, chuyên nghiệp"
+        },
+        {
+          "key": "Giọng",
+          "value": "rõ ràng, không hứa mức lương"
+        },
+        {
+          "key": "Kênh",
+          "value": "Zalo · 3 group nhân sự"
+        },
+        {
+          "key": "Được nói",
+          "value": "chỉ quan sát, không chủ động nhắn"
+        },
+        {
+          "key": "Cấm",
+          "value": "không đánh giá công khai ứng viên trong group"
+        }
+      ]
+    },
+    {
+      "name": "Thư ký cá nhân",
+      "role": "Việc riêng của Sếp, bộ nhớ thứ hai",
+      "on": true,
+      "autonomy": "mức 5",
+      "spoke": "9 phát ngôn hôm nay",
+      "fields": [
+        {
+          "key": "Xưng hô",
+          "value": "gọi \"Sếp\", tự gọi \"em\""
+        },
+        {
+          "key": "Giọng",
+          "value": "ngắn, chỉ báo việc cần biết"
+        },
+        {
+          "key": "Kênh",
+          "value": "chỉ nhắn riêng với Sếp"
+        },
+        {
+          "key": "Được nói",
+          "value": "tự nhắc việc và tóm tắt ngày"
+        },
+        {
+          "key": "Cấm",
+          "value": "không xuất hiện trong bất kỳ nhóm nào"
+        }
+      ]
+    }
+  ],
+  "agentLog": [
+    {
+      "time": "15:11:44",
+      "agent": "Trợ lý thương mại",
+      "what": "Soạn nháp báo giá 84 triệu ₫ cho Thành Phát — dừng chờ duyệt"
+    },
+    {
+      "time": "14:52:20",
+      "agent": "Key Account junior",
+      "what": "Trả lời trong Group Ngành gỗ khi được tag về quy cách MDF E1"
+    },
+    {
+      "time": "14:31:08",
+      "agent": "Admin hậu cần",
+      "what": "Nhắc Ban Kế toán mốc báo cáo quý 3, tự gửi ở mức tự trị 5"
+    },
+    {
+      "time": "13:55:22",
+      "agent": "CSKH ca chiều",
+      "what": "Phát hiện tín hiệu bất mãn từ Thành Phát, đẩy cảnh báo ALR-0233"
+    },
+    {
+      "time": "11:20:47",
+      "agent": "Thư ký cá nhân",
+      "what": "Tóm tắt buổi sáng cho Sếp: 3 việc cần quyết, 1 rủi ro"
+    },
+    {
+      "time": "09:14:08",
+      "agent": "Trợ lý thương mại",
+      "what": "Im lặng có chủ đích trong nhóm Kế toán — không được tag"
+    }
+  ],
+  "agentTemplates": [
+    {
+      "name": "Trợ lý thương mại",
+      "note": "đang dùng · báo giá và follow khách",
+      "on": true
+    },
+    {
+      "name": "Key Account junior",
+      "note": "đang dùng · canh group ngành",
+      "on": true
+    },
+    {
+      "name": "Admin hậu cần",
+      "note": "đang dùng · biên bản và chứng từ",
+      "on": true
+    },
+    {
+      "name": "CSKH",
+      "note": "đang dùng · giữ khách",
+      "on": true
+    },
+    {
+      "name": "Recruiter",
+      "note": "có sẵn · sàng ứng viên",
+      "on": false
+    },
+    {
+      "name": "Thư ký cá nhân",
+      "note": "đang dùng · việc riêng của Sếp",
+      "on": true
+    },
+    {
+      "name": "Bé Heo",
+      "note": "mẫu hoài niệm · tắt mặc định",
+      "on": false
+    }
+  ],
+  "sysTabs": [
+    {
+      "label": "Kênh & đăng nhập",
+      "count": "QR · PIN"
+    },
+    {
+      "label": "Bộ não AI",
+      "count": "6 model"
+    },
+    {
+      "label": "Quyền hạn",
+      "count": "5 vai trò"
+    },
+    {
+      "label": "Nhật ký",
+      "count": "30 ngày"
+    }
+  ],
+  "plugins": [
+    {
+      "id": "@gen/chassis-store",
+      "name": "Store · SSOT",
+      "layer": "chassis",
+      "st": "ok",
+      "metric": "1,4 GB",
+      "on": true,
+      "state": "Khoẻ mạnh"
+    },
+    {
+      "id": "@gen/chassis-policy",
+      "name": "Policy Engine",
+      "layer": "chassis",
+      "st": "ok",
+      "metric": "0 vi phạm",
+      "on": true,
+      "state": "Khoẻ mạnh"
+    },
+    {
+      "id": "@gen/channel-zalo",
+      "name": "Kênh Zalo",
+      "layer": "channel",
+      "st": "ok",
+      "metric": "99,9%",
+      "on": true,
+      "state": "Khoẻ mạnh"
+    },
+    {
+      "id": "@gen/channel-whatsapp",
+      "name": "Kênh WhatsApp",
+      "layer": "channel",
+      "st": "warn",
+      "metric": "chờ QR",
+      "on": true,
+      "state": "Suy giảm"
+    },
+    {
+      "id": "@gen/intel-intent",
+      "name": "Intent Extractor",
+      "layer": "intelligence",
+      "st": "ok",
+      "metric": "3.184 sự kiện",
+      "on": true,
+      "state": "Khoẻ mạnh"
+    },
+    {
+      "id": "@gen/intel-score",
+      "name": "Evaluation Fabric",
+      "layer": "intelligence",
+      "st": "ok",
+      "metric": "148 hồ sơ",
+      "on": true,
+      "state": "Khoẻ mạnh"
+    },
+    {
+      "id": "@gen/intel-match",
+      "name": "Opportunity Engine",
+      "layer": "intelligence",
+      "st": "ok",
+      "metric": "41 tín hiệu",
+      "on": true,
+      "state": "Khoẻ mạnh"
+    },
+    {
+      "id": "@gen/intel-warning",
+      "name": "Early Warning System",
+      "layer": "intelligence",
+      "st": "ok",
+      "metric": "7 cảnh báo",
+      "on": true,
+      "state": "Khoẻ mạnh"
+    },
+    {
+      "id": "@gen/provider-antigravity",
+      "name": "Antigravity Brain",
+      "layer": "provider",
+      "st": "ok",
+      "metric": "0 ₫",
+      "on": true,
+      "state": "Khoẻ mạnh"
+    },
+    {
+      "id": "@gen/provider-deepseek",
+      "name": "DeepSeek Reasoning",
+      "layer": "provider",
+      "st": "warn",
+      "metric": "còn 18%",
+      "on": true,
+      "state": "Suy giảm"
+    },
+    {
+      "id": "@gen/action-office",
+      "name": "Office Reporter",
+      "layer": "action",
+      "st": "ok",
+      "metric": "18 tệp",
+      "on": true,
+      "state": "Khoẻ mạnh"
+    }
+  ],
+  "channels": [
+    {
+      "name": "Zalo",
+      "state": "Đang kết nối",
+      "meta": "Phiên mở 14 ngày 06:41 · 38 nhóm lắng nghe · thiết bị iPhone của Sếp",
+      "btn": "Đăng xuất",
+      "needsQr": false,
+      "stats": [
+        {
+          "label": "Tin 24h",
+          "value": "1.244"
+        },
+        {
+          "label": "Được tag",
+          "value": "31"
+        },
+        {
+          "label": "Độ trễ",
+          "value": "0,42s"
+        },
+        {
+          "label": "Thời gian trực",
+          "value": "99,9%"
+        }
+      ]
+    },
+    {
+      "name": "WhatsApp",
+      "state": "Phiên hết hạn",
+      "meta": "Ngừng nhận tin từ 15:05 · 3 tin trong hàng đợi gửi · 4 nhóm lắng nghe",
+      "btn": "Quét lại QR",
+      "needsQr": true,
+      "stats": [
+        {
+          "label": "Tin 24h",
+          "value": "96"
+        },
+        {
+          "label": "Được tag",
+          "value": "9"
+        },
+        {
+          "label": "Độ trễ",
+          "value": "0,51s"
+        },
+        {
+          "label": "Thời gian trực",
+          "value": "71,2%"
+        }
+      ]
+    },
+    {
+      "name": "Telegram",
+      "state": "Chưa cài",
+      "meta": "Kênh này chưa có trong bản đang chạy",
+      "btn": "Cài plugin",
+      "needsQr": false,
+      "stats": [
+        {
+          "label": "Tin 24h",
+          "value": "—"
+        },
+        {
+          "label": "Được tag",
+          "value": "—"
+        },
+        {
+          "label": "Độ trễ",
+          "value": "—"
+        },
+        {
+          "label": "Thời gian trực",
+          "value": "—"
+        }
+      ]
+    },
+    {
+      "name": "LinkedIn",
+      "state": "Chỉ đọc danh tính",
+      "meta": "Dùng để hợp nhất danh tính, không nhận tin nhắn",
+      "btn": "Cấu hình",
+      "needsQr": false,
+      "stats": [
+        {
+          "label": "Tin 24h",
+          "value": "—"
+        },
+        {
+          "label": "Danh tính",
+          "value": "34"
+        },
+        {
+          "label": "Đã gộp",
+          "value": "12"
+        },
+        {
+          "label": "Thời gian trực",
+          "value": "—"
+        }
+      ]
+    }
+  ],
+  "pinDigits": [
+    "•",
+    "•",
+    "•",
+    "•",
+    "•",
+    "•"
+  ],
+  "pinRules": [
+    {
+      "key": "yêu cầu PIN khi",
+      "value": "đăng xuất kênh, đổi tài khoản CLI, cài plugin, đổi quyền"
+    },
+    {
+      "key": "hết hạn phiên PIN",
+      "value": "sau 30 phút không thao tác"
+    },
+    {
+      "key": "nhập sai 5 lần",
+      "value": "khoá Console 15 phút và báo qua Zalo của Sếp"
+    },
+    {
+      "key": "ghi nhật ký",
+      "value": "mọi lần nhập, kể cả sai, đều vào Action Log"
+    }
+  ],
+  "creds": [
+    {
+      "name": "Gemini API — 4 khoá xoay vòng",
+      "meta": "GEM-KEY-01 … 04 · làm mới 00:00",
+      "state": "Hoạt động"
+    },
+    {
+      "name": "DeepSeek API",
+      "meta": "DS-KEY-01 · còn 18% hạn mức",
+      "state": "Sắp cạn"
+    },
+    {
+      "name": "Zalo — khoá phiên QR",
+      "meta": "gắn thiết bị iPhone của Sếp",
+      "state": "Hoạt động"
+    },
+    {
+      "name": "WhatsApp — khoá phiên QR",
+      "meta": "hết hạn 15:05 hôm nay",
+      "state": "Hết hạn"
+    }
+  ],
+  "models": [
+    {
+      "name": "gemini-2.5-pro",
+      "role": "Core agent · suy luận chính",
+      "provider": "Antigravity CLI",
+      "used": "1.204 / 3.200",
+      "left": "62%",
+      "p95": "3,4s",
+      "st": "ok",
+      "state": "Khoẻ mạnh"
+    },
+    {
+      "name": "gemini-2.5-flash",
+      "role": "Trả lời nhanh trong nhóm",
+      "provider": "Gemini API · 4 khoá",
+      "used": "8.412 / 16.000",
+      "left": "48%",
+      "p95": "1,1s",
+      "st": "ok",
+      "state": "Khoẻ mạnh"
+    },
+    {
+      "name": "gemini-2.5-flash-lite",
+      "role": "Tách ý định, phân loại",
+      "provider": "Gemini API · 4 khoá",
+      "used": "2.986 / 9.600",
+      "left": "69%",
+      "p95": "0,6s",
+      "st": "ok",
+      "state": "Khoẻ mạnh"
+    },
+    {
+      "name": "deepseek-reasoner",
+      "role": "Chấm điểm và suy luận dài",
+      "provider": "DeepSeek",
+      "used": "3.184 / 3.900",
+      "left": "18%",
+      "p95": "4,1s",
+      "st": "warn",
+      "state": "Sắp cạn hạn mức"
+    },
+    {
+      "name": "imagen-4.0",
+      "role": "Hình minh hoạ",
+      "provider": "Antigravity CLI",
+      "used": "96 / 400",
+      "left": "76%",
+      "p95": "7,8s",
+      "st": "ok",
+      "state": "Khoẻ mạnh"
+    },
+    {
+      "name": "text-embedding-004",
+      "role": "Đánh chỉ mục kho hội thoại",
+      "provider": "Gemini API",
+      "used": "184k / 420k",
+      "left": "56%",
+      "p95": "0,2s",
+      "st": "ok",
+      "state": "Khoẻ mạnh"
+    }
+  ],
+  "providers": [
+    {
+      "rank": "01",
+      "name": "Antigravity Brain",
+      "model": "antigravity-cli · gemini-2.5-pro",
+      "cost": "0 ₫",
+      "state": "Đang phục vụ"
+    },
+    {
+      "rank": "02",
+      "name": "Gemini API",
+      "model": "gemini-2.5-flash · 4 khoá xoay vòng",
+      "cost": "0 ₫",
+      "state": "Dự phòng"
+    },
+    {
+      "rank": "03",
+      "name": "DeepSeek",
+      "model": "deepseek-reasoner",
+      "cost": "≈ 380 ₫/1k",
+      "state": "Còn 18%"
+    }
+  ],
+  "failoverRules": [
+    {
+      "key": "hết hạn mức",
+      "value": "chuyển xuống nhà cung cấp kế tiếp trong chuỗi"
+    },
+    {
+      "key": "ngắt mạch",
+      "value": "giữ nguyên hội thoại, thử lại sau 60 giây"
+    },
+    {
+      "key": "hết chuỗi",
+      "value": "xếp hàng và báo Sếp qua hàng đợi cần xử lý"
+    },
+    {
+      "key": "ngưỡng cảnh báo",
+      "value": "còn dưới 20% hạn mức trên bất kỳ model nào"
+    }
+  ],
+  "permCols": [
+    "Tổng quan",
+    "Hàng đợi",
+    "Hồ sơ khách",
+    "Đánh giá nhân sự",
+    "Cơ hội",
+    "Hành động",
+    "Nhật ký"
+  ],
+  "permRows": [
+    {
+      "name": "Owner — Sếp",
+      "meta": "1 người · thấy toàn cảnh",
+      "cells": [
+        {
+          "title": "Toàn quyền"
+        },
+        {
+          "title": "Toàn quyền"
+        },
+        {
+          "title": "Toàn quyền"
+        },
+        {
+          "title": "Toàn quyền"
+        },
+        {
+          "title": "Toàn quyền"
+        },
+        {
+          "title": "Toàn quyền"
+        },
+        {
+          "title": "Toàn quyền"
+        }
+      ]
+    },
+    {
+      "name": "Manager",
+      "meta": "2 người · thấy team mình",
+      "cells": [
+        {
+          "title": "Toàn quyền"
+        },
+        {
+          "title": "Toàn quyền"
+        },
+        {
+          "title": "Toàn quyền"
+        },
+        {
+          "title": "Có giới hạn"
+        },
+        {
+          "title": "Toàn quyền"
+        },
+        {
+          "title": "Toàn quyền"
+        },
+        {
+          "title": "Có giới hạn"
+        }
+      ]
+    },
+    {
+      "name": "Operator",
+      "meta": "5 người · thấy hàng đợi việc",
+      "cells": [
+        {
+          "title": "Có giới hạn"
+        },
+        {
+          "title": "Toàn quyền"
+        },
+        {
+          "title": "Toàn quyền"
+        },
+        {
+          "title": "Không có quyền"
+        },
+        {
+          "title": "Toàn quyền"
+        },
+        {
+          "title": "Có giới hạn"
+        },
+        {
+          "title": "Không có quyền"
+        }
+      ]
+    },
+    {
+      "name": "Agent nhân viên",
+      "meta": "18 người · chỉ khách được phân",
+      "cells": [
+        {
+          "title": "Không có quyền"
+        },
+        {
+          "title": "Có giới hạn"
+        },
+        {
+          "title": "Có giới hạn"
+        },
+        {
+          "title": "Không có quyền"
+        },
+        {
+          "title": "Có giới hạn"
+        },
+        {
+          "title": "Có giới hạn"
+        },
+        {
+          "title": "Không có quyền"
+        }
+      ]
+    },
+    {
+      "name": "Auditor",
+      "meta": "1 người · xem, không hành động",
+      "cells": [
+        {
+          "title": "Toàn quyền"
+        },
+        {
+          "title": "Có giới hạn"
+        },
+        {
+          "title": "Có giới hạn"
+        },
+        {
+          "title": "Có giới hạn"
+        },
+        {
+          "title": "Có giới hạn"
+        },
+        {
+          "title": "Không có quyền"
+        },
+        {
+          "title": "Toàn quyền"
+        }
+      ]
+    }
+  ],
+  "listenGroups": [
+    {
+      "name": "Vận hành Genesis — Quý 4",
+      "members": "24 thành viên · nội bộ",
+      "ch": "z",
+      "mode": "Chỉ khi được tag",
+      "perm": "Toàn nhóm"
+    },
+    {
+      "name": "Ban Tài chính",
+      "members": "11 thành viên · nội bộ",
+      "ch": "z",
+      "mode": "Chỉ khi được tag",
+      "perm": "Manager"
+    },
+    {
+      "name": "Group Ngành gỗ Miền Nam",
+      "members": "412 thành viên · bên ngoài",
+      "ch": "z",
+      "mode": "Lắng nghe im lặng",
+      "perm": "Owner"
+    },
+    {
+      "name": "Group Nhân sự Logistics",
+      "members": "286 thành viên · bên ngoài",
+      "ch": "z",
+      "mode": "Lắng nghe im lặng",
+      "perm": "Owner"
+    },
+    {
+      "name": "Đối tác in ấn Thành Phát",
+      "members": "4 thành viên · đối tác",
+      "ch": "z",
+      "mode": "Chủ động bắt tín hiệu",
+      "perm": "Toàn nhóm"
+    },
+    {
+      "name": "Điều hành mở rộng",
+      "members": "6 thành viên · nội bộ",
+      "ch": "w",
+      "mode": "Tạm dừng · chờ QR",
+      "perm": "Manager"
+    },
+    {
+      "name": "Nhóm riêng của Sếp",
+      "members": "1 người · riêng tư",
+      "ch": "z",
+      "mode": "Không lắng nghe",
+      "perm": "Owner"
+    }
+  ],
+  "boundaries": [
+    {
+      "label": "Chỉ lắng nghe nhóm tổ chức có quyền hợp lệ",
+      "hint": "Không thể tắt. Nhóm mới phải được Sếp bật thủ công.",
+      "on": true,
+      "locked": true
+    },
+    {
+      "label": "Công khai nội bộ khi dùng dữ liệu để đánh giá nhân sự",
+      "hint": "Nhân viên thấy được mình đang được quan sát chỉ số nào.",
+      "on": true
+    },
+    {
+      "label": "Ẩn dữ liệu nhạy cảm khỏi mọi vai trò dưới Owner",
+      "hint": "Số tài khoản, thông tin sức khoẻ, chuyện đời tư.",
+      "on": true
+    },
+    {
+      "label": "Cảnh báo nhân sự phải có chứng cứ mới được hiện",
+      "hint": "Không hiện cảnh báo nào không dẫn được về hội thoại gốc.",
+      "on": true
+    },
+    {
+      "label": "Cho phép quan sát nhóm thị trường bên ngoài",
+      "hint": "Chỉ đọc tín hiệu cơ hội, không đánh giá cá nhân người lạ.",
+      "on": true
+    },
+    {
+      "label": "Tự động ra quyết định nhân sự",
+      "hint": "Luôn tắt theo thiết kế. Hệ thống không phải máy kết án.",
+      "on": false,
+      "locked": true
+    }
+  ],
+  "auditLog": [
+    {
+      "time": "21/09 15:11:44",
+      "who": "Trợ lý thương mại",
+      "bot": true,
+      "action": "draft.created",
+      "target": "ACT-0231 · báo giá 84 triệu ₫",
+      "level": "mức 4",
+      "result": "Chờ duyệt"
+    },
+    {
+      "time": "21/09 15:05:44",
+      "who": "Hệ thống",
+      "action": "channel.session_expired",
+      "target": "@gen/channel-whatsapp",
+      "level": "—",
+      "result": "Cảnh báo"
+    },
+    {
+      "time": "21/09 14:52:20",
+      "who": "Key Account junior",
+      "bot": true,
+      "action": "message.sent",
+      "target": "Group Ngành gỗ Miền Nam",
+      "level": "mức 3",
+      "result": "Đã gửi"
+    },
+    {
+      "time": "21/09 14:46:03",
+      "who": "Opportunity Engine",
+      "bot": true,
+      "action": "opportunity.matched",
+      "target": "OPP-1842 ↔ 2 nhà cung cấp",
+      "level": "mức 3",
+      "result": "Đã gợi ý"
+    },
+    {
+      "time": "21/09 14:31:08",
+      "who": "Admin hậu cần",
+      "bot": true,
+      "action": "reminder.sent",
+      "target": "Ban Kế toán · báo cáo quý 3",
+      "level": "mức 5",
+      "result": "Tự thực thi"
+    },
+    {
+      "time": "21/09 13:55:22",
+      "who": "Early Warning",
+      "bot": true,
+      "action": "alert.raised",
+      "target": "ALR-0233 · Thành Phát",
+      "level": "mức 2",
+      "result": "Đã báo"
+    },
+    {
+      "time": "21/09 11:02:31",
+      "who": "Anh Nguyễn Văn A",
+      "action": "identity.merged",
+      "target": "Nguyễn Văn Bảo ← LinkedIn",
+      "level": "—",
+      "result": "Thành công"
+    },
+    {
+      "time": "21/09 10:14:52",
+      "who": "Policy Engine",
+      "action": "action.blocked",
+      "target": "Gửi báo giá chưa rà soát",
+      "level": "—",
+      "result": "Đã chặn"
+    },
+    {
+      "time": "21/09 09:14:08",
+      "who": "Anh Nguyễn Văn A",
+      "action": "auth.pin_verified",
+      "target": "Phiên quản trị Console",
+      "level": "—",
+      "result": "Thành công"
+    },
+    {
+      "time": "20/09 16:40:17",
+      "who": "Trần Minh Khoa",
+      "action": "score.overridden",
+      "target": "Sửa tay điểm chăm sóc · Phạm Anh Tú",
+      "level": "—",
+      "result": "Đã ghi"
+    }
+  ],
+  "pipeline": [
+    {
+      "step": "1",
+      "name": "Bridge lắng nghe",
+      "value": "4",
+      "unit": "kênh · 42 nhóm",
+      "note": "Gom nguyên trạng, không xử lý, không lọc ở bước này.",
+      "on": false,
+      "hasArrow": true
+    },
+    {
+      "step": "2",
+      "name": "Kho thô",
+      "value": "18.412",
+      "unit": "bản ghi",
+      "note": "4.204 bản ghi chưa phân loại đang chờ chu kỳ tới.",
+      "on": false,
+      "hasArrow": true
+    },
+    {
+      "step": "3",
+      "name": "Core agent sàng lọc",
+      "value": "15",
+      "unit": "phút / chu kỳ",
+      "note": "Hoặc chạy ngay khi kho thô vượt 500 bản ghi.",
+      "on": false,
+      "hasArrow": true
+    },
+    {
+      "step": "4",
+      "name": "Kho sạch SSOT",
+      "value": "14.208",
+      "unit": "bản ghi",
+      "note": "Đã gắn ID nhóm, ID người, nhãn và điểm số.",
+      "on": false,
+      "last": true,
+      "hasArrow": false
+    }
+  ],
+  "rawFilters": [
+    {
+      "label": "Kênh",
+      "value": "Tất cả"
+    },
+    {
+      "label": "Nhóm",
+      "value": "Tất cả 42 nhóm"
+    },
+    {
+      "label": "Trạng thái",
+      "value": "Tất cả"
+    },
+    {
+      "label": "Thời gian",
+      "value": "24 giờ"
+    },
+    {
+      "label": "Nhãn",
+      "value": "Tất cả"
+    },
+    {
+      "label": "Tin cậy",
+      "value": "≥ 0"
+    }
+  ],
+  "rawRows": [
+    {
+      "time": "15:11:44",
+      "channel": "Zalo",
+      "ch": "z",
+      "gid": "GRP-ZL-0114",
+      "pid": "PER-0042",
+      "text": "Anh hỏi ba lần rồi mà không ai trả lời. Nếu bên mình không làm được thì nói thẳng để anh tìm chỗ khác nhé.",
+      "label": "Complained",
+      "confidence": "0,94",
+      "st": "clean",
+      "state": "Đã vào kho sạch"
+    },
+    {
+      "time": "15:09:02",
+      "channel": "Zalo",
+      "ch": "z",
+      "gid": "GRP-ZL-0231",
+      "pid": "PER-0311",
+      "text": "Bên nào có sẵn MDF E1 17mm khổ 1220x2440 cho em 3 cont trong tháng 10 không ạ, ngân sách tầm 1.2 tỷ.",
+      "label": "AskedPrice",
+      "confidence": "0,96",
+      "st": "clean",
+      "state": "Đã vào kho sạch"
+    },
+    {
+      "time": "15:06:18",
+      "channel": "Zalo",
+      "ch": "z",
+      "gid": "GRP-ZL-0231",
+      "pid": "PER-0402",
+      "text": "Mình có kho ở Bình Dương, còn tồn 6 cont E1 17mm, ai cần inbox mình nhé.",
+      "label": "OfferedSupply",
+      "confidence": "0,91",
+      "st": "clean",
+      "state": "Đã vào kho sạch"
+    },
+    {
+      "time": "15:04:51",
+      "channel": "WhatsApp",
+      "ch": "w",
+      "gid": "GRP-WA-0007",
+      "pid": "PER-0118",
+      "text": "Em gửi lại file khảo sát qua đây cho nhanh nha anh",
+      "label": "SentDocument",
+      "confidence": "0,88",
+      "st": "clean",
+      "state": "Đã vào kho sạch"
+    },
+    {
+      "time": "15:02:33",
+      "channel": "Zalo",
+      "ch": "z",
+      "gid": "GRP-ZL-0114",
+      "pid": "PER-0007",
+      "text": "Ok chị đã gửi bản hợp đồng sửa vào kho tài liệu rồi nhé",
+      "label": "SentDocument",
+      "confidence": "0,86",
+      "st": "clean",
+      "state": "Đã vào kho sạch"
+    },
+    {
+      "time": "14:58:07",
+      "channel": "Zalo",
+      "ch": "z",
+      "gid": "GRP-ZL-0231",
+      "pid": "PER-0512",
+      "text": "giá bên minh long đang thấp hơn 4% đó anh, anh xem lại giúp em",
+      "label": "MentionsCompetitor",
+      "confidence": "0,79",
+      "st": "processing",
+      "state": "Đang phân loại"
+    },
+    {
+      "time": "14:55:40",
+      "channel": "Zalo",
+      "ch": "z",
+      "gid": "GRP-ZL-0356",
+      "pid": "PER-0619",
+      "text": "Mình làm key account ngành lạnh 5 năm, đang tính đổi hướng sang gỗ nội thất.",
+      "label": "JobSignal",
+      "confidence": "0,64",
+      "st": "processing",
+      "state": "Đang phân loại"
+    },
+    {
+      "time": "14:51:12",
+      "channel": "Zalo",
+      "ch": "z",
+      "gid": "GRP-ZL-0231",
+      "pid": "PER-0733",
+      "text": "ai co nguon van phu melamine gia si k a",
+      "label": "AskedPrice",
+      "confidence": "0,52",
+      "st": "lowconf",
+      "state": "Tin cậy thấp"
+    },
+    {
+      "time": "14:49:55",
+      "channel": "WhatsApp",
+      "ch": "w",
+      "gid": "GRP-WA-0011",
+      "pid": "PER-0844",
+      "text": "Cần kho lạnh 400 pallet khu Tân Cảng, giá sao ạ",
+      "label": "AskedPrice",
+      "confidence": "0,71",
+      "st": "processing",
+      "state": "Đang phân loại"
+    },
+    {
+      "time": "14:46:21",
+      "channel": "Zalo",
+      "ch": "z",
+      "gid": "GRP-ZL-0114",
+      "pid": "PER-0311",
+      "text": "ok a",
+      "label": "Noise",
+      "confidence": "0,31",
+      "st": "discarded",
+      "state": "Loại — nhiễu"
+    },
+    {
+      "time": "14:44:03",
+      "channel": "Zalo",
+      "ch": "z",
+      "gid": "GRP-ZL-0489",
+      "pid": "PER-0951",
+      "text": "Sticker",
+      "label": "Noise",
+      "confidence": "0,12",
+      "st": "discarded",
+      "state": "Loại — nhiễu"
+    },
+    {
+      "time": "14:41:38",
+      "channel": "Zalo",
+      "ch": "z",
+      "gid": "GRP-ZL-0231",
+      "pid": "PER-0402",
+      "text": "Đơn hàng cont trước giao trễ 4 ngày, khách bên em phàn nàn nhiều lắm.",
+      "label": "Complained",
+      "confidence": "0,83",
+      "st": "raw",
+      "state": "Chờ chu kỳ tới"
+    }
+  ],
+  "triggerConfig": [
+    {
+      "label": "Chu kỳ thời gian",
+      "value": "mỗi 15 phút",
+      "note": "Chu kỳ tới chạy sau 4 phút 12 giây"
+    },
+    {
+      "label": "Ngưỡng số lượng",
+      "value": "500 bản ghi",
+      "note": "Đang có 4.204 chờ — sẽ chạy theo ngưỡng trước"
+    },
+    {
+      "label": "Số bản ghi mỗi lượt",
+      "value": "250 / lượt",
+      "note": "Giới hạn để không cạn hạn mức model"
+    },
+    {
+      "label": "Ngưỡng tin cậy vào kho sạch",
+      "value": "≥ 0,60",
+      "note": "Dưới ngưỡng thì giữ lại chờ Sếp xem"
+    }
+  ],
+  "rawByGroup": [
+    {
+      "name": "Group Ngành gỗ Miền Nam"
+    },
+    {
+      "name": "Vận hành Genesis — Quý 4"
+    },
+    {
+      "name": "Group Nhân sự Logistics"
+    },
+    {
+      "name": "Ban Tài chính"
+    },
+    {
+      "name": "Nhóm Kỹ thuật hạ tầng"
+    },
+    {
+      "name": "Đối tác in ấn Thành Phát"
+    },
+    {
+      "name": "Nhóm khác (36 nhóm)"
+    }
+  ],
+  "refineryRuns": [
+    {
+      "time": "15:00:00",
+      "meta": "486 bản ghi · 0 lỗi"
+    },
+    {
+      "time": "14:45:00",
+      "meta": "512 bản ghi · 2 tin cậy thấp"
+    },
+    {
+      "time": "14:30:00",
+      "meta": "448 bản ghi · 0 lỗi"
+    },
+    {
+      "time": "14:15:00",
+      "meta": "604 bản ghi · theo ngưỡng"
+    },
+    {
+      "time": "14:00:00",
+      "meta": "396 bản ghi · 0 lỗi"
+    }
+  ],
+  "refineryRules": [
+    {
+      "id": "R-01",
+      "name": "Nhận diện nhu cầu mua",
+      "kind": "Ý định",
+      "hits": "1.842 lượt / 24h",
+      "threshold": "70%",
+      "on": true,
+      "conditions": [
+        "có từ khoá số lượng + đơn vị",
+        "có mức giá hoặc ngân sách",
+        "câu hỏi trực tiếp"
+      ],
+      "outputs": [
+        "intent = AskedPrice",
+        "side = CẦU",
+        "độ nóng += 30"
+      ]
+    },
+    {
+      "id": "R-02",
+      "name": "Nhận diện nguồn cung",
+      "kind": "Ý định",
+      "hits": "744 lượt / 24h",
+      "threshold": "70%",
+      "on": true,
+      "conditions": [
+        "có từ \"còn tồn\", \"có sẵn\", \"kho\"",
+        "nêu mặt hàng cụ thể"
+      ],
+      "outputs": [
+        "intent = OfferedSupply",
+        "side = CUNG",
+        "vào danh sách cần bán"
+      ]
+    },
+    {
+      "id": "R-03",
+      "name": "Tín hiệu bất mãn",
+      "kind": "Rủi ro",
+      "hits": "96 lượt / 24h",
+      "threshold": "75%",
+      "on": true,
+      "conditions": [
+        "nhắc lại ≥ 2 lần chưa được trả lời",
+        "giọng điệu tiêu cực",
+        "nêu phương án thay thế"
+      ],
+      "outputs": [
+        "intent = Complained",
+        "rủi ro churn += 40",
+        "đẩy cảnh báo P1"
+      ]
+    },
+    {
+      "id": "R-04",
+      "name": "Đối thủ xuất hiện",
+      "kind": "Cạnh tranh",
+      "hits": "41 lượt / 24h",
+      "threshold": "65%",
+      "on": true,
+      "conditions": [
+        "có tên trong danh sách đối thủ",
+        "kèm so sánh giá hoặc điều khoản"
+      ],
+      "outputs": [
+        "event = MentionsCompetitor",
+        "rủi ro += 15"
+      ]
+    },
+    {
+      "id": "R-05",
+      "name": "Tín hiệu tìm việc",
+      "kind": "Nhân sự",
+      "hits": "18 lượt / 24h",
+      "threshold": "60%",
+      "on": true,
+      "conditions": [
+        "nêu kinh nghiệm + ngành",
+        "có ý đổi hướng hoặc tìm cơ hội"
+      ],
+      "outputs": [
+        "loại = Ứng viên",
+        "độ phù hợp theo vị trí trống"
+      ]
+    },
+    {
+      "id": "R-06",
+      "name": "Loại nhiễu",
+      "kind": "Vệ sinh",
+      "hits": "8.204 lượt / 24h",
+      "threshold": "40%",
+      "on": true,
+      "conditions": [
+        "dưới 4 từ và không có thực thể",
+        "sticker, ảnh không chú thích",
+        "chào hỏi thuần"
+      ],
+      "outputs": [
+        "label = Noise",
+        "không ghi vào kho sạch"
+      ]
+    }
+  ],
+  "weights": [
+    {
+      "label": "Độ nóng của tín hiệu",
+      "value": "30%"
+    },
+    {
+      "label": "Tiềm năng giá trị",
+      "value": "25%"
+    },
+    {
+      "label": "Rủi ro mất khách",
+      "value": "20%"
+    },
+    {
+      "label": "Mức độ phù hợp",
+      "value": "12%"
+    },
+    {
+      "label": "Độ gắn kết lịch sử",
+      "value": "8%"
+    },
+    {
+      "label": "Độ tin cậy dữ liệu",
+      "value": "5%"
+    }
+  ],
+  "testOutput": [
+    {
+      "key": "intent",
+      "value": "AskedPrice · side = CẦU"
+    },
+    {
+      "key": "person_id",
+      "value": "PER-0311 · Trần Văn Hậu (mới tạo)"
+    },
+    {
+      "key": "group_id",
+      "value": "GRP-ZL-0231 · Group Ngành gỗ Miền Nam"
+    },
+    {
+      "key": "entities",
+      "value": "MDF E1 17mm · 1220x2440 · 3 container · 1,2 tỷ ₫ · Bình Dương · tháng 10"
+    },
+    {
+      "key": "scores",
+      "value": "độ nóng 91 · tiềm năng 74 · rủi ro 12"
+    },
+    {
+      "key": "confidence",
+      "value": "0,96 — trên ngưỡng 0,60, được ghi vào kho sạch"
+    },
+    {
+      "key": "actions",
+      "value": "tạo OPP-1842 · gợi ý ráp 2 nhà cung cấp · đẩy vào hàng đợi"
+    }
+  ],
+  "cleanFilters": [
+    {
+      "label": "Theo nhóm",
+      "on": true
+    },
+    {
+      "label": "Theo người",
+      "on": false
+    },
+    {
+      "label": "7 ngày",
+      "on": false
+    }
+  ],
+  "cleanRows": [
+    {
+      "gid": "GRP-ZL-0231",
+      "pid": "PER-0311",
+      "event": "AskedPrice",
+      "conclusion": "Cần 3 cont MDF E1 17mm, ngân sách 1,2 tỷ ₫, giao tháng 10 tại Bình Dương",
+      "score": "91",
+      "cycle": "15:00"
+    },
+    {
+      "gid": "GRP-ZL-0231",
+      "pid": "PER-0402",
+      "event": "OfferedSupply",
+      "conclusion": "Có sẵn 6 cont E1 17mm tại kho Bình Dương, sẵn sàng bán lẻ từng cont",
+      "score": "84",
+      "cycle": "15:00"
+    },
+    {
+      "gid": "GRP-ZL-0114",
+      "pid": "PER-0042",
+      "event": "Complained",
+      "conclusion": "Nhắc lần ba chưa được trả lời, đã nêu khả năng tìm nhà cung cấp khác",
+      "score": "87",
+      "cycle": "15:00",
+      "active": true
+    },
+    {
+      "gid": "GRP-ZL-0114",
+      "pid": "PER-0042",
+      "event": "MentionsCompetitor",
+      "conclusion": "Minh Long chào giá thấp hơn 4% cho cùng quy cách giấy C300",
+      "score": "62",
+      "cycle": "14:45"
+    },
+    {
+      "gid": "GRP-ZL-0114",
+      "pid": "PER-0007",
+      "event": "SentDocument",
+      "conclusion": "Gửi hợp đồng bản sửa, thuộc nhóm Vận hành, chưa ai rà soát",
+      "score": "48",
+      "cycle": "14:45"
+    },
+    {
+      "gid": "GRP-ZL-0356",
+      "pid": "PER-0619",
+      "event": "JobSignal",
+      "conclusion": "Key account ngành lạnh 5 năm, đang tìm hướng sang gỗ nội thất",
+      "score": "74",
+      "cycle": "14:45"
+    },
+    {
+      "gid": "GRP-WA-0011",
+      "pid": "PER-0844",
+      "event": "AskedPrice",
+      "conclusion": "Cần kho lạnh 400 pallet khu Tân Cảng, chưa nêu ngân sách",
+      "score": "58",
+      "cycle": "14:30"
+    },
+    {
+      "gid": "GRP-ZL-0231",
+      "pid": "PER-0402",
+      "event": "Complained",
+      "conclusion": "Đơn container trước giao trễ 4 ngày, khách cuối phàn nàn",
+      "score": "66",
+      "cycle": "14:30"
+    },
+    {
+      "gid": "GRP-ZL-0489",
+      "pid": "PER-0951",
+      "event": "WentSilent",
+      "conclusion": "Không tương tác 41 ngày sau khi nhận báo giá 510 triệu ₫",
+      "score": "31",
+      "cycle": "14:15"
+    },
+    {
+      "gid": "GRP-ZL-0174",
+      "pid": "PER-0512",
+      "event": "PromisedDelivery",
+      "conclusion": "Bên mình hứa giao mẫu trong 3 ngày, chưa có cập nhật lại",
+      "score": "54",
+      "cycle": "14:15"
+    },
+    {
+      "gid": "GRP-WA-0007",
+      "pid": "PER-0118",
+      "event": "SentDocument",
+      "conclusion": "File khảo sát thị trường quý 4, đã gắn về nhóm Điều hành mở rộng",
+      "score": "42",
+      "cycle": "14:00"
+    }
+  ],
+  "memory": [
+    {
+      "title": "Điều cần chú ý ngay",
+      "age": "cập nhật 2 phút trước",
+      "lines": [
+        "Đã nhắc ba lần chưa được trả lời — mọi phản hồi phải xin lỗi trước, không giải thích dài.",
+        "Đang so sánh giá với Minh Long, chênh 4% nằm ở loại giấy và bảo hành màu."
+      ]
+    },
+    {
+      "title": "Ngữ cảnh ngắn lũy tiến",
+      "age": "nén lần 14 · 15:00",
+      "lines": [
+        "Đang đàm phán hợp đồng in quý 4, mức 84 triệu ₫, chờ Sếp duyệt chi.",
+        "Đã mua ba lần trong 18 tháng, luôn thanh toán đúng hạn.",
+        "Quan tâm mốc giao hơn giá — chốt nhanh khi có mốc cụ thể bằng văn bản."
+      ]
+    },
+    {
+      "title": "Giới hạn cho agent",
+      "age": "Sếp ghim · 12/09",
+      "lines": [
+        "Không để agent junior follow khách này.",
+        "Không tự cam kết mốc giao dưới 12 ngày."
+      ]
+    },
+    {
+      "title": "Đã nén bỏ khỏi ngữ cảnh",
+      "age": "còn trong kho sạch",
+      "lines": [
+        "187 tin nhắn chào hỏi và xác nhận ngắn, 9 sự kiện trước tháng 6."
+      ]
+    }
+  ],
+  "agentParams": [
+    {
+      "label": "ID nhóm đang trực",
+      "value": "GRP-ZL-0114"
+    },
+    {
+      "label": "ID người đang nói",
+      "value": "PER-0042"
+    },
+    {
+      "label": "Bản ghi sạch được đọc",
+      "value": "214 sự kiện"
+    },
+    {
+      "label": "Cửa sổ thời gian",
+      "value": "180 ngày"
+    },
+    {
+      "label": "Trí nhớ tạm",
+      "value": "1.842 token"
+    },
+    {
+      "label": "Lịch sử nội dung tương quan",
+      "value": "9 luồng liên quan"
+    }
+  ],
+  "dirTabs": [
+    {
+      "label": "Nhóm theo kênh",
+      "count": "42"
+    },
+    {
+      "label": "Con người",
+      "count": "148"
+    }
+  ],
+  "channelGroups": [
+    {
+      "channel": "Zalo",
+      "state": "Đang kết nối",
+      "summary": "34 nhóm · 1.244 tin trong 24 giờ",
+      "groups": [
+        {
+          "gid": "GRP-ZL-0114",
+          "name": "Vận hành Genesis — Quý 4",
+          "kind": "Nội bộ",
+          "members": "24",
+          "msgs": "412",
+          "heat": "87",
+          "mode": "Chỉ khi được tag",
+          "bot": "Trợ lý thương mại"
+        },
+        {
+          "gid": "GRP-ZL-0231",
+          "name": "Group Ngành gỗ Miền Nam",
+          "kind": "Thị trường",
+          "members": "412",
+          "msgs": "6.412",
+          "heat": "94",
+          "mode": "Lắng nghe im lặng",
+          "bot": "Key Account junior"
+        },
+        {
+          "gid": "GRP-ZL-0174",
+          "name": "Ban Tài chính",
+          "kind": "Nội bộ",
+          "members": "11",
+          "msgs": "96",
+          "heat": "58",
+          "mode": "Chỉ khi được tag",
+          "bot": "Admin hậu cần"
+        },
+        {
+          "gid": "GRP-ZL-0356",
+          "name": "Group Nhân sự Logistics",
+          "kind": "Thị trường",
+          "members": "286",
+          "msgs": "2.634",
+          "heat": "64",
+          "mode": "Lắng nghe im lặng",
+          "bot": "Recruiter (đang tắt)",
+          "botOff": true
+        },
+        {
+          "gid": "GRP-ZL-0489",
+          "name": "Đối tác in ấn Thành Phát",
+          "kind": "Đối tác",
+          "members": "4",
+          "msgs": "784",
+          "heat": "87",
+          "mode": "Chủ động bắt tín hiệu",
+          "bot": "Trợ lý thương mại"
+        },
+        {
+          "gid": "GRP-ZL-0502",
+          "name": "Truyền thông & Sự kiện",
+          "kind": "Nội bộ",
+          "members": "13",
+          "msgs": "28",
+          "heat": "22",
+          "mode": "Chỉ khi được tag",
+          "bot": "Chưa gán",
+          "botOff": true
+        }
+      ]
+    },
+    {
+      "channel": "WhatsApp",
+      "state": "Phiên hết hạn",
+      "summary": "6 nhóm · tạm dừng nhận tin từ 15:05",
+      "groups": [
+        {
+          "gid": "GRP-WA-0007",
+          "name": "Điều hành mở rộng",
+          "kind": "Nội bộ",
+          "members": "6",
+          "msgs": "54",
+          "heat": "44",
+          "mode": "Tạm dừng · chờ QR",
+          "bot": "Trợ lý thương mại"
+        },
+        {
+          "gid": "GRP-WA-0011",
+          "name": "Kho lạnh Tân Cảng",
+          "kind": "Khách",
+          "members": "3",
+          "msgs": "42",
+          "heat": "58",
+          "mode": "Tạm dừng · chờ QR",
+          "bot": "Key Account junior"
+        }
+      ]
+    },
+    {
+      "channel": "Telegram",
+      "state": "Chưa cài plugin",
+      "summary": "Chưa có nhóm nào — cài @gen/channel-telegram để bắt đầu",
+      "groups": []
+    },
+    {
+      "channel": "LinkedIn",
+      "state": "Chỉ đọc danh tính",
+      "summary": "34 danh tính · không nhận tin nhắn",
+      "groups": [
+        {
+          "gid": "GRP-LI-0001",
+          "name": "Mạng đối tác ngành gỗ",
+          "kind": "Thị trường",
+          "members": "128",
+          "msgs": "—",
+          "heat": "18",
+          "mode": "Chỉ hợp nhất danh tính",
+          "bot": "Không cần",
+          "botOff": true
+        }
+      ]
+    }
+  ],
+  "peopleFilters": [
+    {
+      "label": "Liên quan Sếp",
+      "options": [
+        {
+          "label": "Tất cả"
+        },
+        {
+          "label": "Trực tiếp"
+        },
+        {
+          "label": "Qua nhân viên"
+        },
+        {
+          "label": "Người lạ"
+        }
+      ]
+    },
+    {
+      "label": "Độ nhiệt",
+      "options": [
+        {
+          "label": "Tất cả"
+        },
+        {
+          "label": "≥ 80"
+        },
+        {
+          "label": "50–79"
+        },
+        {
+          "label": "Lạnh"
+        }
+      ]
+    },
+    {
+      "label": "Giá trị",
+      "options": [
+        {
+          "label": "Tất cả"
+        },
+        {
+          "label": "≥ 500tr"
+        },
+        {
+          "label": "100–500tr"
+        },
+        {
+          "label": "Chưa rõ"
+        }
+      ]
+    },
+    {
+      "label": "Ưu tiên",
+      "options": [
+        {
+          "label": "Tất cả"
+        },
+        {
+          "label": "P1"
+        },
+        {
+          "label": "P2"
+        },
+        {
+          "label": "P3"
+        }
+      ]
+    },
+    {
+      "label": "BOT",
+      "options": [
+        {
+          "label": "Tất cả"
+        },
+        {
+          "label": "Đã gán"
+        },
+        {
+          "label": "Chưa gán"
+        }
+      ]
+    }
+  ],
+  "peopleRows": [
+    {
+      "pid": "PER-0311",
+      "name": "Trần Văn Hậu",
+      "org": "Xưởng gỗ Bình Dương · chủ xưởng",
+      "initials": "TH",
+      "ch": [
+        "z"
+      ],
+      "relation": "Trực tiếp với Sếp",
+      "heat": "91",
+      "value": "1,2 tỷ ₫",
+      "priority": "P1",
+      "bot": "Key Account junior",
+      "autonomy": "mức 3",
+      "channels": [
+        {}
+      ]
+    },
+    {
+      "pid": "PER-0042",
+      "name": "Nguyễn Văn Bảo",
+      "org": "Công ty in Thành Phát · giám đốc",
+      "initials": "NB",
+      "ch": [
+        "z",
+        "w"
+      ],
+      "relation": "Trực tiếp với Sếp",
+      "heat": "87",
+      "value": "84 triệu ₫",
+      "priority": "P1",
+      "bot": "Trợ lý thương mại",
+      "autonomy": "mức 3",
+      "channels": [
+        {},
+        {}
+      ]
+    },
+    {
+      "pid": "PER-0402",
+      "name": "Lâm Văn Được",
+      "org": "Kho ván Bình Dương · cung cấp",
+      "initials": "LĐ",
+      "ch": [
+        "z"
+      ],
+      "relation": "Người lạ có tín hiệu",
+      "heat": "84",
+      "value": "6 cont tồn",
+      "priority": "P1",
+      "bot": "Chưa gán",
+      "botOff": true,
+      "autonomy": "—",
+      "channels": [
+        {}
+      ]
+    },
+    {
+      "pid": "PER-0119",
+      "name": "Hoàng Thị Lan",
+      "org": "An Khang Logistics · sales director",
+      "initials": "HL",
+      "ch": [
+        "z",
+        "w"
+      ],
+      "relation": "Qua Trần Minh Khoa",
+      "heat": "78",
+      "value": "128 triệu ₫",
+      "priority": "P2",
+      "bot": "Trợ lý thương mại",
+      "autonomy": "mức 4",
+      "channels": [
+        {},
+        {}
+      ]
+    },
+    {
+      "pid": "PER-0619",
+      "name": "Võ Thanh Sơn",
+      "org": "Ứng viên · Key Account ngành lạnh",
+      "initials": "VS",
+      "ch": [
+        "z"
+      ],
+      "relation": "Người lạ có tín hiệu",
+      "heat": "74",
+      "value": "—",
+      "priority": "P2",
+      "bot": "Recruiter (tắt)",
+      "botOff": true,
+      "autonomy": "mức 2",
+      "channels": [
+        {}
+      ]
+    },
+    {
+      "pid": "PER-0512",
+      "name": "Phạm Quốc Minh",
+      "org": "Nội thất Minh Long",
+      "initials": "PM",
+      "ch": [
+        "z"
+      ],
+      "relation": "Qua Vũ Hải Đăng",
+      "heat": "64",
+      "value": "310 triệu ₫",
+      "priority": "P2",
+      "bot": "Key Account junior",
+      "autonomy": "mức 3",
+      "channels": [
+        {}
+      ]
+    },
+    {
+      "pid": "PER-0844",
+      "name": "Lê Thị Bích",
+      "org": "Kho lạnh Tân Cảng",
+      "initials": "LB",
+      "ch": [
+        "w"
+      ],
+      "relation": "Người lạ có tín hiệu",
+      "heat": "58",
+      "value": "chưa rõ",
+      "priority": "P2",
+      "bot": "Chưa gán",
+      "botOff": true,
+      "autonomy": "—",
+      "channels": [
+        {}
+      ]
+    },
+    {
+      "pid": "PER-0007",
+      "name": "Nguyễn Thu Hà",
+      "org": "Nội bộ · Trưởng ban Tài chính",
+      "initials": "TH",
+      "ch": [
+        "z",
+        "w"
+      ],
+      "relation": "Nhân sự của Sếp",
+      "heat": "62",
+      "value": "11 khách",
+      "priority": "P1",
+      "bot": "Admin hậu cần",
+      "autonomy": "mức 5",
+      "channels": [
+        {},
+        {}
+      ]
+    },
+    {
+      "pid": "PER-0003",
+      "name": "Trần Minh Khoa",
+      "org": "Nội bộ · Giám đốc vận hành",
+      "initials": "MK",
+      "ch": [
+        "z",
+        "w"
+      ],
+      "relation": "Nhân sự của Sếp",
+      "heat": "71",
+      "value": "14 khách",
+      "priority": "P1",
+      "bot": "Thư ký cá nhân",
+      "autonomy": "mức 5",
+      "channels": [
+        {},
+        {}
+      ]
+    },
+    {
+      "pid": "PER-0733",
+      "name": "Bùi Đức Thắng",
+      "org": "Gỗ Trường Thành Mới",
+      "initials": "BT",
+      "ch": [
+        "z"
+      ],
+      "relation": "Người lạ có tín hiệu",
+      "heat": "72",
+      "value": "880 triệu ₫",
+      "priority": "P2",
+      "bot": "Key Account junior",
+      "autonomy": "mức 3",
+      "channels": [
+        {}
+      ]
+    },
+    {
+      "pid": "PER-0951",
+      "name": "Trịnh Mỹ Duyên",
+      "org": "Bao bì Sài Gòn Mới",
+      "initials": "TD",
+      "ch": [
+        "z",
+        "w"
+      ],
+      "relation": "Qua Đỗ Thanh Mai",
+      "heat": "18",
+      "value": "510 triệu ₫",
+      "priority": "P3",
+      "bot": "Trợ lý thương mại",
+      "autonomy": "mức 3",
+      "channels": [
+        {},
+        {}
+      ]
+    },
+    {
+      "pid": "PER-0688",
+      "name": "Đặng Hữu Trí",
+      "org": "Gỗ Đông Phương",
+      "initials": "ĐT",
+      "ch": [
+        "z"
+      ],
+      "relation": "Qua Vũ Hải Đăng",
+      "heat": "22",
+      "value": "540 triệu ₫",
+      "priority": "P3",
+      "bot": "Chưa gán",
+      "botOff": true,
+      "autonomy": "—",
+      "channels": [
+        {}
+      ]
+    }
+  ],
+  "marketSides": [
+    {
+      "title": "Đang cần nguồn hàng",
+      "subtitle": "Demand · CẦU",
+      "count": "16 tín hiệu",
+      "rows": [
+        {
+          "pid": "PER-0311",
+          "heat": "91",
+          "item": "3 cont ván MDF E1 17mm 1220x2440",
+          "value": "1,2 tỷ ₫",
+          "who": "Trần Văn Hậu · Xưởng gỗ Bình Dương",
+          "age": "18 phút",
+          "match": "Khớp 2 nguồn cung: Lâm Văn Được, kho Bình Dương",
+          "matchOk": true,
+          "action": "Ghép"
+        },
+        {
+          "pid": "PER-0733",
+          "heat": "72",
+          "item": "Ván phủ melamine giá sỉ, số lượng lớn",
+          "value": "880 triệu ₫",
+          "who": "Bùi Đức Thắng · Gỗ Trường Thành Mới",
+          "age": "2 giờ",
+          "match": "Khớp 1 nguồn cung, chênh quy cách",
+          "matchOk": true,
+          "action": "Ghép"
+        },
+        {
+          "pid": "PER-0512",
+          "heat": "64",
+          "item": "Nội thất văn phòng trọn gói",
+          "value": "310 triệu ₫",
+          "who": "Phạm Quốc Minh · Nội thất Minh Long",
+          "age": "1 ngày",
+          "match": "Bên mình tự cung được",
+          "matchOk": true,
+          "action": "Báo giá"
+        },
+        {
+          "pid": "PER-0844",
+          "heat": "58",
+          "item": "Kho lạnh 400 pallet khu Tân Cảng",
+          "value": "chưa rõ",
+          "who": "Lê Thị Bích · Kho lạnh Tân Cảng",
+          "age": "2 ngày",
+          "match": "Chưa có nguồn cung trong kho dữ liệu",
+          "matchOk": false,
+          "action": "Tìm"
+        },
+        {
+          "pid": "PER-0688",
+          "heat": "22",
+          "item": "Ván MDF cho đơn nội thất quý 4",
+          "value": "540 triệu ₫",
+          "who": "Đặng Hữu Trí · Gỗ Đông Phương",
+          "age": "74 ngày",
+          "match": "Đã nguội, cần làm ấm trước khi ghép",
+          "matchOk": false,
+          "action": "Làm ấm"
+        },
+        {
+          "pid": "PER-0902",
+          "heat": "41",
+          "item": "Giấy C300 in catalogue 5.000 bản",
+          "value": "96 triệu ₫",
+          "who": "Người lạ · Group Ngành in",
+          "age": "5 giờ",
+          "match": "Khớp Thành Phát nếu quan hệ được khôi phục",
+          "matchOk": true,
+          "action": "Ghép"
+        }
+      ]
+    },
+    {
+      "title": "Đang cần bán",
+      "subtitle": "Supply · CUNG",
+      "count": "11 tín hiệu",
+      "rows": [
+        {
+          "pid": "PER-0402",
+          "heat": "84",
+          "item": "6 cont ván E1 17mm tồn kho Bình Dương",
+          "value": "≈ 2,3 tỷ ₫",
+          "who": "Lâm Văn Được · Kho ván Bình Dương",
+          "age": "12 phút",
+          "match": "Khớp cầu PER-0311 — cùng quy cách, cùng tỉnh",
+          "matchOk": true,
+          "action": "Ghép"
+        },
+        {
+          "pid": "PER-0455",
+          "heat": "76",
+          "item": "Ván phủ melamine 12mm, giá sỉ theo container",
+          "value": "≈ 1,1 tỷ ₫",
+          "who": "Nguyễn Hữu Phát · Gỗ Phát Đạt",
+          "age": "3 giờ",
+          "match": "Khớp cầu PER-0733, lệch quy cách 5mm",
+          "matchOk": true,
+          "action": "Ghép"
+        },
+        {
+          "pid": "PER-0119",
+          "heat": "78",
+          "item": "Tuyến vận chuyển lạnh Bình Dương – Tân Cảng",
+          "value": "128 triệu ₫",
+          "who": "Hoàng Thị Lan · An Khang Logistics",
+          "age": "4 giờ",
+          "match": "Khớp cầu PER-0844 về kho lạnh",
+          "matchOk": true,
+          "action": "Ghép"
+        },
+        {
+          "pid": "PER-0601",
+          "heat": "54",
+          "item": "Dịch vụ in bao bì công suất lớn",
+          "value": "theo đơn",
+          "who": "Người lạ · Group Ngành in",
+          "age": "1 ngày",
+          "match": "Khớp cầu PER-0902",
+          "matchOk": true,
+          "action": "Ghép"
+        },
+        {
+          "pid": "PER-0777",
+          "heat": "38",
+          "item": "Gỗ cao su xẻ sấy, tồn 40 khối",
+          "value": "≈ 420 triệu ₫",
+          "who": "Người lạ · Group Ngành gỗ",
+          "age": "2 ngày",
+          "match": "Chưa có cầu tương ứng trong kho",
+          "matchOk": false,
+          "action": "Giữ"
+        },
+        {
+          "pid": "PER-0812",
+          "heat": "29",
+          "item": "Xe tải 8 tấn nhận chuyến tuyến miền Nam",
+          "value": "theo chuyến",
+          "who": "Người lạ · Group Vận tải",
+          "age": "4 ngày",
+          "match": "Ngoài ngành hàng của tổ chức",
+          "matchOk": false,
+          "action": "Bỏ qua"
+        }
+      ]
+    }
+  ],
+  "matches": [
+    {
+      "demand": "3 cont ván MDF E1 17mm · tháng 10",
+      "demandWho": "PER-0311 · Xưởng gỗ Bình Dương",
+      "supply": "6 cont E1 17mm tồn kho Bình Dương",
+      "supplyWho": "PER-0402 · Kho ván Bình Dương",
+      "score": "94",
+      "reason": "cùng quy cách, cùng tỉnh, đủ lượng",
+      "value": "1,2 tỷ ₫"
+    },
+    {
+      "demand": "Kho lạnh 400 pallet Tân Cảng",
+      "demandWho": "PER-0844 · Kho lạnh Tân Cảng",
+      "supply": "Tuyến vận chuyển lạnh Bình Dương – Tân Cảng",
+      "supplyWho": "PER-0119 · An Khang Logistics",
+      "score": "81",
+      "reason": "cùng tuyến, bổ trợ nhau",
+      "value": "128 triệu ₫"
+    },
+    {
+      "demand": "Giấy C300 in catalogue 5.000 bản",
+      "demandWho": "PER-0902 · Group Ngành in",
+      "supply": "Dịch vụ in bao bì công suất lớn",
+      "supplyWho": "PER-0601 · Group Ngành in",
+      "score": "76",
+      "reason": "khớp nhu cầu, chưa rõ giá",
+      "value": "96 triệu ₫"
+    },
+    {
+      "demand": "Ván phủ melamine giá sỉ",
+      "demandWho": "PER-0733 · Gỗ Trường Thành Mới",
+      "supply": "Ván phủ melamine 12mm giá sỉ",
+      "supplyWho": "PER-0455 · Gỗ Phát Đạt",
+      "score": "68",
+      "reason": "lệch quy cách 5mm",
+      "value": "880 triệu ₫"
+    },
+    {
+      "demand": "Ván MDF đơn nội thất quý 4",
+      "demandWho": "PER-0688 · Gỗ Đông Phương (nguội 74 ngày)",
+      "supply": "6 cont E1 17mm tồn kho Bình Dương",
+      "supplyWho": "PER-0402 · Kho ván Bình Dương",
+      "score": "52",
+      "reason": "cầu đã nguội, cần làm ấm",
+      "value": "540 triệu ₫"
+    }
+  ],
+  "apiProviders": [
+    {
+      "name": "Antigravity CLI",
+      "role": "Core agent · sàng lọc thô → sạch",
+      "state": "Đã xác thực",
+      "fields": [
+        {
+          "key": "Cơ chế",
+          "value": "CLI session · không dùng khoá API",
+          "secret": false
+        },
+        {
+          "key": "Tài khoản",
+          "value": "a@example.test",
+          "secret": false
+        },
+        {
+          "key": "Model mặc định",
+          "value": "gemini-2.5-pro",
+          "secret": false
+        },
+        {
+          "key": "Hết hiệu lực",
+          "value": "sau 23 giờ · tự gia hạn",
+          "secret": false
+        },
+        {
+          "key": "Chi phí",
+          "value": "0 ₫ · gói Google AI Pro",
+          "secret": false
+        }
+      ]
+    },
+    {
+      "name": "Gemini API",
+      "role": "Agent trực kênh · trả lời nhanh",
+      "state": "Hoạt động",
+      "fields": [
+        {
+          "key": "Endpoint",
+          "value": "generativelanguage.googleapis.com/v1beta",
+          "secret": false
+        },
+        {
+          "key": "Khoá",
+          "value": "AIza••••••••••••••••••••7f2c",
+          "secret": true
+        },
+        {
+          "key": "Khoá xoay vòng",
+          "value": "4 khoá · tự chuyển khi 429",
+          "secret": false
+        },
+        {
+          "key": "Model",
+          "value": "gemini-2.5-flash",
+          "secret": false
+        },
+        {
+          "key": "Giới hạn",
+          "value": "60 lượt / phút / khoá",
+          "secret": false
+        }
+      ]
+    },
+    {
+      "name": "DeepSeek",
+      "role": "Chấm điểm và suy luận dài",
+      "state": "Còn 18% hạn mức",
+      "fields": [
+        {
+          "key": "Endpoint",
+          "value": "api.deepseek.com/v1/chat/completions",
+          "secret": false
+        },
+        {
+          "key": "Khoá",
+          "value": "sk-••••••••••••••••••••a91d",
+          "secret": true
+        },
+        {
+          "key": "Model",
+          "value": "deepseek-reasoner",
+          "secret": false
+        },
+        {
+          "key": "Chi phí",
+          "value": "≈ 380 ₫ / 1k token",
+          "secret": false
+        },
+        {
+          "key": "Khi cạn",
+          "value": "chuyển sang gemini-2.5-pro",
+          "secret": false
+        }
+      ]
+    },
+    {
+      "name": "Embedding",
+      "role": "Đánh chỉ mục kho hội thoại",
+      "state": "Hoạt động",
+      "fields": [
+        {
+          "key": "Endpoint",
+          "value": "generativelanguage.googleapis.com/v1beta",
+          "secret": false
+        },
+        {
+          "key": "Khoá",
+          "value": "dùng chung khoá Gemini",
+          "secret": false
+        },
+        {
+          "key": "Model",
+          "value": "text-embedding-004",
+          "secret": false
+        },
+        {
+          "key": "Kích thước vector",
+          "value": "768",
+          "secret": false
+        },
+        {
+          "key": "Chỉ mục",
+          "value": "14.208 bản ghi sạch",
+          "secret": false
+        }
+      ]
+    }
+  ],
+  "agentBindings": [
+    {
+      "agent": "Core agent — sàng lọc",
+      "model": "gemini-2.5-pro",
+      "ruleset": "R-01 … R-06",
+      "temp": "0,2",
+      "ctx": "32k",
+      "autonomy": "mức 6"
+    },
+    {
+      "agent": "Core agent — chấm điểm",
+      "model": "deepseek-reasoner",
+      "ruleset": "trọng số chung",
+      "temp": "0,1",
+      "ctx": "64k",
+      "autonomy": "mức 2"
+    },
+    {
+      "agent": "Trợ lý thương mại",
+      "model": "gemini-2.5-flash",
+      "ruleset": "R-01, R-03",
+      "temp": "0,4",
+      "ctx": "8k + trí nhớ",
+      "autonomy": "mức 4"
+    },
+    {
+      "agent": "Key Account junior",
+      "model": "gemini-2.5-flash",
+      "ruleset": "R-01, R-02",
+      "temp": "0,5",
+      "ctx": "8k + trí nhớ",
+      "autonomy": "mức 3"
+    },
+    {
+      "agent": "Admin hậu cần",
+      "model": "gemini-2.5-flash-lite",
+      "ruleset": "không áp quy tắc",
+      "temp": "0,2",
+      "ctx": "4k",
+      "autonomy": "mức 5"
+    },
+    {
+      "agent": "CSKH ca chiều",
+      "model": "gemini-2.5-flash",
+      "ruleset": "R-03",
+      "temp": "0,6",
+      "ctx": "8k + trí nhớ",
+      "autonomy": "mức 3"
+    },
+    {
+      "agent": "Thư ký cá nhân",
+      "model": "gemini-2.5-flash",
+      "ruleset": "không áp quy tắc",
+      "temp": "0,3",
+      "ctx": "16k",
+      "autonomy": "mức 5"
+    }
+  ],
+  "coreParams": [
+    {
+      "label": "Chu kỳ sàng lọc",
+      "value": "15 phút"
+    },
+    {
+      "label": "Ngưỡng số lượng",
+      "value": "500 bản ghi"
+    },
+    {
+      "label": "Lô mỗi lượt",
+      "value": "250 bản ghi"
+    },
+    {
+      "label": "Ngưỡng vào kho sạch",
+      "value": "≥ 0,60"
+    },
+    {
+      "label": "Trí nhớ tạm tối đa",
+      "value": "4.000 token / ID"
+    },
+    {
+      "label": "Nén trí nhớ khi",
+      "value": "vượt 90% hoặc mỗi 24 giờ"
+    }
+  ],
+  "rateLimits": [
+    {
+      "label": "Antigravity CLI",
+      "value": "30 / phút"
+    },
+    {
+      "label": "Gemini API (mỗi khoá)",
+      "value": "60 / phút"
+    },
+    {
+      "label": "DeepSeek",
+      "value": "20 / phút"
+    },
+    {
+      "label": "Embedding",
+      "value": "600 / phút"
+    },
+    {
+      "label": "Tổng trần hệ thống",
+      "value": "120 / phút"
+    }
+  ],
+  "nodePoints": [
+    {
+      "name": "Anh Nguyễn Văn A",
+      "meta": "Owner"
+    },
+    {
+      "name": "Trần Minh Khoa",
+      "meta": "14 quan hệ"
+    },
+    {
+      "name": "Nguyễn Thu Hà",
+      "meta": "11 quan hệ"
+    },
+    {
+      "name": "Vũ Hải Đăng",
+      "meta": "8 quan hệ"
+    },
+    {
+      "name": "Đỗ Thanh Mai",
+      "meta": "6 quan hệ"
+    },
+    {
+      "name": "Hoàng Thị Lan",
+      "meta": "An Khang"
+    },
+    {
+      "name": "Nguyễn Văn Bảo",
+      "meta": "Thành Phát"
+    },
+    {
+      "name": "Trần Văn Hậu",
+      "meta": "Xưởng gỗ BD"
+    },
+    {
+      "name": "Lâm Văn Được",
+      "meta": "Kho ván BD"
+    },
+    {
+      "name": "Trịnh Mỹ Duyên",
+      "meta": "nguội 41 ngày"
+    }
+  ],
+  "nodeEdges": [
+    {
+      "x1": 50,
+      "y1": 50,
+      "x2": 24,
+      "y2": 24,
+      "w": 2.5,
+      "stroke": "#8fd6b4",
+      "opacity": 0.8,
+      "title": "Sếp ↔ Trần Minh Khoa · 412 lượt"
+    },
+    {
+      "x1": 50,
+      "y1": 50,
+      "x2": 76,
+      "y2": 22,
+      "w": 2.5,
+      "stroke": "#8fd6b4",
+      "opacity": 0.8,
+      "title": "Sếp ↔ Nguyễn Thu Hà · 288 lượt"
+    },
+    {
+      "x1": 50,
+      "y1": 50,
+      "x2": 20,
+      "y2": 74,
+      "w": 1.5,
+      "stroke": "#5a4f8c",
+      "opacity": 0.8,
+      "title": "Sếp ↔ Vũ Hải Đăng · 164 lượt"
+    },
+    {
+      "x1": 50,
+      "y1": 50,
+      "x2": 78,
+      "y2": 76,
+      "w": 1.5,
+      "stroke": "#5a4f8c",
+      "opacity": 0.8,
+      "title": "Sếp ↔ Đỗ Thanh Mai · 96 lượt"
+    },
+    {
+      "x1": 24,
+      "y1": 24,
+      "x2": 50,
+      "y2": 8,
+      "w": 2.5,
+      "stroke": "#8fd6b4",
+      "opacity": 0.8,
+      "title": "Khoa ↔ Trần Văn Hậu · nguồn cơ hội"
+    },
+    {
+      "x1": 24,
+      "y1": 24,
+      "x2": 8,
+      "y2": 46,
+      "w": 1.5,
+      "stroke": "#5a4f8c",
+      "opacity": 0.8,
+      "title": "Khoa ↔ Hoàng Thị Lan · đàm phán vòng ba"
+    },
+    {
+      "x1": 76,
+      "y1": 22,
+      "x2": 93,
+      "y2": 48,
+      "w": 2.5,
+      "stroke": "#e08b7a",
+      "opacity": 0.8,
+      "title": "Hà ↔ Nguyễn Văn Bảo · 3 tin chưa trả lời"
+    },
+    {
+      "x1": 50,
+      "y1": 8,
+      "x2": 66,
+      "y2": 5,
+      "w": 2.5,
+      "stroke": "#8fd6b4",
+      "opacity": 0.8,
+      "title": "Hậu ↔ Được · cùng group ngành gỗ"
+    },
+    {
+      "x1": 20,
+      "y1": 74,
+      "x2": 50,
+      "y2": 92,
+      "w": 1,
+      "stroke": "#595d6c",
+      "opacity": 0.5,
+      "title": "Đăng ↔ Duyên · nguội 41 ngày"
+    },
+    {
+      "x1": 78,
+      "y1": 76,
+      "x2": 50,
+      "y2": 92,
+      "w": 1,
+      "stroke": "#595d6c",
+      "opacity": 0.5,
+      "title": "Mai ↔ Duyên · nguội 41 ngày"
+    },
+    {
+      "x1": 24,
+      "y1": 24,
+      "x2": 76,
+      "y2": 22,
+      "w": 1.5,
+      "stroke": "#5a4f8c",
+      "opacity": 0.8,
+      "title": "Khoa ↔ Hà · phối hợp nội bộ"
+    },
+    {
+      "x1": 76,
+      "y1": 22,
+      "x2": 78,
+      "y2": 76,
+      "w": 1.5,
+      "stroke": "#5a4f8c",
+      "opacity": 0.8,
+      "title": "Hà ↔ Mai · cùng ban tài chính"
+    }
+  ],
+  "nodeStats": [
+    {
+      "name": "Trần Minh Khoa",
+      "value": "9 nhóm · nối 4 ban"
+    },
+    {
+      "name": "Hoàng Thị Lan (An Khang)",
+      "value": "3 nhóm · nối 11 khách"
+    },
+    {
+      "name": "Nguyễn Thu Hà",
+      "value": "7 nhóm · quá tải"
+    },
+    {
+      "name": "Vũ Hải Đăng",
+      "value": "5 nhóm · còn dư tải"
+    },
+    {
+      "name": "Lâm Văn Được",
+      "value": "1 nhóm · nguồn cung mới"
+    },
+    {
+      "name": "Trịnh Mỹ Duyên",
+      "value": "không ai chạm 41 ngày"
+    }
+  ],
+  "nodeInsights": [
+    {
+      "text": "Trần Minh Khoa là điểm thắt: bốn ban và chín nhóm đều đi qua người này. Nếu nghỉ, bốn quan hệ mất liên lạc."
+    },
+    {
+      "text": "Nguyễn Văn Bảo chỉ nối vào tổ chức qua một người duy nhất, mà quan hệ đó đang có ba tin chưa trả lời."
+    },
+    {
+      "text": "Trần Văn Hậu và Lâm Văn Được cùng ở Group Ngành gỗ — một bên cần mua, một bên cần bán, chưa ai giới thiệu."
+    },
+    {
+      "text": "Trịnh Mỹ Duyên đã rơi khỏi mọi cạnh đang hoạt động, chỉ còn nối bằng hai cạnh nguội."
+    }
+  ],
+  "nbTabs": [
+    {
+      "label": "Con người",
+      "count": "148"
+    },
+    {
+      "label": "Nhóm",
+      "count": "42"
+    }
+  ],
+  "nbSubjects": [
+    {
+      "id": "PER-0042",
+      "name": "Nguyễn Văn Bảo",
+      "flag": "rủi ro",
+      "tokens": "1.842 / 4.000",
+      "fill": "46%",
+      "age": "2 phút",
+      "kind": "person",
+      "active": true,
+      "gist": "Giám đốc Thành Phát. Nói thẳng, ghét vòng vo. Đang chờ trả lời lần thứ ba, thái độ đã gay gắt."
+    },
+    {
+      "id": "PER-0311",
+      "name": "Trần Văn Hậu",
+      "flag": "nóng",
+      "tokens": "684 / 4.000",
+      "fill": "17%",
+      "age": "18 phút",
+      "kind": "person",
+      "gist": "Chủ xưởng gỗ Bình Dương. Hỏi giá lần thứ ba trong sáu tháng, lần này nêu rõ số lượng và ngân sách."
+    },
+    {
+      "id": "PER-0402",
+      "name": "Lâm Văn Được",
+      "flag": "nguồn cung",
+      "tokens": "512 / 4.000",
+      "fill": "13%",
+      "age": "12 phút",
+      "kind": "person",
+      "gist": "Có kho ván tại Bình Dương, còn 6 container E1 17mm. Chưa từng làm việc với tổ chức."
+    },
+    {
+      "id": "PER-0119",
+      "name": "Hoàng Thị Lan",
+      "flag": "đối tác",
+      "tokens": "1.406 / 4.000",
+      "fill": "35%",
+      "age": "4 giờ",
+      "kind": "person",
+      "gist": "Sales director An Khang. Đàm phán sang vòng ba, mặc cả kỹ điều khoản thanh toán hơn giá."
+    },
+    {
+      "id": "PER-0007",
+      "name": "Nguyễn Thu Hà",
+      "flag": "nhân sự",
+      "tokens": "2.204 / 4.000",
+      "fill": "55%",
+      "age": "35 phút",
+      "kind": "person",
+      "gist": "Trưởng ban Tài chính. Đang ôm 11 khách, phản hồi chậm bất thường ba ngày — thiên về quá tải."
+    },
+    {
+      "id": "PER-0003",
+      "name": "Trần Minh Khoa",
+      "flag": "điểm thắt",
+      "tokens": "3.108 / 4.000",
+      "fill": "78%",
+      "age": "12 phút",
+      "kind": "person",
+      "gist": "Giám đốc vận hành, cầu nối của chín nhóm. Quyết nhanh nhưng đang ôm 14 quan hệ."
+    },
+    {
+      "id": "PER-0619",
+      "name": "Võ Thanh Sơn",
+      "flag": "ứng viên",
+      "tokens": "386 / 4.000",
+      "fill": "10%",
+      "age": "6 giờ",
+      "kind": "person",
+      "gist": "Key account ngành lạnh 5 năm, có dấu hiệu tìm việc. Chưa có tiếp xúc trực tiếp nào."
+    },
+    {
+      "id": "PER-0951",
+      "name": "Trịnh Mỹ Duyên",
+      "flag": "nguội",
+      "tokens": "208 / 4.000",
+      "fill": "5%",
+      "age": "41 ngày",
+      "kind": "person",
+      "gist": "Bao bì Sài Gòn Mới. Im lặng 41 ngày sau báo giá 510 triệu ₫, không ai follow lại."
+    },
+    {
+      "id": "PER-0688",
+      "name": "Đặng Hữu Trí",
+      "flag": "nguội",
+      "tokens": "164 / 4.000",
+      "fill": "4%",
+      "age": "74 ngày",
+      "kind": "person",
+      "gist": "Gỗ Đông Phương. Từng hỏi giá ba lần, chưa chốt, đã ngủ đông 74 ngày."
+    }
+  ],
+  "nbCurrent": {
+    "initials": "NB",
+    "name": "Nguyễn Văn Bảo",
+    "id": "PER-0042",
+    "agent": "Trợ lý thương mại đang trực",
+    "tokens": "1.842 / 4.000 token",
+    "context": "Công ty in Thành Phát · Zalo + WhatsApp · 214 sự kiện · nén lần thứ 14 lúc 15:00"
+  },
+  "nbSections": [
+    {
+      "title": "Nhận thức hiện tại",
+      "meta": "cập nhật 2 phút trước",
+      "lines": [
+        "Người quyết định duy nhất bên Thành Phát, tự trả lời tin nhắn, không qua trợ lý.",
+        "Nói thẳng, ngắn. Phản ứng xấu với câu vòng vo hoặc lời hứa không có mốc thời gian.",
+        "Quan tâm mốc giao hơn giá — ba lần trước đều chốt khi có mốc cụ thể bằng văn bản.",
+        "Đang ở giai đoạn đàm phán hợp đồng in quý 4, mức 84 triệu ₫, chờ Sếp duyệt chi."
+      ]
+    },
+    {
+      "title": "Cần chú ý khi trả lời",
+      "meta": "3 điểm đang mở",
+      "lines": [
+        "Đã nhắc ba lần chưa ai trả lời — câu đầu tiên phải là xin lỗi, không giải thích dài.",
+        "Đang so sánh với Minh Long, chênh 4% nằm ở loại giấy và bảo hành màu.",
+        "Sếp ghim: không để agent junior follow người này, không cam kết mốc dưới 12 ngày."
+      ]
+    },
+    {
+      "title": "Đã học được từ tương tác",
+      "meta": "14 lần tự sửa",
+      "lines": [
+        "Trả lời trong 15 phút thì hội thoại tiếp tục; quá 60 phút thì phải xin lỗi mới nối lại được.",
+        "Gửi kèm bảng so sánh vật liệu khiến người này chốt nhanh hơn là giảm giá."
+      ]
+    },
+    {
+      "title": "Điều chưa biết",
+      "meta": "chưa đủ dữ liệu",
+      "lines": [
+        "Chưa rõ ngân sách in ấn cả năm 2027.",
+        "Chưa biết ai là người ký cuối bên Thành Phát nếu anh Bảo đi vắng."
+      ]
+    }
+  ],
+  "nbRefs": [
+    {
+      "id": "PER-0042",
+      "t": "p",
+      "title": "Người hiện tại"
+    },
+    {
+      "id": "GRP-ZL-0489",
+      "t": "g",
+      "title": "Nhóm đối tác in ấn"
+    },
+    {
+      "id": "GRP-ZL-0114",
+      "t": "g",
+      "title": "Nhóm vận hành có nhắc tới"
+    },
+    {
+      "id": "OPP-1815",
+      "t": "o",
+      "title": "Cơ hội hợp đồng quý 4"
+    },
+    {
+      "id": "ACT-0231",
+      "t": "a",
+      "title": "Bản nháp báo giá 84 triệu ₫"
+    },
+    {
+      "id": "ALR-0233",
+      "t": "r",
+      "title": "Cảnh báo ba tin chưa trả lời"
+    },
+    {
+      "id": "DOC-0918",
+      "t": "d",
+      "title": "Hợp đồng bản sửa khách gửi"
+    },
+    {
+      "id": "DOC-0844",
+      "t": "d",
+      "title": "Báo giá đã gửi 18/09"
+    },
+    {
+      "id": "OPP-1764",
+      "t": "o",
+      "title": "Đơn bao bì tháng 8 đã thắng"
+    }
+  ],
+  "nbBudget": [
+    {
+      "label": "Nhận thức hiện tại",
+      "value": "742 token"
+    },
+    {
+      "label": "Điểm cần chú ý",
+      "value": "486 token"
+    },
+    {
+      "label": "Đã học được",
+      "value": "392 token"
+    },
+    {
+      "label": "ID gợi nhớ",
+      "value": "222 token"
+    }
+  ],
+  "nbOwnerActions": [
+    {
+      "label": "Ghim thêm một điều agent phải nhớ"
+    },
+    {
+      "label": "Sửa lại nhận thức agent đang hiểu sai"
+    },
+    {
+      "label": "Xoá sổ tay và học lại từ kho sạch"
+    }
+  ],
+  "nbHistory": [
+    {
+      "time": "15:00",
+      "kind": "Tự sửa",
+      "text": "Nâng mức rủi ro: ba tin chưa trả lời khớp mẫu đã làm mất 4 trên 5 khách tương tự.",
+      "k": "fix"
+    },
+    {
+      "time": "14:46",
+      "kind": "Bổ sung",
+      "text": "Ghi nhận đang so sánh giá với Minh Long, chênh 4% ở loại giấy và bảo hành màu.",
+      "k": "add"
+    },
+    {
+      "time": "Hôm qua",
+      "kind": "Đã học",
+      "text": "Gửi kèm bảng so sánh vật liệu hiệu quả hơn giảm giá — rút từ hai lần chốt trước.",
+      "k": "learn"
+    },
+    {
+      "time": "18/09",
+      "kind": "Bổ sung",
+      "text": "Xác định người này tự trả lời tin nhắn, không qua trợ lý.",
+      "k": "add"
+    },
+    {
+      "time": "12/09",
+      "kind": "Sếp ghim",
+      "text": "Không để agent junior follow người này. Ghim tay, giữ vĩnh viễn trong cửa sổ.",
+      "k": "owner"
+    },
+    {
+      "time": "22/08",
+      "kind": "Nén",
+      "text": "Gộp 187 tin chào hỏi và xác nhận ngắn thành một câu về phong cách giao tiếp.",
+      "k": "compact"
+    }
+  ],
+  "nbDropped": [
+    {
+      "label": "187 tin chào hỏi và xác nhận ngắn"
+    },
+    {
+      "label": "9 sự kiện trước tháng 6 năm nay"
+    },
+    {
+      "label": "Chi tiết từng dòng của ba báo giá cũ — chỉ giữ ID"
+    },
+    {
+      "label": "24 tin trao đổi nội bộ không liên quan người này"
+    },
+    {
+      "label": "Toàn văn hợp đồng tháng 8 — chỉ giữ DOC-0844"
+    }
+  ],
+  "plugKpis": [
+    {
+      "label": "Plugin nền DSH",
+      "value": "7",
+      "unit": "plugin",
+      "sub": "Khung gầm phụ thuộc, luôn bật"
+    },
+    {
+      "label": "Plugin cài thêm",
+      "value": "4",
+      "unit": "plugin",
+      "sub": "3 đang bật · 1 tắt theo ý Sếp"
+    },
+    {
+      "label": "Đang suy giảm",
+      "value": "2",
+      "unit": "plugin",
+      "sub": "WhatsApp chờ QR · DeepSeek cạn hạn mức"
+    },
+    {
+      "label": "Bị cách ly",
+      "value": "0",
+      "unit": "plugin",
+      "sub": "Không có plugin nào bị ngắt hẳn"
+    },
+    {
+      "label": "Có bản cập nhật",
+      "value": "3",
+      "unit": "plugin",
+      "sub": "Cập nhật nóng, không cần khởi động lại"
+    }
+  ],
+  "plugTabs": [
+    {
+      "label": "Plugin nền DSH",
+      "count": "7"
+    },
+    {
+      "label": "Plugin cài thêm",
+      "count": "4"
+    },
+    {
+      "label": "Chợ tiện ích",
+      "count": "6"
+    }
+  ],
+  "plugRows": [
+    {
+      "id": "@gen/chassis-kernel",
+      "name": "Kernel & Plugin Manager",
+      "layer": "chassis",
+      "st": "ok",
+      "version": "v2.2.0",
+      "source": "DSH · dựng sẵn",
+      "mem": "88 MB",
+      "breaker": "đóng",
+      "on": true,
+      "locked": true,
+      "state": "Khoẻ mạnh",
+      "hasUpdate": false,
+      "removable": false
+    },
+    {
+      "id": "@gen/chassis-bus",
+      "name": "Event Bus",
+      "layer": "chassis",
+      "st": "ok",
+      "version": "v2.2.0",
+      "source": "DSH · dựng sẵn",
+      "mem": "64 MB",
+      "breaker": "đóng",
+      "on": true,
+      "locked": true,
+      "state": "Khoẻ mạnh",
+      "hasUpdate": false,
+      "removable": false
+    },
+    {
+      "id": "@gen/chassis-store",
+      "name": "Store · SSOT",
+      "layer": "chassis",
+      "st": "ok",
+      "version": "v2.2.0",
+      "source": "DSH · dựng sẵn",
+      "mem": "412 MB",
+      "breaker": "đóng",
+      "on": true,
+      "locked": true,
+      "state": "Khoẻ mạnh",
+      "hasUpdate": false,
+      "removable": false
+    },
+    {
+      "id": "@gen/chassis-policy",
+      "name": "Policy Engine",
+      "layer": "chassis",
+      "st": "ok",
+      "version": "v2.2.0",
+      "source": "DSH · dựng sẵn",
+      "mem": "72 MB",
+      "breaker": "đóng",
+      "on": true,
+      "locked": true,
+      "state": "Khoẻ mạnh",
+      "hasUpdate": false,
+      "removable": false
+    },
+    {
+      "id": "@gen/chassis-auth",
+      "name": "Định danh & Mã PIN",
+      "layer": "chassis",
+      "st": "ok",
+      "version": "v2.2.0",
+      "source": "DSH · dựng sẵn",
+      "mem": "48 MB",
+      "breaker": "đóng",
+      "on": true,
+      "locked": true,
+      "state": "Khoẻ mạnh",
+      "hasUpdate": false,
+      "removable": false
+    },
+    {
+      "id": "@gen/intel-core",
+      "name": "Core Agent · sàng lọc & chấm điểm",
+      "layer": "intelligence",
+      "st": "ok",
+      "version": "v2.2.0",
+      "source": "DSH · dựng sẵn",
+      "mem": "318 MB",
+      "breaker": "đóng",
+      "update": "v2.2.1",
+      "on": true,
+      "locked": true,
+      "state": "Khoẻ mạnh",
+      "hasUpdate": true,
+      "removable": false
+    },
+    {
+      "id": "@gen/ui-console",
+      "name": "Web Console",
+      "layer": "ui",
+      "st": "ok",
+      "version": "v2.2.0",
+      "source": "DSH · dựng sẵn",
+      "mem": "126 MB",
+      "breaker": "đóng",
+      "on": true,
+      "locked": true,
+      "state": "Khoẻ mạnh",
+      "hasUpdate": false,
+      "removable": false
+    }
+  ],
+  "loadOrder": [
+    {
+      "rank": "01",
+      "name": "Kernel & Plugin Manager",
+      "needs": "không phụ thuộc",
+      "ms": "82ms"
+    },
+    {
+      "rank": "02",
+      "name": "Event Bus",
+      "needs": "cần kernel",
+      "ms": "41ms"
+    },
+    {
+      "rank": "03",
+      "name": "Store · SSOT",
+      "needs": "cần bus",
+      "ms": "214ms"
+    },
+    {
+      "rank": "04",
+      "name": "Policy Engine · Định danh",
+      "needs": "cần store",
+      "ms": "96ms"
+    },
+    {
+      "rank": "05",
+      "name": "Core Agent",
+      "needs": "cần store, policy, provider",
+      "ms": "486ms"
+    },
+    {
+      "rank": "06",
+      "name": "Kênh Zalo · WhatsApp",
+      "needs": "cần bus, policy",
+      "ms": "312ms"
+    },
+    {
+      "rank": "07",
+      "name": "Plugin cài thêm (4)",
+      "needs": "cần bus · nạp sau cùng",
+      "ms": "248ms"
+    }
+  ],
+  "plugEvents": [
+    {
+      "time": "15:11:44",
+      "kind": "HEALTH",
+      "msg": "Tất cả plugin nền báo nhịp tim bình thường · tổng bộ nhớ 1,4 GB"
+    },
+    {
+      "time": "15:05:44",
+      "kind": "DEGRADE",
+      "msg": "@gen/channel-whatsapp mất phiên, chuyển sang suy giảm · 3 tin vào hàng đợi"
+    },
+    {
+      "time": "14:41:02",
+      "kind": "BREAK",
+      "msg": "@gen/provider-deepseek ngắt mạch lần 2 · chuyển hướng sang antigravity trong 60s"
+    },
+    {
+      "time": "14:18:09",
+      "kind": "RECOVER",
+      "msg": "@gen/provider-deepseek thăm dò thành công · ngắt mạch đóng lại"
+    },
+    {
+      "time": "12:02:31",
+      "kind": "UPDATE",
+      "msg": "@gen/action-office phát hiện bản v3.7.0 · chưa cập nhật, đang chờ Sếp"
+    },
+    {
+      "time": "09:14:08",
+      "kind": "DISABLE",
+      "msg": "Sếp tắt @gen/tool-media · giải phóng 268 MB, không ảnh hưởng plugin khác"
+    },
+    {
+      "time": "08:02:11",
+      "kind": "LOAD",
+      "msg": "Nạp 11 plugin theo thứ tự phụ thuộc · tổng 1,48 giây · 0 lỗi"
+    },
+    {
+      "time": "12/09 16:44",
+      "kind": "INSTALL",
+      "msg": "Nạp @gen/action-office từ tệp · sandbox riêng 512 MB, timeout 30s"
+    }
+  ],
+  "plugMarket": [
+    {
+      "id": "@gen/channel-telegram",
+      "name": "Kênh Telegram Bot",
+      "layer": "channel",
+      "version": "v1.4.0",
+      "author": "Genesis Labs",
+      "desc": "Cầu nối Telegram song song với Zalo, dùng chung kho dữ liệu thô và kho sạch."
+    },
+    {
+      "id": "@gen/channel-webhook",
+      "name": "Cổng Webhook doanh nghiệp",
+      "layer": "channel",
+      "version": "v2.1.0",
+      "author": "Genesis Labs",
+      "desc": "Nhận sự kiện từ hệ thống nội bộ khác đổ vào kho thô như một kênh bình thường."
+    },
+    {
+      "id": "@gen/intel-forecast",
+      "name": "Dự báo nhu cầu ngành",
+      "layer": "intelligence",
+      "version": "v0.9.2",
+      "author": "Cộng đồng",
+      "desc": "Đọc kho sạch và dự báo nhu cầu theo ngành hàng trong 30 ngày tới."
+    },
+    {
+      "id": "@gen/action-crm-sync",
+      "name": "Đồng bộ CRM hai chiều",
+      "layer": "action",
+      "version": "v1.6.0",
+      "author": "Genesis Labs",
+      "desc": "Ghi cơ hội và hoạt động sang CRM sau khi Sếp duyệt, đọc ngược trạng thái deal."
+    },
+    {
+      "id": "@gen/tool-finance",
+      "name": "Cố vấn tài chính & thị trường",
+      "layer": "tool",
+      "version": "v1.1.0",
+      "author": "Cộng đồng",
+      "desc": "Theo dõi giá nguyên vật liệu và tỷ giá, cảnh báo khi ảnh hưởng tới báo giá đang mở."
+    },
+    {
+      "id": "@gen/tool-notion-sync",
+      "name": "Đồng bộ ghi chú Notion",
+      "layer": "tool",
+      "version": "v0.8.0",
+      "author": "Cộng đồng",
+      "desc": "Đẩy sổ tay nhận thức và biên bản họp sang Notion cho ai quen làm việc ở đó."
+    }
+  ],
+  "mcpStats": [
+    {
+      "label": "Máy chủ đã kết nối",
+      "value": "5",
+      "unit": "/ 7 đã cài",
+      "sub": "2 đang tắt theo ý Sếp"
+    },
+    {
+      "label": "Công cụ đã mở",
+      "value": "23",
+      "unit": "tool",
+      "sub": "trên 61 tool máy chủ khai báo"
+    },
+    {
+      "label": "Lượt gọi 24h",
+      "value": "1.482",
+      "unit": "lượt",
+      "sub": "9 lượt bị chặn vì vượt quyền"
+    },
+    {
+      "label": "Độ trễ p95",
+      "value": "620",
+      "unit": "ms",
+      "sub": "ERP chậm nhất · 1,4s"
+    }
+  ],
+  "mcpServers": [
+    {
+      "name": "ERP Genesis",
+      "transport": "stdio",
+      "endpoint": "mcp://localhost:7011 · genesis-erp-server v2.4",
+      "state": "Đang chạy",
+      "st": "ok",
+      "calls": "684",
+      "p95": "1,4s",
+      "on": true,
+      "note": "Chỉ đọc tồn kho và đơn hàng. Ghi đơn nháp phải qua bước Sếp duyệt.",
+      "tools": [
+        {
+          "name": "inventory.check",
+          "title": "Chỉ đọc"
+        },
+        {
+          "name": "order.lookup",
+          "title": "Chỉ đọc"
+        },
+        {
+          "name": "order.createDraft",
+          "title": "Có ghi — cần Sếp duyệt trước khi thực thi"
+        },
+        {
+          "name": "price.getList",
+          "title": "Chỉ đọc"
+        }
+      ],
+      "agents": [
+        "Trợ lý thương mại",
+        "Admin hậu cần",
+        "Core agent"
+      ],
+      "open": false,
+      "summary": "4 tool · 3 agent"
+    },
+    {
+      "name": "CRM Genesis",
+      "transport": "http+sse",
+      "endpoint": "https://crm.genesis.internal/mcp · v1.9",
+      "state": "Đang chạy",
+      "st": "ok",
+      "calls": "412",
+      "p95": "340ms",
+      "on": true,
+      "note": "Hai chiều: agent đọc hồ sơ và ghi lại pipeline sau khi Sếp duyệt.",
+      "tools": [
+        {
+          "name": "contact.get",
+          "title": "Chỉ đọc"
+        },
+        {
+          "name": "deal.upsert",
+          "title": "Có ghi — cần Sếp duyệt trước khi thực thi"
+        },
+        {
+          "name": "activity.log",
+          "title": "Có ghi — cần Sếp duyệt trước khi thực thi"
+        },
+        {
+          "name": "pipeline.read",
+          "title": "Chỉ đọc"
+        }
+      ],
+      "agents": [
+        "Trợ lý thương mại",
+        "Key Account junior"
+      ],
+      "open": false,
+      "summary": "4 tool · 2 agent"
+    },
+    {
+      "name": "Lịch & Họp",
+      "transport": "http+sse",
+      "endpoint": "https://cal.genesis.internal/mcp · v1.2",
+      "state": "Đang chạy",
+      "st": "ok",
+      "calls": "268",
+      "p95": "210ms",
+      "on": true,
+      "note": "Agent được tự đặt lịch nội bộ, lịch với khách ngoài phải chờ duyệt.",
+      "tools": [
+        {
+          "name": "event.list",
+          "title": "Chỉ đọc"
+        },
+        {
+          "name": "event.create",
+          "title": "Có ghi — cần Sếp duyệt trước khi thực thi"
+        },
+        {
+          "name": "freebusy.query",
+          "title": "Chỉ đọc"
+        }
+      ],
+      "agents": [
+        "Admin hậu cần",
+        "Thư ký cá nhân"
+      ],
+      "open": false,
+      "summary": "3 tool · 2 agent"
+    },
+    {
+      "name": "Kho tài liệu",
+      "transport": "stdio",
+      "endpoint": "mcp://localhost:7014 · docs-server v3.0",
+      "state": "Đang chạy",
+      "st": "ok",
+      "calls": "118",
+      "p95": "480ms",
+      "on": true,
+      "note": "Tệp lấy ra vẫn chịu quyền của nhóm sở hữu, agent không vượt được.",
+      "tools": [
+        {
+          "name": "doc.search",
+          "title": "Chỉ đọc"
+        },
+        {
+          "name": "doc.fetch",
+          "title": "Chỉ đọc"
+        },
+        {
+          "name": "doc.save",
+          "title": "Có ghi — cần Sếp duyệt trước khi thực thi"
+        }
+      ],
+      "agents": [
+        "Trợ lý thương mại",
+        "Admin hậu cần"
+      ],
+      "open": false,
+      "summary": "3 tool · 2 agent"
+    },
+    {
+      "name": "HRM",
+      "transport": "http+sse",
+      "endpoint": "https://hrm.genesis.internal/mcp · v0.9",
+      "state": "Suy giảm — xác thực hết hạn",
+      "st": "warn",
+      "calls": "0",
+      "p95": "—",
+      "on": true,
+      "note": "Token hết hạn 2 giờ trước. Dữ liệu nhân sự bị khoá ở mức Owner nên agent không tự gia hạn.",
+      "tools": [
+        {
+          "name": "employee.get",
+          "title": "Chỉ đọc"
+        },
+        {
+          "name": "leave.list",
+          "title": "Chỉ đọc"
+        }
+      ],
+      "agents": [
+        "Thư ký cá nhân"
+      ],
+      "open": false,
+      "summary": "2 tool · 1 agent"
+    }
+  ],
+  "mcpLog": [
+    {
+      "time": "15:11:40",
+      "agent": "Trợ lý thương mại",
+      "tool": "inventory.check",
+      "detail": "sku=MDF-E1-17 · kho Bình Dương → còn 6 container, khớp cầu OPP-1842",
+      "ms": "412ms",
+      "result": "OK"
+    },
+    {
+      "time": "15:09:12",
+      "agent": "Core agent",
+      "tool": "price.getList",
+      "detail": "nhóm hàng = ván công nghiệp, hiệu lực quý 4 → 48 dòng giá",
+      "ms": "286ms",
+      "result": "OK"
+    },
+    {
+      "time": "15:04:51",
+      "agent": "Trợ lý thương mại",
+      "tool": "deal.upsert",
+      "detail": "OPP-1815 · cập nhật giai đoạn = đang đàm phán, giá trị 84.000.000 ₫",
+      "ms": "318ms",
+      "result": "OK"
+    },
+    {
+      "time": "14:58:33",
+      "agent": "Key Account junior",
+      "tool": "contact.get",
+      "detail": "PER-0311 → chưa có hồ sơ CRM, đã tạo mới từ dữ liệu sạch",
+      "ms": "244ms",
+      "result": "OK"
+    },
+    {
+      "time": "14:52:20",
+      "agent": "Trợ lý thương mại",
+      "tool": "order.createDraft",
+      "detail": "đơn nháp 84.000.000 ₫ cho Thành Phát — giữ lại chờ Sếp duyệt, chưa gửi ERP",
+      "ms": "—",
+      "result": "Chờ duyệt"
+    },
+    {
+      "time": "14:41:08",
+      "agent": "Admin hậu cần",
+      "tool": "event.create",
+      "detail": "họp giao ban thứ Hai 08:30, 6 người nội bộ → đã đặt lịch",
+      "ms": "196ms",
+      "result": "OK"
+    },
+    {
+      "time": "14:31:02",
+      "agent": "Thư ký cá nhân",
+      "tool": "employee.get",
+      "detail": "PER-0007 → token HRM hết hạn, không lấy được dữ liệu",
+      "ms": "—",
+      "result": "Lỗi"
+    },
+    {
+      "time": "14:18:47",
+      "agent": "Key Account junior",
+      "tool": "doc.save",
+      "detail": "ghi tệp vào nhóm Ban Tài chính → chặn vì agent không có quyền ghi nhóm này",
+      "ms": "—",
+      "result": "Bị chặn"
+    },
+    {
+      "time": "14:02:11",
+      "agent": "Core agent",
+      "tool": "pipeline.read",
+      "detail": "đọc 41 cơ hội đang mở để đối chiếu với tín hiệu vừa sàng lọc",
+      "ms": "520ms",
+      "result": "OK"
+    }
+  ],
+  "mcpGuards": [
+    {
+      "label": "Công cụ có ghi phải qua bước duyệt",
+      "hint": "Mọi tool ghi dữ liệu ra ngoài đều dừng ở Bàn làm việc trước.",
+      "on": true,
+      "locked": true
+    },
+    {
+      "label": "Agent chỉ gọi tool Sếp đã mở",
+      "hint": "Máy chủ khai báo 61 tool, hiện chỉ 23 tool được phép gọi.",
+      "on": true,
+      "locked": true
+    },
+    {
+      "label": "Quyền tệp và nhóm áp cả qua MCP",
+      "hint": "Agent không đọc được tệp mà nhóm của nó không có quyền.",
+      "on": true
+    },
+    {
+      "label": "Dữ liệu nhân sự chỉ ở mức Owner",
+      "hint": "HRM không mở cho bất kỳ agent nào ngoài thư ký của Sếp.",
+      "on": true
+    },
+    {
+      "label": "Cho phép máy chủ MCP ngoài mạng nội bộ",
+      "hint": "Đang tắt. Bật sẽ cho agent gọi ra internet công cộng.",
+      "on": false
+    }
+  ],
+  "mcpMarket": [
+    {
+      "name": "Kế toán & Hoá đơn điện tử",
+      "meta": "mcp-einvoice · đọc hoá đơn, đối chiếu công nợ"
+    },
+    {
+      "name": "Vận tải & Theo dõi đơn",
+      "meta": "mcp-logistics · trạng thái chuyến, mốc giao"
+    },
+    {
+      "name": "Ngân hàng doanh nghiệp",
+      "meta": "mcp-banking · chỉ đọc số dư và giao dịch"
+    },
+    {
+      "name": "Giá nguyên vật liệu",
+      "meta": "mcp-commodity · giá gỗ, giấy, thép theo ngày"
+    },
+    {
+      "name": "Kho ghi chú Notion",
+      "meta": "mcp-notion · đồng bộ ghi chú nội bộ"
+    }
+  ],
+  "nodePoints@graphMode=groups": [
+    {
+      "name": "Group Ngành gỗ",
+      "meta": "412 người"
+    },
+    {
+      "name": "Vận hành Genesis",
+      "meta": "24 người"
+    },
+    {
+      "name": "Ban Tài chính",
+      "meta": "11 người"
+    },
+    {
+      "name": "Group Nhân sự Logistics",
+      "meta": "286 người"
+    },
+    {
+      "name": "Đối tác Thành Phát",
+      "meta": "4 người"
+    },
+    {
+      "name": "Kỹ thuật hạ tầng",
+      "meta": "9 người"
+    },
+    {
+      "name": "Truyền thông",
+      "meta": "13 người"
+    },
+    {
+      "name": "Điều hành mở rộng",
+      "meta": "WhatsApp · 6"
+    }
+  ],
+  "nodeEdges@graphMode=groups": [
+    {
+      "x1": 52,
+      "y1": 52,
+      "x2": 28,
+      "y2": 22,
+      "w": 2.5,
+      "stroke": "#8fd6b4",
+      "opacity": 0.8,
+      "title": "Vận hành ↔ Ngành gỗ · 9 người chung"
+    },
+    {
+      "x1": 52,
+      "y1": 52,
+      "x2": 80,
+      "y2": 30,
+      "w": 2.5,
+      "stroke": "#8fd6b4",
+      "opacity": 0.8,
+      "title": "Vận hành ↔ Tài chính · 6 người chung"
+    },
+    {
+      "x1": 52,
+      "y1": 52,
+      "x2": 16,
+      "y2": 62,
+      "w": 1.5,
+      "stroke": "#5a4f8c",
+      "opacity": 0.8,
+      "title": "Vận hành ↔ Nhân sự Logistics · 3 người"
+    },
+    {
+      "x1": 52,
+      "y1": 52,
+      "x2": 84,
+      "y2": 66,
+      "w": 2.5,
+      "stroke": "#e08b7a",
+      "opacity": 0.8,
+      "title": "Vận hành ↔ Thành Phát · quan hệ rủi ro"
+    },
+    {
+      "x1": 52,
+      "y1": 52,
+      "x2": 50,
+      "y2": 88,
+      "w": 1.5,
+      "stroke": "#5a4f8c",
+      "opacity": 0.8,
+      "title": "Vận hành ↔ Kỹ thuật · 4 người chung"
+    },
+    {
+      "x1": 28,
+      "y1": 22,
+      "x2": 16,
+      "y2": 62,
+      "w": 1.5,
+      "stroke": "#5a4f8c",
+      "opacity": 0.8,
+      "title": "Ngành gỗ ↔ Nhân sự Logistics · 2 người"
+    },
+    {
+      "x1": 80,
+      "y1": 30,
+      "x2": 84,
+      "y2": 66,
+      "w": 1.5,
+      "stroke": "#5a4f8c",
+      "opacity": 0.8,
+      "title": "Tài chính ↔ Thành Phát · 2 người"
+    },
+    {
+      "x1": 52,
+      "y1": 52,
+      "x2": 22,
+      "y2": 90,
+      "w": 1,
+      "stroke": "#595d6c",
+      "opacity": 0.5,
+      "title": "Vận hành ↔ Truyền thông · ít tương tác"
+    },
+    {
+      "x1": 52,
+      "y1": 52,
+      "x2": 88,
+      "y2": 8,
+      "w": 1,
+      "stroke": "#595d6c",
+      "opacity": 0.5,
+      "title": "Vận hành ↔ Điều hành mở rộng · tạm dừng"
+    }
+  ],
+  "nodeStats@graphMode=groups": [
+    {
+      "name": "Group Ngành gỗ Miền Nam",
+      "value": "412 người · 18 cơ hội"
+    },
+    {
+      "name": "Vận hành Genesis — Quý 4",
+      "value": "24 người · 5 ban"
+    },
+    {
+      "name": "Group Nhân sự Logistics",
+      "value": "286 người · 4 ứng viên"
+    },
+    {
+      "name": "Ban Tài chính",
+      "value": "11 người · 9 khách"
+    },
+    {
+      "name": "Đối tác Thành Phát",
+      "value": "4 người · rủi ro cao"
+    },
+    {
+      "name": "Điều hành mở rộng",
+      "value": "tạm dừng · chờ QR"
+    }
+  ],
+  "nodeInsights@graphMode=groups": [
+    {
+      "text": "Group Ngành gỗ là nguồn cơ hội lớn nhất nhưng không nối trực tiếp với Ban Tài chính — cơ hội phải đi qua Vận hành mới tới người duyệt chi."
+    },
+    {
+      "text": "Nhóm Đối tác Thành Phát chỉ nối vào hệ thống qua một người: Nguyễn Thu Hà. Người này đang quá tải."
+    },
+    {
+      "text": "Hai nhóm Truyền thông và Điều hành mở rộng gần như tách rời, dữ liệu từ đó ít được dùng."
+    },
+    {
+      "text": "Chín người xuất hiện ở cả Group Ngành gỗ và nhóm nội bộ — đây là kênh dò tin nhanh nhất."
+    }
+  ],
+  "nbSubjects@nbTab=groups": [
+    {
+      "id": "GRP-ZL-0231",
+      "name": "Group Ngành gỗ Miền Nam",
+      "flag": "nóng",
+      "tokens": "3.412 / 4.000",
+      "fill": "85%",
+      "age": "2 phút",
+      "kind": "group",
+      "gist": "Nguồn cơ hội lớn nhất. Giá MDF E1 đang là chủ đề nóng, hai bên cung và cầu cùng nằm trong nhóm này."
+    },
+    {
+      "id": "GRP-ZL-0114",
+      "name": "Vận hành Genesis — Quý 4",
+      "flag": "nội bộ",
+      "tokens": "2.106 / 4.000",
+      "fill": "53%",
+      "age": "11 phút",
+      "kind": "group",
+      "active": true,
+      "gist": "Nhóm điều hành chính. Việc được giao ở đây thường gấp và có mốc giờ cụ thể, cần chốt bằng văn bản."
+    },
+    {
+      "id": "GRP-ZL-0489",
+      "name": "Đối tác in ấn Thành Phát",
+      "flag": "rủi ro",
+      "tokens": "1.842 / 4.000",
+      "fill": "46%",
+      "age": "4 phút",
+      "kind": "group",
+      "gist": "Quan hệ đang xấu đi. Ba tin chưa ai trả lời, khách đã nêu khả năng đổi nhà cung cấp."
+    },
+    {
+      "id": "GRP-ZL-0356",
+      "name": "Group Nhân sự Logistics",
+      "flag": "quan sát",
+      "tokens": "1.204 / 4.000",
+      "fill": "30%",
+      "age": "1 giờ",
+      "kind": "group",
+      "gist": "Chỉ lắng nghe im lặng. Có tín hiệu ứng viên khớp vị trí Key Account đang trống."
+    },
+    {
+      "id": "GRP-ZL-0174",
+      "name": "Ban Tài chính",
+      "flag": "nội bộ",
+      "tokens": "986 / 4.000",
+      "fill": "25%",
+      "age": "35 phút",
+      "kind": "group",
+      "gist": "Duyệt chi và báo cáo. Phản hồi chậm dần trong ba ngày qua, trưởng ban đang quá tải."
+    },
+    {
+      "id": "GRP-WA-0011",
+      "name": "Kho lạnh Tân Cảng",
+      "flag": "tạm dừng",
+      "tokens": "412 / 4.000",
+      "fill": "10%",
+      "age": "2 ngày",
+      "kind": "group",
+      "gist": "Kênh WhatsApp đang hết phiên, nhóm này ngừng cập nhật từ 15:05 hôm nay."
+    },
+    {
+      "id": "GRP-ZL-0502",
+      "name": "Truyền thông & Sự kiện",
+      "flag": "nguội",
+      "tokens": "308 / 4.000",
+      "fill": "8%",
+      "age": "3 ngày",
+      "kind": "group",
+      "gist": "Ít tương tác. Chủ yếu là tệp media do agent tạo, không có tín hiệu thương mại."
+    }
+  ],
+  "nbCurrent@nbTab=groups": {
+    "initials": "VH",
+    "name": "Vận hành Genesis — Quý 4",
+    "id": "GRP-ZL-0114",
+    "agent": "Trợ lý thương mại đang trực",
+    "tokens": "2.106 / 4.000 token",
+    "context": "Zalo · 24 thành viên · 412 tin trong 24 giờ · nén lần thứ 9 lúc 15:00"
+  },
+  "nbSections@nbTab=groups": [
+    {
+      "title": "Nhận thức hiện tại",
+      "meta": "cập nhật 11 phút trước",
+      "lines": [
+        "Đây là nhóm điều hành chính, việc giao ở đây gần như luôn có mốc giờ và cần chốt bằng văn bản.",
+        "Anh Khoa là người ra quyết định trong nhóm; chị Hà giữ phần tài chính và duyệt chi.",
+        "Nhóm hay tag agent để so sánh báo giá — đây là loại yêu cầu xuất hiện nhiều nhất."
+      ]
+    },
+    {
+      "title": "Cần chú ý khi trả lời",
+      "meta": "2 điểm đang mở",
+      "lines": [
+        "Mọi số tiền trên 50 triệu ₫ phải dừng lại chờ Sếp duyệt, không được tự cam kết.",
+        "Không nhắc lại chuyện Thành Phát chậm phản hồi trong nhóm này — đang là chuyện tế nhị."
+      ]
+    },
+    {
+      "title": "Nhịp và văn phong nhóm",
+      "meta": "rút từ 412 tin",
+      "lines": [
+        "Nhóm hoạt động mạnh nhất 08:00–10:00 và 14:00–17:00; sau 18:00 gần như im.",
+        "Văn phong ngắn, không chào hỏi dài. Trả lời quá dài thường bị bỏ qua."
+      ]
+    },
+    {
+      "title": "Điều chưa biết",
+      "meta": "chưa đủ dữ liệu",
+      "lines": [
+        "Chưa rõ ai thay anh Khoa quyết khi anh đi vắng.",
+        "Chưa có tín hiệu nào về kế hoạch quý 1 năm sau."
+      ]
+    }
+  ],
+  "nbRefs@nbTab=groups": [
+    {
+      "id": "GRP-ZL-0114",
+      "t": "g",
+      "title": "Nhóm hiện tại"
+    },
+    {
+      "id": "PER-0003",
+      "t": "p",
+      "title": "Trần Minh Khoa — người quyết định"
+    },
+    {
+      "id": "PER-0007",
+      "t": "p",
+      "title": "Nguyễn Thu Hà — tài chính"
+    },
+    {
+      "id": "OPP-1815",
+      "t": "o",
+      "title": "Hợp đồng in ấn quý 4"
+    },
+    {
+      "id": "ACT-0231",
+      "t": "a",
+      "title": "Bản nháp báo giá chờ duyệt"
+    },
+    {
+      "id": "WRK-0411",
+      "t": "w",
+      "title": "Rà soát hợp đồng nhà cung cấp"
+    },
+    {
+      "id": "ALR-0233",
+      "t": "r",
+      "title": "Cảnh báo rủi ro Thành Phát"
+    },
+    {
+      "id": "DOC-0918",
+      "t": "d",
+      "title": "Hợp đồng bản sửa"
+    }
+  ],
+  "nbHistory@nbTab=groups": [
+    {
+      "time": "15:00",
+      "kind": "Bổ sung",
+      "text": "Ghi nhận nhóm hay tag agent để so sánh báo giá — xếp thành loại yêu cầu thường gặp nhất.",
+      "k": "add"
+    },
+    {
+      "time": "14:31",
+      "kind": "Bổ sung",
+      "text": "Nhận ra chị Hà giữ phần duyệt chi, không phải anh Khoa như hiểu trước đó.",
+      "k": "add"
+    },
+    {
+      "time": "Hôm qua",
+      "kind": "Tự sửa",
+      "text": "Trước đây cho rằng nhóm hoạt động cả tối; dữ liệu 14 ngày cho thấy sau 18:00 gần như im.",
+      "k": "fix"
+    },
+    {
+      "time": "19/09",
+      "kind": "Nén",
+      "text": "Gộp 96 tin xác nhận ngắn thành một câu về nhịp phản hồi của nhóm.",
+      "k": "compact"
+    },
+    {
+      "time": "16/09",
+      "kind": "Sếp ghim",
+      "text": "Mọi số tiền trên 50 triệu ₫ phải dừng chờ duyệt — Sếp ghim tay, không được nén bỏ.",
+      "k": "owner"
+    },
+    {
+      "time": "14/09",
+      "kind": "Khởi tạo",
+      "text": "Bắt đầu theo dõi nhóm, sổ tay trống, học từ 0 sự kiện.",
+      "k": "init"
+    }
+  ],
+  "nbDropped@nbTab=groups": [
+    {
+      "label": "96 tin xác nhận ngắn \"ok\", \"vâng\" trong 14 ngày"
+    },
+    {
+      "label": "41 tệp ảnh không chú thích"
+    },
+    {
+      "label": "Toàn bộ hội thoại trước 14/09 khi bắt đầu theo dõi"
+    },
+    {
+      "label": "18 sự kiện lịch đã qua và không phát sinh việc"
+    },
+    {
+      "label": "12 lượt chào buổi sáng của các thành viên"
+    }
+  ]
+}

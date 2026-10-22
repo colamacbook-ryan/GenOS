@@ -1,0 +1,9 @@
+# Lớp phủ cho MÔI TRƯỜNG DEV RIÊNG (docs/dev-local.md): chạy cạnh bản cài thật mà không đụng cổng/volume của nó.
+# Dùng qua `make dev-up` (đặt -p genh-dev ⇒ container genh-dev-*, volume genh-dev_*). KHÔNG dùng cho bản cài thật.
+services:
+  proxy:
+    ports: !override ["127.0.0.1:${GHDEV_PORT_WEB:-18443}:8443"]
+  api:
+    ports: ["127.0.0.1:${GHDEV_PORT_API:-18400}:8000"]
+  db:
+    ports: ["127.0.0.1:${GHDEV_PORT_DB:-18432}:5432"]

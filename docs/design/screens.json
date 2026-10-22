@@ -1,0 +1,214 @@
+[
+  {
+    "key": "overview",
+    "domain": "Việc hằng ngày",
+    "parent": null,
+    "name": "Hôm nay",
+    "en": "Cần Sếp xử lý · 4 số chính",
+    "title": "Hôm nay",
+    "subtitle": "Cần Sếp xử lý · 4 số chính",
+    "badge": "9"
+  },
+  {
+    "key": "inbox",
+    "domain": "Việc hằng ngày",
+    "parent": "Hộp thư & Việc",
+    "name": "Hộp thư",
+    "en": "Tin quan trọng đã được sắp xếp",
+    "title": "Hộp thư",
+    "subtitle": "Tin quan trọng đã được sắp xếp · cái gì quan trọng nhất lúc này",
+    "badge": "28"
+  },
+  {
+    "key": "workbench",
+    "domain": "Việc hằng ngày",
+    "parent": "Hộp thư & Việc",
+    "name": "Bàn làm việc",
+    "en": "Soạn & duyệt tin trả lời",
+    "title": "Bàn làm việc",
+    "subtitle": "Workbench · soạn, duyệt, hành động",
+    "badge": "6"
+  },
+  {
+    "key": "directory",
+    "domain": "Việc hằng ngày",
+    "parent": "Khách & Cơ hội",
+    "name": "Khách & Nhóm",
+    "en": "Nhóm theo kênh · lọc khách",
+    "title": "Khách & Nhóm",
+    "subtitle": "Danh sách nhóm theo kênh và con người có bộ lọc",
+    "badge": null
+  },
+  {
+    "key": "opportunity",
+    "domain": "Việc hằng ngày",
+    "parent": "Khách & Cơ hội",
+    "name": "Bảng cơ hội",
+    "en": "Cơ hội bán hàng đang theo",
+    "title": "Bảng cơ hội",
+    "subtitle": "Opportunity Board · pipeline sống từ chat",
+    "badge": "41"
+  },
+  {
+    "key": "search",
+    "domain": "Việc hằng ngày",
+    "parent": "Khách & Cơ hội",
+    "name": "Kho hội thoại",
+    "en": "Tìm trong mọi hội thoại",
+    "title": "Kho hội thoại",
+    "subtitle": "Knowledge & Search · tìm mẫu, không chỉ tìm câu",
+    "badge": null
+  },
+  {
+    "key": "profile",
+    "domain": "Việc hằng ngày",
+    "parent": "Khách & Cơ hội",
+    "name": "Hồ sơ sống",
+    "en": "Hồ sơ một người — mở từ danh sách",
+    "title": "Hồ sơ sống",
+    "subtitle": "Living Profile · vì sao hệ thống nghĩ vậy",
+    "badge": null,
+    "hidden": true
+  },
+  {
+    "key": "people",
+    "domain": "Việc hằng ngày",
+    "parent": "Đội ngũ",
+    "name": "Đánh giá con người",
+    "en": "Điểm nhân viên có chứng cứ",
+    "title": "Đánh giá con người",
+    "subtitle": "People Review · điểm số có chứng cứ",
+    "badge": null
+  },
+  {
+    "key": "care",
+    "domain": "Việc hằng ngày",
+    "parent": "Đội ngũ",
+    "name": "Chất lượng chăm sóc",
+    "en": "Cách nhân viên chăm khách",
+    "title": "Chất lượng chăm sóc",
+    "subtitle": "Care Quality · cách chăm, không chỉ số lần nhắn",
+    "badge": null
+  },
+  {
+    "key": "system",
+    "domain": "Việc hằng ngày",
+    "parent": null,
+    "name": "Cài đặt",
+    "en": "Sao lưu, cập nhật, tổ chức, bộ não AI, quyền, nhật ký",
+    "title": "Cài đặt",
+    "subtitle": "Settings · sao lưu, cập nhật, tổ chức, bộ não AI, quyền, nhật ký",
+    "badge": null
+  },
+  {
+    "key": "raw",
+    "domain": "Nâng cao",
+    "parent": "Tầng dữ liệu",
+    "name": "Kho dữ liệu thô",
+    "en": "Tin gốc các kênh gom về",
+    "title": "Kho dữ liệu thô",
+    "subtitle": "Raw Lake · mọi bridge gom hết về đây trước khi phân loại",
+    "badge": "18k"
+  },
+  {
+    "key": "rules",
+    "domain": "Nâng cao",
+    "parent": "Tầng dữ liệu",
+    "name": "Quy tắc sàng lọc",
+    "en": "Lọc, phân loại, chấm điểm",
+    "title": "Quy tắc sàng lọc",
+    "subtitle": "Refinery Rules · Sếp định nghĩa cách core agent đánh giá",
+    "badge": null
+  },
+  {
+    "key": "clean",
+    "domain": "Nâng cao",
+    "parent": "Tầng dữ liệu",
+    "name": "Kho sạch",
+    "en": "Dữ liệu đã lọc & bộ nhớ làm việc",
+    "title": "Kho sạch & Trí nhớ",
+    "subtitle": "Dữ liệu đã phân loại và trí nhớ tạm theo ID",
+    "badge": null
+  },
+  {
+    "key": "identity",
+    "domain": "Nâng cao",
+    "parent": "Tầng dữ liệu",
+    "name": "Hợp nhất danh tính",
+    "en": "Gộp một người nhiều tài khoản",
+    "title": "Hợp nhất danh tính",
+    "subtitle": "Identity Resolution · một người, nhiều kênh",
+    "badge": "12"
+  },
+  {
+    "key": "agents",
+    "domain": "Nâng cao",
+    "parent": "Agent & Model",
+    "name": "Danh tính Agent",
+    "en": "Tên, giọng, phạm vi trợ lý",
+    "title": "Danh tính Agent",
+    "subtitle": "Agent Identity · danh tính do Sếp định nghĩa",
+    "badge": null
+  },
+  {
+    "key": "api",
+    "domain": "Nâng cao",
+    "parent": "Agent & Model",
+    "name": "API & Model",
+    "en": "Khoá API và model cho trợ lý",
+    "title": "API & Model",
+    "subtitle": "Khoá API, endpoint và tham số cho từng agent",
+    "badge": null
+  },
+  {
+    "key": "mcp",
+    "domain": "Nâng cao",
+    "parent": "Agent & Model",
+    "name": "MCP Hub",
+    "en": "Máy chủ MCP bên ngoài",
+    "title": "MCP Hub",
+    "subtitle": "Máy chủ MCP bên ngoài mà agent được phép gọi",
+    "badge": "7"
+  },
+  {
+    "key": "graph",
+    "domain": "Nâng cao",
+    "parent": null,
+    "name": "Bản đồ quan hệ",
+    "en": "Ai quen ai, qua đâu",
+    "title": "Bản đồ quan hệ",
+    "subtitle": "Relationship Map · ai đang liên quan",
+    "badge": null
+  },
+  {
+    "key": "notebook",
+    "domain": "Nâng cao",
+    "parent": "Bản đồ quan hệ",
+    "name": "Sổ tay nhận thức",
+    "en": "Ghi chú trợ lý theo từng người",
+    "title": "Sổ tay nhận thức",
+    "subtitle": "AI-trợ lý tự ghi nhận thức lũy tiến cho từng ID người và ID nhóm",
+    "badge": null
+  },
+  {
+    "key": "supply",
+    "domain": "Nâng cao",
+    "parent": null,
+    "name": "Cung ↔ Cầu",
+    "en": "Ghép người cần với người có",
+    "title": "Cung ↔ Cầu",
+    "subtitle": "Ai cần mua, ai cần bán, ghép được với ai",
+    "badge": "27"
+  },
+  {
+    "key": "plugins",
+    "domain": "Nâng cao",
+    "parent": null,
+    "name": "Plugin & Tiện ích",
+    "en": "Plugin nền và plugin cài thêm",
+    "title": "Plugin & Tiện ích",
+    "subtitle": "Plugin nền DSH và plugin cài thêm từ bên ngoài",
+    "badge": "11",
+    "hidden": true
+  }
+]

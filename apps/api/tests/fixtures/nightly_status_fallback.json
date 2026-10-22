@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "mechanism": "systemd",
+  "enabled": true,
+  "active": true,
+  "unit_present": true,
+  "opted_out": false,
+  "owned_by_other": false,
+  "since": "2026-10-10T03:00:12Z",
+  "last_run_at": "2026-10-16T03:00:41Z",
+  "last_result": "up_to_date",
+  "next_run_at": "2026-10-17T03:00:00Z",
+  "linger": "yes",
+  "request_watcher": "failed",
+  "watcher": {
+    "state": "fallback",
+    "reason": "inotify",
+    "hint": "Hết hạn mức inotify: chạy `sudo sysctl -w fs.inotify.max_user_instances=1024` rồi `genh auto-update enable`."
+  },
+  "checked_at": "2026-10-16T05:12:00Z"
+}

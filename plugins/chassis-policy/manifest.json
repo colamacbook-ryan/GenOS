@@ -1,0 +1,26 @@
+{
+  "package": "@gen/chassis-policy",
+  "name": "Policy Engine",
+  "version": "2.2.0",
+  "layer": "chassis",
+  "entry": null,
+  "description": "Thang tự trị 0–6, luật cứng chờ duyệt, permit dùng một lần.",
+  "permissions": [],
+  "events": {
+    "subscribe": [],
+    "publish": []
+  },
+  "settings_schema": {},
+  "sandbox": {
+    "mode": "inprocess",
+    "memory_mb": 512,
+    "timeout_s": 30,
+    "net": "internal"
+  },
+  "dependencies": {
+    "@gen/chassis-store": "^2.2.0"
+  },
+  "load_order": 4,
+  "removable": false,
+  "can_disable": false
+}

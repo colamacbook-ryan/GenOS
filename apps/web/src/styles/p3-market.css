@@ -1,0 +1,108 @@
+/* Giai đoạn 3 · Cơ hội & Thị trường. */
+
+/* ── Bảng cơ hội ─────────────────────────────────────────────────────────── */
+.opp-pipeline-total { display: flex; align-items: center; gap: 9px; }
+.opp-pipeline-total__label { font-size: 11px; color: var(--color-neutral-500); }
+.opp-pipeline-total__value { font-size: 15px; font-weight: 600; color: var(--color-text); font-family: var(--font-mono); }
+.opp-pipeline-total__count { font-size: 10.5px; color: var(--color-neutral-500); }
+
+.opp-board { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; align-items: start; min-width: 0; }
+.opp-col { display: flex; flex-direction: column; gap: 9px; min-width: 0; }
+.opp-col__head { display: flex; align-items: center; gap: 7px; padding: 0 2px; }
+.opp-col__dot { width: 6px; height: 6px; flex: none; border-radius: 50%; }
+.opp-col__name { flex: 1; min-width: 0; font-size: 10.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--color-neutral-300); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.opp-col__count { flex: none; font-size: 10.5px; color: var(--color-neutral-500); font-family: var(--font-mono); }
+.opp-col__value { font-size: 10px; color: var(--color-neutral-500); padding: 0 2px; font-family: var(--font-mono); }
+.opp-col__drop { display: flex; flex-direction: column; gap: 8px; min-height: 40px; border-radius: var(--radius-md); transition: background .1s ease; }
+.opp-col__drop--over { background: var(--row-hover); outline: 1px dashed var(--color-accent-400); outline-offset: 2px; }
+
+.opp-card {
+  background: var(--color-surface); border: 1px solid var(--color-divider); border-radius: var(--radius-md);
+  padding: 11px 12px; display: flex; flex-direction: column; gap: 8px; cursor: grab;
+}
+.opp-card:hover { border-color: var(--color-neutral-700); }
+.opp-card:active { cursor: grabbing; }
+.opp-card__head { display: flex; align-items: center; gap: 7px; }
+.opp-card__heat { font-family: var(--font-mono); font-size: 12px; font-weight: 600; }
+.opp-card__code { flex: 1; min-width: 0; font-size: 9.5px; color: var(--color-neutral-500); font-family: var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.opp-card__menu { flex: none; display: grid; place-items: center; width: 20px; height: 20px; border: none; background: none; color: var(--color-neutral-500); border-radius: var(--radius-sm); cursor: pointer; }
+.opp-card__menu:hover { background: var(--nav-hover); color: var(--color-text); }
+.opp-card__menu:focus-visible { outline: 2px solid var(--color-accent-400); outline-offset: 1px; }
+.opp-card__need { font-size: 11.5px; color: var(--color-text); line-height: 1.4; text-wrap: pretty; }
+.opp-card__who { font-size: 10.5px; color: var(--color-neutral-400); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.opp-card__divider { height: 1px; background: var(--color-divider); }
+.opp-card__row { display: flex; align-items: center; gap: 2px 6px; flex-wrap: wrap; }
+.opp-card__value { flex: 1 0 auto; font-size: 10.5px; color: var(--color-neutral-300); font-family: var(--font-mono); white-space: nowrap; }
+.opp-card__conf { font-size: 10px; white-space: nowrap; }
+.opp-card__match { display: flex; align-items: flex-start; gap: 6px; font-size: 10px; color: var(--color-ok); line-height: 1.4; }
+.opp-card__match svg { flex: none; margin-top: 1px; }
+.opp-card__risk { display: flex; align-items: flex-start; gap: 6px; padding: 6px 8px; border-radius: var(--radius-sm); background: var(--color-bg); border: 1px solid var(--color-neutral-800); color: var(--color-neutral-400); font-size: 10px; line-height: 1.4; }
+.opp-card__risk svg { flex: none; margin-top: 1px; color: var(--color-warn); }
+
+@media (max-width: 1024px) {
+  .opp-board { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+}
+
+/* ── Cung ↔ Cầu ──────────────────────────────────────────────────────────── */
+.sup-head-actions { display: flex; align-items: center; gap: 9px; flex: none; }
+.sup-head-actions__count { font-size: 11px; color: var(--color-neutral-500); white-space: nowrap; }
+
+.sup-sides { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 16px; align-items: start; }
+.sup-side { border-top: 2px solid var(--color-divider); overflow: hidden; }
+.sup-side__head { display: flex; align-items: center; gap: 10px; }
+.sup-side__count { font-size: 11px; color: var(--color-neutral-400); font-family: var(--font-mono); white-space: nowrap; }
+.sup-side__list { display: flex; flex-direction: column; }
+.sup-row { padding: 12px 16px; border-bottom: 1px solid var(--color-divider); display: flex; flex-direction: column; gap: 8px; }
+.sup-row:last-child { border-bottom: none; }
+.sup-row:hover { background: var(--row-hover); }
+.sup-row__line { display: flex; align-items: center; gap: 9px; }
+.sup-row__heat { font-family: var(--font-mono); font-size: 11px; font-weight: 600; flex: none; }
+.sup-row__item { flex: 1; min-width: 0; font-size: 12.5px; color: var(--color-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sup-row__value { flex: none; font-size: 11.5px; color: var(--color-neutral-300); font-family: var(--font-mono); white-space: nowrap; }
+.sup-row__pid { flex: none; font-size: 10.5px; color: var(--color-neutral-500); font-family: var(--font-mono); }
+.sup-row__who { flex: 1; min-width: 0; font-size: 11px; color: var(--color-neutral-400); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sup-row__loc { flex: none; font-size: 10.5px; color: var(--color-neutral-500); }
+
+.sup-matches { display: flex; flex-direction: column; padding: 0; }
+.sup-matches__note { font-size: 11px; color: var(--color-neutral-500); }
+.sup-match { display: grid; grid-template-columns: minmax(0, 1fr) 170px minmax(0, 1fr) auto; gap: 16px; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--color-divider); }
+.sup-match:last-child { border-bottom: none; }
+.sup-match:hover { background: var(--row-hover); }
+.sup-match__side { min-width: 0; }
+.sup-match__item { font-size: 12px; color: var(--color-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sup-match__who { font-size: 10.5px; color: var(--color-neutral-500); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sup-match__mid { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.sup-match__score { font-size: 11px; font-weight: 600; font-family: var(--font-mono); }
+.sup-match__reasons { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
+.sup-match__reasons li { font-size: 9.5px; color: var(--color-neutral-500); text-align: center; line-height: 1.35; }
+.sup-match__actions { display: flex; align-items: center; gap: 8px; flex: none; }
+
+@media (max-width: 1024px) {
+  .sup-match { grid-template-columns: minmax(0, 1fr); }
+  .sup-match__mid { align-items: flex-start; }
+}
+
+/* ── Kho hội thoại ───────────────────────────────────────────────────────── */
+.src-box { padding: 15px 16px; display: flex; flex-direction: column; gap: 12px; }
+.src-search { display: flex; align-items: center; gap: 11px; height: 40px; padding: 0 13px; border: 1px solid var(--color-accent); border-radius: var(--radius-md); background: var(--color-bg); }
+.src-search__icon { color: var(--color-accent-300); flex: none; }
+.src-search__input { flex: 1; min-width: 0; border: none; background: none; color: var(--color-text); font: inherit; font-size: 13px; }
+.src-search__input:focus-visible { outline: none; }
+.src-search__meta { flex: none; font-size: 10.5px; color: var(--color-neutral-500); font-family: var(--font-mono); white-space: nowrap; }
+
+.src-facets { display: flex; flex-direction: column; gap: 8px; }
+.src-facet-group { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.src-facet-group__label { font-size: 10px; color: var(--color-neutral-500); letter-spacing: .06em; text-transform: uppercase; flex: none; }
+.src-facet-chip {
+  display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px; font-size: 10.5px; color: var(--color-neutral-300);
+  border: 1px solid var(--color-neutral-800); border-radius: 999px; background: var(--color-bg); cursor: pointer;
+}
+.src-facet-chip:hover { border-color: var(--color-neutral-700); }
+.src-facet-chip[aria-pressed='true'] { color: var(--color-accent-300); border-color: var(--color-accent); background: var(--color-accent-900); }
+.src-facet-chip:focus-visible { outline: 2px solid var(--color-accent-400); outline-offset: 1px; }
+
+.src-snippet { font-size: 11.5px; color: var(--color-neutral-400); line-height: 1.5; max-width: 360px; }
+.src-bulk-textarea { min-height: 88px; }
+
+/* ── Deal & Vụ việc ──────────────────────────────────────────────────────── */
+.deals-pane { display: flex; flex-direction: column; gap: 14px; }

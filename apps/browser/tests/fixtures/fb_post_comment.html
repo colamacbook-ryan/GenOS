@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="vi"><head><meta charset="utf-8"><title>Bài viết (trang mẫu)</title></head>
+<body>
+  <!-- Trang MẪU tự viết cho test — không phải HTML thật của Facebook. Không tải gì từ ngoài. -->
+  <div role="main">
+    <div role="article" aria-label="Bài viết của Shop Mai"><p>Bài viết: khuyến mãi cuối tuần.</p></div>
+    <div id="comments">
+      <div role="article" aria-label="Bình luận của Lan" id="c1">
+        <a href="/permalink.php?story_fbid=1&amp;comment_id=1">Lan</a>
+        <p>Giá bao nhiêu vậy shop?</p>
+        <div role="button" tabindex="0">Thích</div>
+        <div role="button" tabindex="0" class="reply">Phản hồi</div>
+      </div>
+      <div role="article" aria-label="Bình luận của Minh" id="c2">
+        <a href="/permalink.php?story_fbid=1&amp;comment_id=2">Minh</a>
+        <p>Còn hàng không ạ?</p>
+        <div role="button" tabindex="0" class="reply">Phản hồi</div>
+      </div>
+      <!-- Bình luận không có nút Phản hồi (đã khoá trả lời) -->
+      <div role="article" aria-label="Bình luận của Hùng" id="c3">
+        <a href="/permalink.php?story_fbid=1&amp;comment_id=3">Hùng</a>
+        <p>Bình luận đã khoá trả lời.</p>
+      </div>
+      <!-- comment_id dạng base64 dài (> 40 ký tự) như link thông báo thật của Facebook -->
+      <div role="article" aria-label="Bình luận của Thu" id="c4">
+        <a href="/permalink.php?story_fbid=1&amp;comment_id=Y29tbWVudDoxMjM0NTY3ODkwMTIzNDU2Xzk4NzY1NDMyMTA5ODc2NTQz%3D%3D">Thu</a>
+        <p>Ship về Đà Nẵng mấy ngày?</p>
+        <div role="button" tabindex="0" class="reply">Phản hồi</div>
+      </div>
+      <div role="article" aria-label="Bình luận của Tú" id="c5">
+        <a href="/permalink.php?story_fbid=1&amp;comment_id=Y29tbWVudDoxMjM0NTY3ODkwMTIzNDU2Xzk4NzY1NDMyMTA5ODc2NTQzOTk%3D">Tú</a>
+        <p>Có size XL không?</p>
+        <div role="button" tabindex="0" class="reply">Phản hồi</div>
+      </div>
+    </div>
+  </div>
+  <script>
+    document.querySelectorAll('.reply').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const art = btn.closest('[role="article"]');
+        if (art.querySelector('[role="textbox"]')) return;
+        const box = document.createElement('div');
+        box.setAttribute('contenteditable', 'true');
+        box.setAttribute('role', 'textbox');
+        box.setAttribute('aria-label', 'Viết phản hồi');
+        box.style.cssText = 'border:1px solid #888;min-height:24px;margin:4px';
+        art.appendChild(box);
+        box.addEventListener('keydown', (e) => {
+          if (e.key !== 'Enter') return;
+          e.preventDefault();
+          const text = box.innerText.trim();
+          if (!text) return;
+          const n = document.createElement('div');
+          n.setAttribute('role', 'article');
+          n.setAttribute('aria-label', 'Phản hồi của Bạn');
+          n.textContent = text;
+          art.parentNode.insertBefore(n, art.nextSibling);
+          box.remove();
+        });
+      });
+    });
+  </script>
+</body></html>

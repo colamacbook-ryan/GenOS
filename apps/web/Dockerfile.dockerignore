@@ -1,0 +1,16 @@
+# BuildKit reads <Dockerfile>.dockerignore; context is the repo root.
+**/node_modules
+**/dist
+**/test-results
+**/playwright-report
+**/.env
+**/*.local
+.git
+apps/api
+apps/bridge
+db
+deploy
+docs
+!docs/design/seed-data.json
+installer
+plugins

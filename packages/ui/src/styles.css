@@ -1,0 +1,298 @@
+/* @gen-harness/ui — Nocturne components for the Console.
+ * Every value comes from @gen-harness/tokens variables; sizes are copied from
+ * docs/design/Gen-Harness Console.dc.html (inline styles) and docs/handoff/02. */
+
+/* ── Button ─────────────────────────────────────────────────────────────── */
+.gh-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 30px; padding: 0 12px; flex: none;
+  font: inherit; font-family: var(--font-heading); font-weight: var(--font-heading-weight);
+  font-size: 11.5px; line-height: 1.2; white-space: nowrap; text-decoration: none;
+  color: var(--color-text); background: transparent;
+  border: 1px solid transparent; border-radius: var(--radius-md);
+  cursor: pointer;
+}
+.gh-btn:disabled, .gh-btn[aria-disabled='true'] { opacity: 0.45; cursor: not-allowed; }
+.gh-btn--primary { color: var(--color-accent-300); border-color: var(--color-accent); }
+.gh-btn--primary:not(:disabled):hover { background: color-mix(in srgb, var(--color-accent) 12%, transparent); }
+.gh-btn--primary:not(:disabled):active { background: color-mix(in srgb, var(--color-accent) 22%, transparent); }
+.gh-btn--secondary { border-color: var(--color-divider); padding: 0 11px; }
+.gh-btn--secondary:not(:disabled):hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
+.gh-btn--secondary:not(:disabled):active { background: color-mix(in srgb, var(--color-text) 14%, transparent); }
+.gh-btn--ghost { color: var(--color-accent); height: 26px; padding: 0 8px; }
+.gh-btn--ghost:not(:disabled):hover { background: color-mix(in srgb, var(--color-accent) 10%, transparent); }
+.gh-btn--ghost:not(:disabled):active { background: color-mix(in srgb, var(--color-accent) 18%, transparent); }
+.gh-btn--sm { height: 27px; padding: 0 10px; font-size: 11px; gap: 5px; }
+.gh-btn--block { width: 100%; }
+.gh-btn--icon { width: 32px; padding: 0; }
+.gh-btn__spinner {
+  width: 12px; height: 12px; border-radius: 50%;
+  border: 1.5px solid currentColor; border-right-color: transparent;
+  animation: gh-spin 0.8s linear infinite;
+}
+@keyframes gh-spin { to { transform: rotate(360deg); } }
+
+/* ── Pill (header status) ───────────────────────────────────────────────── */
+.gh-pill {
+  display: flex; align-items: center; gap: 6px; flex: none; white-space: nowrap;
+  border: 1px solid var(--color-neutral-800); border-radius: var(--radius-pill);
+  padding: 5px 10px 5px 9px; background: var(--surface-raised);
+}
+.gh-pill__text { font-size: 11px; color: var(--color-neutral-400); white-space: nowrap; }
+.gh-pill__text--mono { font-family: var(--font-mono); }
+.gh-pill--live { gap: 7px; padding-right: 11px; }
+.gh-pill--live .gh-pill__text { font-weight: 500; }
+.gh-live-dot {
+  width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--color-ok);
+  animation: gh-pulse var(--motion-live-duration) var(--motion-live-easing) infinite;
+}
+.gh-live-dot--off { background: var(--color-neutral-700); animation: none; }
+@keyframes gh-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+/* ── Chip (status) & Tag (kind) ─────────────────────────────────────────── */
+.gh-chip {
+  display: inline-flex; align-items: center; gap: 6px; flex: none;
+  font-size: 11px; padding: 2px 9px; border-radius: var(--radius-pill); white-space: nowrap;
+  color: var(--chip-tone, var(--color-neutral-400));
+  border: 1px solid var(--chip-border, var(--chip-tone, var(--color-neutral-800)));
+}
+.gh-chip__dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; flex: none; }
+.gh-tag {
+  display: inline-flex; align-items: center; flex: none;
+  font-size: 9.5px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase;
+  padding: 2px 7px; border-radius: var(--radius-sm); white-space: nowrap;
+  color: var(--tag-tone, var(--color-neutral-400));
+  border: 1px solid var(--tag-border, var(--color-neutral-800));
+}
+.gh-badge {
+  flex: none; font-size: 9.5px; font-weight: 600; padding: 1px 6px; border-radius: var(--radius-pill);
+  background: var(--badge-bg, var(--color-warn-tint)); color: var(--badge-tone, var(--color-warn));
+}
+
+/* ── Switch ─────────────────────────────────────────────────────────────── */
+.gh-switch {
+  position: relative; flex: none; width: 30px; height: 16px; padding: 0;
+  border: none; border-radius: var(--radius-pill); display: block; cursor: pointer;
+  background: var(--color-neutral-800);
+}
+.gh-switch[aria-checked='true'] { background: var(--color-accent); }
+.gh-switch__knob {
+  position: absolute; top: 3px; left: 3px; width: 10px; height: 10px; border-radius: 50%;
+  background: var(--color-bg); display: block; transition: left 0.12s ease;
+}
+.gh-switch[aria-checked='true'] .gh-switch__knob { left: 17px; }
+.gh-switch--locked { opacity: 0.55; cursor: not-allowed; }
+
+/* ── Tabs ───────────────────────────────────────────────────────────────── */
+.gh-tabs { display: flex; align-items: center; gap: 2px; border-bottom: 1px solid var(--color-divider); }
+/* v0.1.42: máy tính — dải tab dài xuống dòng thay vì tràn ngang (chữ tab không bị cắt "…"). Điện thoại: cuộn ngang
+ * trong dải (apps/web shell.css). */
+@media (min-width: 761px) {
+  .gh-tabs { flex-wrap: wrap; row-gap: 0; }
+}
+.gh-tab {
+  display: flex; align-items: center; gap: 7px;
+  height: 34px; padding: 0 14px; border: none; background: transparent;
+  font: inherit; font-size: 12.5px; font-weight: 400; color: var(--color-neutral-400);
+  cursor: pointer; white-space: nowrap; flex: none; overflow: visible; text-overflow: clip;
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.gh-tab:hover { color: var(--color-text); }
+.gh-tab[aria-selected='true'] { font-weight: 600; color: var(--color-text); border-bottom-color: var(--color-accent); }
+.gh-tab__count { font-size: 10.5px; color: var(--color-neutral-500); font-family: var(--font-mono); font-weight: 400; }
+
+/* ── Segmented ──────────────────────────────────────────────────────────── */
+/* Sau v0.1.49: hẹp hơn dải lựa chọn (vd Bản đồ quan hệ ở điện thoại) thì xuống dòng TRONG khung — không tràn trang, cũng
+   không cuộn ngang ẩn mất lựa chọn cuối. Đủ chỗ thì không đổi gì (max-width chỉ chặn khi rộng hơn cha). */
+.gh-seg {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 2px; flex: none; max-width: 100%;
+  border: 1px solid var(--color-neutral-800); border-radius: var(--radius-md); padding: 2px;
+}
+.gh-seg__opt {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  height: 26px; padding: 0 11px; border: none; border-radius: 6px;
+  font: inherit; font-size: 11.5px; cursor: pointer; white-space: nowrap;
+  background: transparent; color: var(--color-neutral-400);
+}
+.gh-seg__opt:hover { color: var(--color-text); }
+.gh-seg__opt[aria-checked='true'] { background: var(--nav-active); color: var(--color-text); }
+.gh-seg--block { display: flex; width: 100%; }
+.gh-seg--block .gh-seg__opt { flex: 1; }
+
+/* ── Card ───────────────────────────────────────────────────────────────── */
+.gh-card {
+  background: var(--color-surface); border: 1px solid var(--color-divider);
+  border-radius: var(--radius-md); overflow: hidden; min-width: 0;
+}
+.gh-card__header {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 12px 16px; border-bottom: 1px solid var(--color-divider);
+}
+.gh-card__title { font-size: 13px; font-weight: 600; color: var(--color-text); }
+.gh-card__kicker {
+  font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--color-neutral-500); margin-top: 1px;
+}
+.gh-card__body { padding: 15px 16px; }
+
+/* ── Empty / Error ──────────────────────────────────────────────────────── */
+.gh-state { display: flex; align-items: flex-start; gap: 14px; padding: 22px 16px; }
+.gh-state__tile {
+  width: 34px; height: 34px; flex: none; border-radius: var(--radius-md);
+  background: var(--color-neutral-900); border: 1px solid var(--color-neutral-800);
+  display: grid; place-items: center; color: var(--color-neutral-500);
+}
+.gh-state--error .gh-state__tile { color: var(--color-bad); }
+.gh-state__text { flex: 1; min-width: 0; }
+.gh-state__title { font-size: 13px; font-weight: 500; color: var(--color-text); }
+.gh-state__desc { font-size: 11.5px; color: var(--color-neutral-400); margin-top: 4px; line-height: 1.5; text-wrap: pretty; max-width: 560px; }
+.gh-state__actions { display: flex; gap: 8px; margin-top: 12px; }
+
+/* ── Skeleton ───────────────────────────────────────────────────────────── */
+.gh-skeleton {
+  display: block; background: var(--color-neutral-900); border-radius: var(--radius-sm);
+  animation: gh-pulse 1.6s ease-in-out infinite;
+}
+
+/* ── Tooltip ────────────────────────────────────────────────────────────── */
+.gh-tooltip {
+  position: fixed; z-index: 60; pointer-events: none; max-width: 280px;
+  padding: 6px 9px; border-radius: 6px;
+  background: var(--color-surface); color: var(--color-text); box-shadow: var(--shadow-md);
+  font-size: 11px; line-height: 1.4; white-space: normal;
+}
+.gh-tooltip__sub { display: block; color: var(--color-neutral-400); font-size: 10.5px; margin-top: 1px; }
+
+/* ── Fields ─────────────────────────────────────────────────────────────── */
+.gh-field { display: flex; flex-direction: column; min-width: 0; }
+.gh-field__label { font-size: 11.5px; font-weight: 500; color: var(--color-neutral-300); margin-bottom: 6px; }
+.gh-field__hint { font-size: 11px; color: var(--color-neutral-500); margin-top: 5px; line-height: 1.45; }
+.gh-field__error { font-size: 11px; color: var(--color-bad); margin-top: 5px; line-height: 1.45; }
+.gh-input {
+  width: 100%; height: 34px; padding: 0 11px;
+  font: inherit; font-size: 12.5px; color: var(--color-text); caret-color: var(--color-accent);
+  background: var(--color-bg); border: 1px solid var(--color-neutral-800); border-radius: var(--radius-md);
+}
+.gh-input::placeholder { color: var(--color-neutral-500); }
+.gh-input:hover { border-color: var(--color-neutral-700); }
+.gh-input:focus-visible { border-color: var(--color-accent); outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.gh-input[aria-invalid='true'] { border-color: var(--color-bad); }
+select.gh-input {
+  appearance: none; padding-right: 30px; cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, var(--color-neutral-500) 50%),
+    linear-gradient(135deg, var(--color-neutral-500) 50%, transparent 50%);
+  background-position: calc(100% - 15px) 15px, calc(100% - 11px) 15px;
+  background-size: 4px 4px; background-repeat: no-repeat;
+}
+.gh-input-wrap { position: relative; display: flex; align-items: center; }
+.gh-input-wrap .gh-input { padding-right: 38px; }
+.gh-input-wrap__btn {
+  position: absolute; right: 4px; width: 28px; height: 26px; display: grid; place-items: center;
+  border: none; background: transparent; color: var(--color-neutral-500); border-radius: 6px; cursor: pointer;
+}
+.gh-input-wrap__btn:hover { color: var(--color-text); background: var(--nav-hover); }
+
+/* ── PIN boxes (design: pinDigits in Điều khiển hệ thống) ───────────────── */
+.gh-pin { display: flex; gap: 7px; }
+.gh-pin__box {
+  width: 30px; height: 36px; padding: 0; text-align: center;
+  border: 1px solid var(--color-neutral-800); border-radius: var(--radius-sm);
+  background: var(--color-bg); color: var(--color-neutral-300);
+  font: inherit; font-size: 15px; caret-color: var(--color-accent);
+}
+.gh-pin__box:hover { border-color: var(--color-neutral-700); }
+.gh-pin__box:focus-visible { border-color: var(--color-accent); outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.gh-pin[aria-invalid='true'] .gh-pin__box { border-color: var(--color-bad); }
+.gh-pin__box:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ── Dialog ─────────────────────────────────────────────────────────────── */
+.gh-dialog-backdrop {
+  position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 16px;
+  background: color-mix(in srgb, var(--color-neutral-900) 50%, transparent);
+}
+.gh-dialog {
+  width: min(400px, 100%); background: var(--color-surface); border-radius: var(--radius-md);
+  border: 1px solid var(--color-divider); box-shadow: var(--shadow-lg); overflow: hidden;
+}
+.gh-dialog__body { padding: 15px 16px; display: flex; flex-direction: column; gap: 12px; }
+.gh-dialog__text { font-size: 12px; color: var(--color-neutral-400); line-height: 1.5; margin: 0; }
+.gh-dialog__status { font-size: 11px; line-height: 1.45; min-height: 16px; color: var(--color-neutral-400); }
+.gh-dialog__status--bad { color: var(--color-bad); }
+.gh-dialog__status--warn { color: var(--color-warn); }
+.gh-dialog__actions {
+  display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px;
+  border-top: 1px solid var(--color-divider);
+}
+
+/* ── Generic dialog (card language) ────────────────────────────────────── */
+.gh-dialog--generic { display: flex; flex-direction: column; max-height: calc(100vh - 32px); }
+.gh-dialog--generic > .gh-card__header { flex: none; }
+.gh-dialog__scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.gh-dialog__head-aside { display: flex; align-items: center; gap: 10px; flex: none; }
+.gh-dialog__close {
+  width: 26px; height: 26px; display: grid; place-items: center; flex: none; padding: 0;
+  border: none; border-radius: 6px; background: transparent; color: var(--color-neutral-500); cursor: pointer;
+}
+.gh-dialog__close:hover { color: var(--color-text); background: var(--nav-hover); }
+.gh-dialog--generic > .gh-dialog__actions { flex: none; }
+
+/* ── Filter chip + listbox (design rawFilters) ──────────────────────────── */
+.gh-filter { position: relative; flex: none; }
+.gh-filter__chip {
+  display: flex; align-items: center; height: 26px; padding: 0 10px; border-radius: var(--radius-pill);
+  font: inherit; font-size: 11px; white-space: nowrap; cursor: pointer;
+  color: var(--color-neutral-300); border: 1px solid var(--color-neutral-800); background: var(--color-bg);
+}
+.gh-filter__chip:hover { border-color: var(--color-neutral-700); }
+.gh-filter__chip[aria-expanded='true'] { border-color: var(--color-accent-800); }
+.gh-filter__label { color: var(--color-neutral-500); margin-right: 6px; }
+.gh-filter__caret { margin-left: 6px; color: var(--color-neutral-700); width: 11px; height: 11px; }
+.gh-filter__list {
+  position: absolute; z-index: 30; top: calc(100% + 4px); left: 0; min-width: 100%; max-height: 280px; overflow-y: auto;
+  margin: 0; padding: 4px; list-style: none; background: var(--color-surface); border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+}
+.gh-filter__list:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.gh-filter__opt {
+  display: flex; align-items: center; gap: 10px; height: 28px; padding: 0 9px; border-radius: 6px;
+  font-size: 11.5px; color: var(--color-neutral-300); cursor: pointer; white-space: nowrap;
+}
+.gh-filter__opt[data-active] { background: var(--nav-hover); color: var(--color-text); }
+.gh-filter__opt[aria-selected='true'] { color: var(--color-text); }
+.gh-filter__opt-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.gh-filter__check { color: var(--color-accent-300); }
+
+/* ── Table (Nocturne .table: fading row rules, hover tint) ──────────────── */
+.gh-table-scroll { width: 100%; overflow-x: auto; }
+.gh-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.gh-table th {
+  text-align: left; font-size: 9.5px; font-weight: 600; letter-spacing: 0.13em; text-transform: uppercase;
+  color: var(--color-neutral-500); padding: 9px 14px; border-bottom: 1px solid transparent;
+}
+.gh-table td { padding: 10px 14px; border-bottom: 1px solid transparent; }
+.gh-table thead tr {
+  background: linear-gradient(to right, transparent, var(--color-divider) 48px,
+    var(--color-divider) calc(100% - 48px), transparent) no-repeat bottom / 100% 1px;
+}
+.gh-table tbody tr {
+  background: linear-gradient(to right, transparent, color-mix(in srgb, var(--color-text) 8%, transparent) 48px,
+    color-mix(in srgb, var(--color-text) 8%, transparent) calc(100% - 48px), transparent) no-repeat bottom / 100% 1px;
+}
+.gh-table tbody tr:hover {
+  background:
+    linear-gradient(color-mix(in srgb, var(--color-text) 4%, transparent),
+                    color-mix(in srgb, var(--color-text) 4%, transparent)) no-repeat 0 0 / 100% 100%,
+    linear-gradient(to right, transparent, color-mix(in srgb, var(--color-text) 8%, transparent) 48px,
+      color-mix(in srgb, var(--color-text) 8%, transparent) calc(100% - 48px), transparent) no-repeat bottom / 100% 1px;
+}
+.gh-mono { font-family: var(--font-mono); }
+
+/* ── Bar (design: 4–5px track, 0.85 fill) ───────────────────────────────── */
+.gh-bar { display: block; height: 5px; border-radius: 3px; background: var(--color-divider); overflow: hidden; }
+.gh-bar > span { display: block; height: 100%; opacity: 0.85; background: var(--bar-tone, var(--color-accent)); }
+.gh-bar--4 { height: 4px; border-radius: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .gh-live-dot, .gh-skeleton, .gh-btn__spinner { animation: none; }
+  .gh-switch__knob { transition: none; }
+}

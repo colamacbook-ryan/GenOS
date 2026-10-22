@@ -1,0 +1,63 @@
+[project]
+name = "gen-harness-api"
+version = "0.1.0"
+description = "Gen-Harness API, worker và chassis plugin"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.121",
+  "uvicorn[standard]>=0.30",
+  "pydantic>=2.8",
+  "pydantic-settings>=2.4",
+  "sqlalchemy[asyncio]>=2.0.32,<2.1",
+  "asyncpg>=0.29",
+  "alembic>=1.13",
+  "psycopg[binary]>=3.2",
+  "redis>=5.0",
+  "arq>=0.26",
+  "argon2-cffi>=23.1",
+  "cryptography>=43",
+  "orjson>=3.10",
+  # Gọi nhà cung cấp AI, MCP, CLI (gh/providers, gh/chassis/mcp_client) — phụ
+  # thuộc lúc CHẠY, không chỉ lúc test: thiếu nó api/worker chết ngay khi import.
+  "httpx>=0.27",
+  # v0.1.36 (F-45): worker chạy cron theo ZoneInfo("Asia/Ho_Chi_Minh") — ảnh python:slim có thể thiếu
+  # /usr/share/zoneinfo; tzdata bảo đảm ZoneInfo luôn nạp được.
+  "tzdata>=2024.1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24",
+  "ruff>=0.6",
+  "mypy>=1.11",
+]
+
+[project.scripts]
+gh-api = "gh.main:run"
+gh-worker = "gh.worker:run"
+
+[build-system]
+requires = ["hatchling==1.32.4"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["gh"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
+markers = [
+  "slow: chịu lỗi thật (dừng/khởi động lại Postgres, Redis) hoặc benchmark nặng (10 triệu dòng) — không chạy trong pytest -q mặc định; chạy riêng bằng pytest -m slow",
+]
+addopts = "-m 'not slow'"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "ASYNC"]
+ignore = ["B008"]

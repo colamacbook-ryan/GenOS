@@ -1,0 +1,130 @@
+/* v0.1.59 (g5-thiet-lap) — Thiết lập MỘT màn, 3 bước (1 Tài khoản · 2 Nguồn AI · 3 Xong).
+ * Quy ước: CHỈ dùng token (packages/tokens) — không mã màu cứng, không chữ in hoa; cỡ chữ 12/14/18/28; hai độ đậm (400, 600);
+ * điểm gãy chỉ min-width 760/1024 (mobile-first); vùng chạm >= 44px; không cuộn ngang ở 390px. */
+
+.setup-one {
+  min-height: 100vh; display: flex; justify-content: center; align-items: flex-start;
+  padding: 16px; box-sizing: border-box;
+  background: var(--color-bg); color: var(--color-text);
+  font-family: var(--font-sans); font-size: 14px; line-height: 1.5;
+}
+.setup-one *, .setup-one *::before, .setup-one *::after { box-sizing: border-box; }
+.setup-one__card { width: 100%; max-width: 560px; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+
+/* ── Đầu thẻ: logo + thanh bước ── */
+.setup-one__head { display: flex; flex-direction: column; gap: 12px; }
+.setup-one__brand { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.setup-one__brand-tile {
+  flex: none; width: 32px; height: 32px; display: grid; place-items: center; border-radius: var(--radius-md);
+  border: 1px solid var(--color-accent); color: var(--color-accent);
+}
+.setup-one__brand-name { font-size: 14px; font-weight: 600; }
+.setup-one__steps {
+  list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;
+}
+.setup-one__step {
+  display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 44px; padding: 0 12px;
+  border: 1px solid var(--color-divider); border-radius: var(--radius-md); background: transparent;
+  color: var(--color-neutral-400); font-size: 12px;
+}
+.setup-one__step[data-state='current'] { border-color: var(--color-accent); background: var(--nav-active); color: var(--color-text); font-weight: 600; }
+.setup-one__step[data-state='done'] { color: var(--color-ok); }
+.setup-one__num {
+  flex: none; width: 24px; height: 24px; display: grid; place-items: center; border-radius: var(--radius-pill);
+  border: 1px solid currentColor; font-size: 12px; line-height: 1;
+}
+.setup-one__label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Thân thẻ ── */
+.setup-one__panel { display: flex; flex-direction: column; gap: 16px; padding: 16px; min-width: 0; }
+.setup-one__title { margin: 0; font-size: 18px; font-weight: 600; line-height: 1.3; }
+.setup-one__lead { margin: 0; font-size: 14px; color: var(--color-neutral-300); overflow-wrap: anywhere; }
+.setup-one__muted { margin: 0; font-size: 12px; color: var(--color-neutral-400); overflow-wrap: anywhere; }
+.setup-one__fields { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.setup-one__grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.setup-one__hint { margin: 0; font-size: 12px; color: var(--color-neutral-400); }
+.setup-one__note {
+  display: flex; align-items: flex-start; gap: 8px; padding: 12px; border: 1px solid var(--color-divider);
+  border-radius: var(--radius-md); font-size: 12px; color: var(--color-neutral-300); overflow-wrap: anywhere;
+}
+.setup-one__note[data-tone='ok'] { border-color: var(--color-ok); color: var(--color-text); }
+.setup-one__note[data-tone='warn'] { border-color: var(--color-warn); color: var(--color-text); }
+.setup-one__error { margin: 0; font-size: 12px; color: var(--color-bad); }
+.setup-one__error:empty { display: none; }
+
+/* ── "Tuỳ chỉnh" / "Nâng cao" thu gọn ── */
+.setup-one__more { border: 1px solid var(--color-divider); border-radius: var(--radius-md); min-width: 0; }
+.setup-one__more > summary {
+  display: flex; align-items: center; min-height: 44px; padding: 0 12px; cursor: pointer; font-size: 14px; font-weight: 600;
+  color: var(--color-neutral-300); list-style: none;
+}
+.setup-one__more > summary::-webkit-details-marker { display: none; }
+.setup-one__more > summary:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.setup-one__more[open] > summary { border-bottom: 1px solid var(--color-divider); }
+.setup-one__more-body { display: flex; flex-direction: column; gap: 16px; padding: 12px; min-width: 0; }
+
+/* ── Hai lựa chọn lớn của bước Nguồn AI ── */
+.setup-one__choice {
+  display: flex; flex-direction: column; gap: 12px; padding: 16px; min-width: 0;
+  border: 1px solid var(--color-divider); border-radius: var(--radius-md);
+}
+.setup-one__choice-title { margin: 0; font-size: 14px; font-weight: 600; }
+.setup-one__choice[data-ready] { border-color: var(--color-ok); }
+.setup-one__ready { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; color: var(--color-ok); font-weight: 600; }
+.setup-one__ready-names { color: var(--color-neutral-300); font-weight: 400; overflow-wrap: anywhere; }
+.setup-one__prov { display: flex; flex-direction: column; gap: 8px; }
+.setup-one__prov-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 12px;
+  border: 1px solid var(--color-divider); border-radius: var(--radius-md);
+}
+.setup-one__prov-main { flex: 1 1 160px; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.setup-one__prov-name { font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.setup-one__prov-test { font-size: 12px; color: var(--color-ok); overflow-wrap: anywhere; }
+.setup-one__prov-test[data-bad] { color: var(--color-bad); }
+
+/* ── Bước Xong ── */
+.setup-one__sum { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.setup-one__sum-row { display: flex; align-items: flex-start; gap: 12px; min-height: 44px; padding: 8px 12px; border: 1px solid var(--color-divider); border-radius: var(--radius-md); }
+.setup-one__sum-icon { flex: none; margin-top: 2px; }
+.setup-one__sum-body { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.setup-one__sum-k { font-size: 12px; color: var(--color-neutral-400); }
+.setup-one__sum-v { font-size: 14px; overflow-wrap: anywhere; }
+.setup-one__cta { display: flex; flex-direction: column; gap: 12px; }
+.setup-one__cta .gh-btn { min-height: 44px; justify-content: center; }
+.setup-one__cta-why { margin: 0; font-size: 12px; color: var(--color-neutral-300); overflow-wrap: anywhere; }
+.setup-one__links { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; font-size: 12px; }
+.setup-one__link {
+  display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0; border: none; background: transparent; cursor: pointer;
+  font-family: inherit; color: var(--color-accent-300); text-decoration: none; font-size: 12px;
+}
+.setup-one__link:hover { text-decoration: underline; }
+.setup-one__link:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.setup-one__link--quiet { color: var(--color-neutral-400); }
+
+/* ── Thanh hành động ── */
+.setup-one__actions { display: flex; flex-direction: column; gap: 8px; padding-top: 16px; border-top: 1px solid var(--color-divider); }
+.setup-one__actions .gh-btn { min-height: 44px; justify-content: center; }
+.setup-one__later { display: flex; flex-direction: column; gap: 0; }
+/* Mọi nút trong Thiết lập (Đăng nhập Google, Kiểm tra khoá…) có vùng chạm ≥ 44px như Mặt tiền — nút dùng lại từ Console mặc định thấp hơn. */
+.setup-one .gh-btn { min-height: 44px; }
+
+/* Khối dùng lại của màn cũ khi nằm trong thẻ gọn: không tràn ngang trên điện thoại. */
+.setup-one .setup-section { padding: 0; border-bottom: none; }
+.setup-one .setup-row, .setup-one .cli-login, .setup-one .risk-box { min-width: 0; overflow-wrap: anywhere; }
+.setup-one .cli-login__url { overflow-wrap: anywhere; }
+.setup-one .setup-cli--bare { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.setup-one .gh-input, .setup-one .gh-select { min-height: 44px; }
+
+@media (min-width: 760px) {
+  .setup-one { padding: 40px 24px 56px; }
+  .setup-one__panel { padding: 24px; gap: 24px; }
+  .setup-one__title { font-size: 28px; }
+  .setup-one__grid--two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .setup-one__actions { flex-direction: row-reverse; align-items: center; justify-content: space-between; }
+  .setup-one__actions .gh-btn { min-width: 160px; }
+  .setup-one__later { align-items: flex-start; }
+}
+
+@media (min-width: 1024px) {
+  .setup-one { padding-top: 64px; }
+}

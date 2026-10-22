@@ -1,0 +1,422 @@
+# Ảnh dựng sẵn (caddy, redis) GHIM DIGEST của danh sách đa kiến trúc (F-19, v0.1.48); Renovate tự mở PR nâng digest
+# (cả deploy/compose.yaml lẫn bản nhúng genh trong cùng một PR). Đo tay: docker buildx imagetools inspect <ảnh>:<tag>
+# (dòng Digest:, MediaType phải là index, có cả linux/amd64 và linux/arm64) — KHÔNG dùng digest của một kiến trúc.
+# Gen-Harness — `docker compose -f deploy/compose.yaml --env-file .env up -d` (hoặc `make up`).
+# Chỉ proxy mở cổng ra ngoài (8443). Bí mật: khoá master nằm ở ./secrets/gh_master_key (Docker secret).
+name: gen-harness
+
+# GH_DATABASE_URL/GH_ADMIN_DATABASE_URL KHÔNG nằm ở đây — mỗi service cần
+# một vai trò DB khác nhau (xem docs/reports/HANDOFF-v0.1.1.md mục "Hợp đồng
+# chung"): api/worker dùng role gh_app hạn quyền (RLS mới có hiệu lực),
+# migrate dùng superuser (DDL + tạo/ALTER role gh_app) — mỗi service tự khai
+# hai biến này trong "environment:" của chính nó, đè lên anchor này qua
+# "<<: *app-env".
+x-app-env: &app-env
+  GH_ENV: ${GH_ENV:-production}
+  GH_PUBLIC_URL: ${GH_PUBLIC_URL:-https://localhost:8443}
+  # v0.1.46 (F-21): cùng nguồn .env với cổng proxy bên dưới — api chỉ tin IP do proxy cục bộ (cloudflared/tailscaled)
+  # báo khi cổng nghe 127.0.0.1 (gh/auth/deps.py::client_ip).
+  GH_ACCESS_MODE: ${GH_ACCESS_MODE:-}
+  GH_BIND_ADDR: ${GH_BIND_ADDR:-127.0.0.1}
+  GH_REDIS_URL: redis://redis:6379/0
+  GH_OBJECTS_DIR: /var/lib/gh/objects
+  GH_MASTER_KEY_FILE: /run/secrets/gh_master_key
+  GH_BRIDGE_KEY_FILE: /run/secrets/gh_bridge_key
+  # v0.1.29: khoá RIÊNG với browser-worker (ký việc/kết quả, mã hoá phiên mạng xã hội khi truyền) — genh tự sinh
+  # secrets/gh_browser_key (cả khi cài mới lẫn `genh update` bản cũ lên).
+  GH_BROWSER_KEY_FILE: /run/secrets/gh_browser_key
+  # Redis RIÊNG với browser-worker (chỉ khoá gh:browser:*) — container Chromium KHÔNG thấy Redis chính (hàng đợi arq).
+  GH_BROWSER_REDIS_URL: redis://browser-redis:6379/0
+  GH_SETUP_TOKEN: ${GH_SETUP_TOKEN:-}
+  # Khoá mã hoá riêng cho backup (khác GH_MASTER_KEY) — sinh ở Bước 4
+  # (secretgen.Bundle.BackupKey, hex 64 ký tự), agent Python (gh/backup.py)
+  # dùng để mã hoá bytes backup độc lập với khoá master của máy.
+  GH_BACKUP_KEY: ${GH_BACKUP_KEY:-}
+
+# Giới hạn log container (F-37): json-file, tối đa 3 tệp × 10 MB mỗi dịch vụ — log không giới hạn làm đầy đĩa.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  proxy:
+    image: caddy:2-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f
+    restart: unless-stopped
+    logging: *logging
+    # Mặc định chỉ máy này (127.0.0.1); genh ghi GH_BIND_ADDR=0.0.0.0 vào .env khi Owner chọn LAN hoặc bản cài cũ.
+    ports: ["${GH_BIND_ADDR:-127.0.0.1}:${GH_PORT:-8443}:8443"]
+    # Đổi Caddyfile ⇒ đổi nhãn ⇒ compose tạo lại proxy (không thì container cũ giữ CSP cũ).
+    # Giá trị = 12 ký tự đầu sha256(deploy/proxy/Caddyfile); tests/test_proxy_csp_v0135.py canh.
+    labels:
+      gh.caddyfile-sha: "9de1bb28d817"
+    environment:
+      GH_SITE_ADDRESS: ${GH_SITE_ADDRESS:-127.0.0.1}
+    volumes:
+      - ./proxy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      api: { condition: service_healthy }
+      web: { condition: service_healthy }
+
+  web:
+    build: { context: .., dockerfile: apps/web/Dockerfile }
+    restart: unless-stopped
+    logging: *logging
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+
+  migrate:
+    build: { context: .., dockerfile: deploy/images/api.Dockerfile }
+    command: ["alembic", "upgrade", "heads"]
+    environment:
+      <<: *app-env
+      # migrate CẦN quyền superuser để chạy DDL — KHÁC api/worker (đã đổi
+      # sang role gh_app hạn quyền, xem GH_DATABASE_URL của hai service đó
+      # bên dưới).
+      GH_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-gh}:${POSTGRES_PASSWORD:?đặt POSTGRES_PASSWORD trong .env}@db:5432/${POSTGRES_DB:-gen_harness}
+      # Mật khẩu role gh_app — migration 0014 tạo/ALTER role này bằng giá
+      # trị ở đây (thiếu thì migration tự tạo role NOLOGIN + cảnh báo, không
+      # lỗi — xem docs/reports/HANDOFF-v0.1.1.md).
+      GH_APP_DB_PASSWORD: ${GH_APP_DB_PASSWORD:?đặt GH_APP_DB_PASSWORD trong .env}
+    secrets: [gh_master_key]
+    depends_on:
+      db: { condition: service_healthy }
+    restart: "no"
+    logging: *logging
+
+  api:
+    build: { context: .., dockerfile: deploy/images/api.Dockerfile }
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      <<: *app-env
+      # api/worker kết nối bằng role gh_app (không phải superuser, không
+      # BYPASSRLS) để RLS thật sự có hiệu lực — xem migration 0014.
+      GH_DATABASE_URL: postgresql+asyncpg://gh_app:${GH_APP_DB_PASSWORD:?đặt GH_APP_DB_PASSWORD trong .env}@db:5432/${POSTGRES_DB:-gen_harness}
+      # Superuser dự phòng cho backup/bảo trì phân vùng
+      # (Settings.admin_database_url) — rỗng thì code tự dùng GH_DATABASE_URL.
+      GH_ADMIN_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-gh}:${POSTGRES_PASSWORD:?đặt POSTGRES_PASSWORD trong .env}@db:5432/${POSTGRES_DB:-gen_harness}
+      # v0.1.40 (F-12): "Khoá khôi phục" — mật khẩu gói .ghbundle của bản sao ngoài máy
+      # (genh tự sinh secrets/gh_offsite_key). CHỈ api (Owner + PIN mới xem/tải được).
+      GH_OFFSITE_KEY_FILE: /run/secrets/gh_offsite_key
+      # v0.1.63 (H1): hộp riêng Antigravity (agy-box) — api/worker gọi qua HTTP ký HMAC bằng gh_agy_key (docs/api/agybox-protocol.md).
+      GH_AGYBOX_URL: http://agy-box:8090
+      GH_AGYBOX_KEY_FILE: /run/secrets/gh_agy_key
+    secrets: [gh_master_key, gh_bridge_key, gh_browser_key, gh_offsite_key, gh_agy_key]
+    volumes:
+      - agy_state:/var/lib/gh/agy
+      # F-22: phiên Claude Code tách khỏi HOME của Antigravity CLI (agy đọc được tệp trong HOME của nó).
+      - claude_state:/var/lib/gh/claude
+      - gh_objects:/var/lib/gh/objects
+      # Hộp thư Console ↔ genh trên máy chủ (<gốc cài đặt>/run, genh tạo sẵn 0777 và đặt
+      # GH_HOST_LINK_DIR): phiên bản đang chạy, yêu cầu "Cập nhật ngay", trạng thái cập nhật.
+      - ${GH_HOST_LINK_DIR:-../run}:/var/lib/gh/host
+    # browser-bus: chỉ để tới browser-redis (không chung mạng với container browser). agy-bus: chỉ để tới agy-box.
+    networks: [default, browser-bus, agy-bus]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+      browser-redis: { condition: service_started }
+
+  worker:
+    build: { context: .., dockerfile: deploy/images/api.Dockerfile }
+    command: ["arq", "gh.worker.WorkerSettings"]
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      <<: *app-env
+      GH_DATABASE_URL: postgresql+asyncpg://gh_app:${GH_APP_DB_PASSWORD:?đặt GH_APP_DB_PASSWORD trong .env}@db:5432/${POSTGRES_DB:-gen_harness}
+      GH_ADMIN_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-gh}:${POSTGRES_PASSWORD:?đặt POSTGRES_PASSWORD trong .env}@db:5432/${POSTGRES_DB:-gen_harness}
+      GH_AGYBOX_URL: http://agy-box:8090
+      GH_AGYBOX_KEY_FILE: /run/secrets/gh_agy_key
+    secrets: [gh_master_key, gh_bridge_key, gh_browser_key, gh_agy_key]
+    # nocopy + chờ api: volume mới tinh được Docker chép nội dung ảnh
+    # (/var/lib/gh/agy/.gemini/…, quyền gh) vào lần mount đầu. api và worker
+    # tạo cùng lúc thì cả hai cùng chép → "mkdir …: file exists" (e2e release
+    # v0.1.8). Chỉ api chép; worker mount sau, không chép.
+    volumes:
+      - { type: volume, source: agy_state, target: /var/lib/gh/agy, volume: { nocopy: true } }
+      - { type: volume, source: claude_state, target: /var/lib/gh/claude, volume: { nocopy: true } }
+      - { type: volume, source: gh_objects, target: /var/lib/gh/objects, volume: { nocopy: true } }
+    healthcheck:
+      test: ["CMD", "arq", "--check", "gh.worker.WorkerSettings"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks: [default, browser-bus, agy-bus]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+      browser-redis: { condition: service_started }
+      api: { condition: service_started }
+
+  # v0.1.63 (H1) — HỘP RIÊNG ANTIGRAVITY: agy chạy trong container riêng để nội dung người ngoài (tin khách, tin người lạ)
+  # có lừa được agy đọc tệp/chạy lệnh cũng KHÔNG chạm khoá master, DB hay Redis chính. Cùng ảnh api (đã có agy ghim SHA) nhưng
+  # chạy `python -m gh.agybox.server`. KHÔNG có GH_DATABASE_URL/GH_ADMIN_DATABASE_URL/GH_REDIS_URL, KHÔNG có khoá master/bridge/
+  # browser/offsite (chỉ gh_agy_key để kiểm chữ ký yêu cầu), KHÔNG ở mạng default (không thấy db/redis/bridge/browser-redis).
+  # Review v0.1.63 (P2-2): CHỈ mạng agy-bus (internal — api/worker gọi vào); ra Internet DUY NHẤT qua proxy agy-egress
+  # (HTTPS_PROXY): proxy chặn đích là / phân giải ra IP nội bộ (gateway Docker, LAN của máy chủ, loopback, link-local, CGNAT).
+  # Review v0.1.63 (P1-1): hộp KHÔNG mount volume nào (kể cả agy_state) — tệp token OAuth của hồ sơ đang hoạt động đến trong
+  # từng yêu cầu đã ký, đặt vào HOME tạm của đúng lượt đó (tmpfs /tmp, xoá sau lượt). Review lần 2 (P2-1, GH_AGYBOX_REAP=1):
+  # sau MỖI lượt hộp giết mọi tiến trình agy để lại (kể cả đã setsid thoát nhóm — tini nhận nuôi) rồi xoá sạch /tmp và
+  # /dev/shm ⇒ agy có bị lừa cũng không để lại gì cho api/worker hay lượt sau. Không claude_state, gh_objects hay run/ của
+  # máy chủ. Hộp KHÔNG gọi ngược api.
+  # Nợ: proxy mặc định cho mọi tên miền công khai (GH_AGY_EGRESS_ALLOW rỗng) — allowlist chặt khi đã đo đủ tên miền agy dùng.
+  agy-box:
+    build: { context: .., dockerfile: deploy/images/api.Dockerfile }
+    command: ["python", "-m", "gh.agybox.server"]
+    restart: unless-stopped
+    logging: *logging
+    init: true
+    environment:
+      GH_AGYBOX_KEY_FILE: /run/secrets/gh_agy_key
+      GH_CLI_BINARY: agy
+      AGY_CLI_DISABLE_AUTO_UPDATE: "1"
+      GH_AGYBOX_MAX_JOBS: "1"
+      # agy theo HTTPS_PROXY (đã đo: CONNECT qua proxy); AgyClient chuyển hai biến này vào môi trường sạch của agy.
+      HTTPS_PROXY: http://agy-egress:3128
+      HTTP_PROXY: http://agy-egress:3128
+      # Healthcheck (urllib) gọi 127.0.0.1:8090 — phải đi thẳng, không qua proxy (proxy chỉ nhận CONNECT ⇒ 405).
+      NO_PROXY: 127.0.0.1,localhost
+      # Dọn sau mỗi lượt (gh.agybox.reaper): chỉ có tác dụng khi server là tiến trình chính của container (init: true).
+      GH_AGYBOX_REAP: "1"
+    secrets: [gh_agy_key]
+    networks: [agy-bus]
+    depends_on:
+      api: { condition: service_started }
+      agy-egress: { condition: service_started }
+    read_only: true
+    tmpfs: ["/tmp:size=256m"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 1g
+    cpus: 1.5
+    pids_limit: 256
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8090/healthz', timeout=3).status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # Review v0.1.63 (P2-2) — PROXY LỐI RA của hộp riêng Antigravity: cùng ảnh api (không thêm ảnh), chạy
+  # `python -m gh.agybox.egress` (chỉ stdlib, không khoá, không volume). Chỉ nhận CONNECT tới cổng 443; phân giải tên MỘT lần,
+  # mọi IP phải định tuyến toàn cầu (chặn RFC1918, loopback, link-local, CGNAT 100.64/10, gateway, IPv6 nội bộ) rồi nối thẳng
+  # IP đã kiểm (chống DNS rebinding). GH_AGY_EGRESS_ALLOW (tuỳ chọn, phân cách dấu phẩy, vd
+  # "googleapis.com,accounts.google.com,antigravity-unleash.goog") giới hạn tên miền; rỗng = mọi tên miền công khai.
+  # Hai mạng: agy-bus (hộp gọi vào) và agy-out (ra Internet) — KHÔNG mạng default.
+  agy-egress:
+    build: { context: .., dockerfile: deploy/images/api.Dockerfile }
+    command: ["python", "-m", "gh.agybox.egress"]
+    restart: unless-stopped
+    logging: *logging
+    init: true
+    environment:
+      GH_AGY_EGRESS_ALLOW: ${GH_AGY_EGRESS_ALLOW:-}
+      GH_AGY_EGRESS_PORTS: "443"
+    networks: [agy-bus, agy-out]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 128m
+    cpus: 0.5
+    pids_limit: 64
+    # Ảnh api có HEALTHCHECK riêng (cổng 8000) — ghi đè bằng kiểm cổng proxy.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 3128), 3).close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  bridge:
+    build: { context: .., dockerfile: deploy/images/bridge.Dockerfile }
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      GH_REDIS_URL: redis://redis:6379/0
+      GH_BRIDGE_KEY_FILE: /run/secrets/gh_bridge_key
+    # Bridge chỉ nhận khoá bridge (ký permit, mã hoá phiên khi truyền) — không bao giờ nhận khoá master.
+    secrets: [gh_bridge_key]
+    depends_on:
+      redis: { condition: service_healthy }
+
+  # v0.1.29 — Gen đọc mạng xã hội (docs/design/gen-browser-agent.md §3.1): Playwright + Chromium trong container
+  # RIÊNG. KHÔNG truy cập Postgres, KHÔNG giữ khoá master, không gọi model, KHÔNG thấy Redis chính (hàng đợi arq của
+  # worker giữ khoá master) — chỉ nói với browser-redis. Chỉ ở mạng nội bộ `browser` (không có đường ra Internet) — lối
+  # ra duy nhất là browser-egress (chỉ tên miền nền tảng, chặn IP nội bộ). Rảnh thì chỉ là một tiến trình Python nhỏ;
+  # Chromium chỉ mở khi có việc (Owner bấm/hỏi Gen/lịch Owner bật).
+  # Sandbox của Chromium (F-85, v0.1.47) BẬT: Chromium chạy dưới user pwuser (không root) với vùng cách ly của chính nó
+  # (user namespace + seccomp-bpf), KHÔNG dùng chrome-sandbox setuid (trái no-new-privileges). Container vẫn cap_drop ALL +
+  # no-new-privileges; profile seccomp riêng (./browser/chromium-seccomp.json = profile mặc định của Docker + clone/unshare/
+  # setns/chroot để Chromium tạo namespace) thay profile mặc định. GH_BROWSER_SANDBOX=auto: máy chủ không cho user namespace
+  # (vd Ubuntu 24.04 chặn bằng AppArmor) thì tự lùi về không sandbox và BÁO THẬT qua nhịp tim (api khoá việc ghi cho tới khi
+  # Sếp đồng ý rủi ro); on = bắt buộc (lỗi thì không chạy); off = tắt.
+  browser:
+    build: { context: .., dockerfile: deploy/images/browser.Dockerfile }
+    restart: unless-stopped
+    logging: *logging
+    init: true
+    environment:
+      GH_REDIS_URL: redis://browser-redis:6379/0
+      GH_BROWSER_KEY_FILE: /run/secrets/gh_browser_key
+      GH_BROWSER_PROXY: http://browser-egress:3128
+      GH_BROWSER_HEADLESS: "0"
+      GH_BROWSER_MAX_JOBS: "2"
+      GH_BROWSER_SANDBOX: ${GH_BROWSER_SANDBOX:-auto}
+    secrets: [gh_browser_key]
+    networks: [browser]
+    read_only: true
+    tmpfs: ["/tmp:size=768m"]
+    shm_size: 256m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true", "seccomp=${GH_BROWSER_SECCOMP:-./browser/chromium-seccomp.json}"]
+    mem_limit: 1536m
+    cpus: 1.5
+    pids_limit: 512
+    depends_on:
+      browser-redis: { condition: service_healthy }
+      browser-egress: { condition: service_started }
+
+  # Kênh RIÊNG api/worker ↔ browser-worker: chỉ khoá gh:browser:* (việc/kết quả đã ký, điều khiển, khung hình, nhịp
+  # tim) — không hàng đợi arq, không dữ liệu nào khác. Hai chân: `browser` (container browser) và `browser-bus`
+  # (api/worker); không ở mạng default nên kể cả bị chiếm cũng không tới được Redis chính/Postgres. Không lưu xuống
+  # đĩa; tắt Lua/lệnh nguy hiểm (CONFIG, KEYS, FLUSH*, DEBUG, MODULE…) cho mọi kết nối.
+  browser-redis:
+    image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    restart: unless-stopped
+    logging: *logging
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - 64mb
+      - --maxmemory-policy
+      - noeviction
+      - --user
+      - default
+      - "on"
+      - nopass
+      - "~*"
+      - "&*"
+      - "+@all"
+      - "-@dangerous"
+      - "-@scripting"
+    networks: [browser, browser-bus]
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [SETUID, SETGID]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  browser-egress:
+    build: { context: .., dockerfile: deploy/images/browser.Dockerfile }
+    command: ["python3", "-m", "ghb.egress"]
+    restart: unless-stopped
+    logging: *logging
+    init: true
+    environment:
+      GH_EGRESS_ALLOW: facebook.com,fbcdn.net,facebook.net,fbsbx.com,messenger.com
+    # browser-out: mạng riêng chỉ để ra Internet — egress cũng không chung mạng với Redis chính/Postgres/api.
+    networks: [browser, browser-out]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 128m
+
+  db:
+    build: { context: .., dockerfile: deploy/images/db.Dockerfile }
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-gh}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?đặt POSTGRES_PASSWORD trong .env}
+      POSTGRES_DB: ${POSTGRES_DB:-gen_harness}
+    # Tinh chỉnh từ RAM máy (genh tính ở apps/genh/internal/pgtune, truyền
+    # qua GH_PG_* trong overlay môi trường khi gọi `docker compose`) — mặc
+    # định an toàn dưới đây dùng khi chạy `docker compose` tay, không qua
+    # genh (vd `make up`), hoặc trên máy chưa dò được RAM.
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - shared_buffers=${GH_PG_SHARED_BUFFERS:-256MB}
+      - -c
+      - effective_cache_size=${GH_PG_EFFECTIVE_CACHE_SIZE:-768MB}
+      - -c
+      - work_mem=${GH_PG_WORK_MEM:-4MB}
+      - -c
+      - maintenance_work_mem=${GH_PG_MAINTENANCE_WORK_MEM:-64MB}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    restart: unless-stopped
+    logging: *logging
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+secrets:
+  gh_master_key:
+    file: ../secrets/gh_master_key
+  gh_bridge_key:
+    file: ../secrets/gh_bridge_key
+  gh_browser_key:
+    file: ../secrets/gh_browser_key
+  gh_offsite_key:
+    file: ../secrets/gh_offsite_key
+  # v0.1.63 (H1): khoá RIÊNG api/worker ↔ agy-box (32 byte base64) — genh tự sinh khi cài mới và `genh update`.
+  gh_agy_key:
+    file: ../secrets/gh_agy_key
+
+networks:
+  default: {}
+  # browser + browser-egress + browser-redis — không ra Internet, không có api/worker/redis/db.
+  browser:
+    internal: true
+  # browser-redis + api + worker — chỉ để api/worker tới browser-redis.
+  browser-bus:
+    internal: true
+  # Chỉ browser-egress: đường ra Internet của trình duyệt.
+  browser-out: {}
+  # v0.1.63 (H1): api + worker + agy-box (+ agy-egress, P2-2) — api/worker gọi vào hộp, hộp gọi proxy lối ra; không
+  # db/redis/bridge/browser.
+  agy-bus:
+    internal: true
+  # Chỉ agy-egress: đường ra Internet của agy (qua proxy chặn IP nội bộ — hộp không còn ở mạng này).
+  agy-out: {}
+
+volumes:
+  caddy_data:
+  pg_data:
+  redis_data:
+  gh_objects:
+  agy_state:
+  # F-22 (v0.1.38): phiên Claude Code (GH_CLAUDE_HOME=/var/lib/gh/claude/.claude), tách khỏi agy_state.
+  claude_state:

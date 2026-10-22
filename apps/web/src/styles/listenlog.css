@@ -1,0 +1,113 @@
+/* Nhật ký lắng nghe (v0.1.68). Màu/cỡ chữ theo token; điểm nhấn duy nhất là "chuỗi việc hệ thống đã làm" dưới mỗi tin. */
+
+.ll-live { display: inline-flex; align-items: center; gap: 8px; font-size: 11px; color: var(--color-neutral-400); }
+
+.ll-note {
+  display: flex; gap: 8px; align-items: flex-start; margin: 0; padding: 9px 12px; max-width: 880px;
+  font-size: 11.5px; line-height: 1.55; color: var(--color-neutral-400); text-wrap: pretty;
+  border: 1px dashed var(--color-neutral-800); border-radius: var(--radius-md);
+}
+.ll-note .gh-icon, .ll-note svg { margin-top: 2px; }
+
+/* Số liệu 24 giờ: mỗi kênh một ô bấm được để lọc. */
+.ll-stats { display: flex; flex-wrap: wrap; gap: 10px; }
+.ll-stat {
+  display: flex; flex-direction: column; gap: 3px; text-align: left; font: inherit; color: inherit; cursor: pointer;
+  flex: 1 1 190px; max-width: 280px; min-width: 0; padding: 10px 13px;
+  background: var(--color-surface); border: 1px solid var(--color-divider); border-radius: var(--radius-md);
+}
+.ll-stat[aria-pressed='true'] { border-color: var(--color-accent-700); background: var(--color-accent-900); }
+.ll-stat--total { cursor: default; background: transparent; border-style: dashed; }
+.ll-stat__head { display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--color-neutral-300); }
+.ll-stat__num { font-family: var(--font-mono); font-size: 20px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.1; color: var(--color-text); }
+.ll-stat__sub { font-size: 10.5px; color: var(--color-neutral-500); line-height: 1.4; }
+
+.ll-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.ll-search { flex: 1 1 220px; min-width: min(100%, 200px); max-width: 360px; }
+.ll-filters > .gh-btn { flex: none; }
+/* Màn rộng (≥ 1100px): ô tìm chữ co lại nhường chỗ để «Xoá n bộ lọc» ở lại CÙNG hàng thay vì rớt xuống hàng riêng. */
+@media (min-width: 1100px) { .ll-search { flex-basis: 120px; min-width: 120px; } }
+.ll-search .gh-field__label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.ll-search .gh-input { height: 26px; font-size: 11.5px; }
+
+.ll-card { background: var(--color-surface); border: 1px solid var(--color-divider); border-radius: var(--radius-md); overflow: hidden; }
+
+/* Ngày: tiêu đề nhỏ, dính đầu khối khi cuộn trong màn. */
+.ll-day__title {
+  margin: 0; padding: 7px 14px; font-size: 11px; font-weight: 500; letter-spacing: 0.01em; color: var(--color-neutral-400);
+  background: color-mix(in srgb, var(--color-bg) 55%, var(--color-surface)); border-top: 1px solid var(--color-divider);
+  border-bottom: 1px solid var(--color-divider);
+}
+.ll-day:first-child .ll-day__title { border-top: none; }
+
+/* Trục thời gian: đường dọc mảnh sau cột biểu tượng; biểu tượng nằm đè lên đường. */
+.ll-items { list-style: none; margin: 0; padding: 0; position: relative; }
+.ll-items::before { content: ''; position: absolute; top: 0; bottom: 0; left: 28px; width: 1px; background: var(--color-divider); }
+.ll-row { position: relative; display: flex; gap: 12px; padding: 10px 14px 11px; min-width: 0; }
+.ll-row + .ll-row { border-top: 1px solid color-mix(in srgb, var(--color-divider) 55%, transparent); }
+.ll-rail {
+  position: relative; z-index: 1; flex: none; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;
+  border-radius: 50%; background: var(--color-bg); border: 1px solid var(--color-neutral-800);
+}
+.ll-rail--event { border-color: var(--event-tone); background: color-mix(in srgb, var(--event-tone) 12%, var(--color-bg)); }
+.ll-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.ll-head { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 9px; row-gap: 2px; min-width: 0; }
+.ll-time { font-family: var(--font-mono); font-size: 11px; color: var(--color-neutral-500); flex: none; }
+.ll-where { font-size: 12px; font-weight: 600; color: var(--color-text); min-width: 0; overflow-wrap: anywhere; }
+.ll-where--dm { color: var(--color-accent-300); }
+.ll-who { font-size: 11.5px; color: var(--color-neutral-400); min-width: 0; overflow-wrap: anywhere; }
+.ll-tagged {
+  font-size: 10px; padding: 1px 7px; border-radius: var(--radius-pill); color: var(--color-warn);
+  border: 1px solid color-mix(in srgb, var(--color-warn) 55%, transparent); white-space: nowrap;
+}
+.ll-mode {
+  margin-left: auto; font-size: 10.5px; color: var(--color-neutral-500); max-width: 100%; text-align: right;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ll-text { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--color-neutral-200); overflow-wrap: anywhere; text-wrap: pretty; }
+.ll-text--kind { color: var(--color-neutral-500); font-style: italic; }
+
+/* Chuỗi "hệ thống đã làm gì": các bước nối nhau bằng một gạch ngắn, màu chấm theo trạng thái. */
+.ll-trail { list-style: none; margin: 3px 0 0; padding: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 0; font-size: 11px; }
+.ll-step {
+  display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; min-width: 0; max-width: 100%;
+  color: var(--color-neutral-400); --step-tone: var(--color-neutral-500);
+}
+.ll-step + .ll-step::before { content: ''; align-self: center; width: 14px; height: 1px; margin: 0 7px; background: var(--color-neutral-700); }
+.ll-step__dot { align-self: center; width: 6px; height: 6px; border-radius: 50%; background: var(--step-tone); flex: none; }
+.ll-step__what { color: var(--color-neutral-300); font-weight: 500; }
+.ll-step--quiet { color: var(--color-neutral-500); font-style: italic; }
+.ll-draft {
+  display: inline-flex; align-items: center; gap: 3px; font-family: var(--font-mono); font-size: 10.5px; color: var(--color-accent-300);
+  text-decoration: none; border-bottom: 1px solid var(--color-accent-800);
+}
+.ll-draft:hover { color: var(--color-accent-200); border-bottom-color: var(--color-accent-500); }
+
+/* Sự kiện: một câu, không khung — nhẹ hơn tin để mắt phân biệt ngay. */
+.ll-event-kind { font-size: 10.5px; color: var(--color-neutral-500); }
+.ll-event-text { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--color-neutral-300); overflow-wrap: anywhere; text-wrap: pretty; }
+.ll-row--event { padding-top: 8px; padding-bottom: 9px; }
+
+.ll-row--new { animation: gh-row-in 1.2s ease-out; }
+
+.ll-more { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 14px; border-top: 1px solid var(--color-divider); }
+
+@media (max-width: 640px) {
+  .ll-items::before { left: 24px; }
+  .ll-row { gap: 10px; padding: 10px 10px 11px; }
+  .ll-mode { margin-left: 0; text-align: left; flex-basis: 100%; }
+  /* Điện thoại: ô số liệu xếp 2 cột gọn (ô tổng chiếm cả hàng) để danh sách lên sớm. */
+  .ll-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .ll-stat { max-width: none; padding: 8px 10px; }
+  .ll-stat__num { font-size: 17px; }
+  .ll-stat--total { grid-column: 1 / -1; }
+  .ll-search { max-width: none; }
+  /* Các bước xếp dọc (gạch nối ngang sẽ lạc đầu dòng khi bị ngắt dòng). */
+  .ll-trail { flex-direction: column; align-items: flex-start; gap: 3px; }
+  .ll-step + .ll-step::before { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { .ll-row--new { animation: none; } }
+
+/* v0.1.72: «Bot đã tự trả lời» — sổ tin bot tự gửi (không có nội dung), đặt trên dòng thời gian. */
+.ll-auto > .muted-note { margin: 0; padding: 0 14px 6px; }
+.ll-auto .ll-day__title { display: flex; align-items: center; gap: 6px; }

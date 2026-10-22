@@ -1,0 +1,1077 @@
+{
+  "_comment": "Sinh từ packages/contracts/src/genTargets.ts + apps/web/src/guide/guideContent.ts — KHÔNG sửa tay. GEN_WRITE=1 npx vitest run gen-targets",
+  "screens": {
+    "overview": {
+      "path": "/overview",
+      "title": "Hôm nay"
+    },
+    "inbox": {
+      "path": "/inbox",
+      "title": "Hộp thư"
+    },
+    "workbench": {
+      "path": "/workbench",
+      "title": "Bàn làm việc"
+    },
+    "tasks": {
+      "path": "/tasks",
+      "title": "Việc & Nhắc hẹn"
+    },
+    "directory": {
+      "path": "/directory",
+      "title": "Khách & Nhóm"
+    },
+    "opportunity": {
+      "path": "/opportunity",
+      "title": "Bảng cơ hội"
+    },
+    "deals": {
+      "path": "/deals",
+      "title": "Deal & Vụ việc"
+    },
+    "documents": {
+      "path": "/documents",
+      "title": "Tài liệu"
+    },
+    "search": {
+      "path": "/search",
+      "title": "Kho hội thoại"
+    },
+    "profile": {
+      "path": "/profile",
+      "title": "Hồ sơ sống"
+    },
+    "connections": {
+      "path": "/connections",
+      "title": "Kết nối"
+    },
+    "team": {
+      "path": "/team",
+      "title": "Đội ngũ"
+    },
+    "people": {
+      "path": "/people",
+      "title": "Đánh giá con người"
+    },
+    "care": {
+      "path": "/care",
+      "title": "Chất lượng chăm sóc"
+    },
+    "system": {
+      "path": "/system",
+      "title": "Cài đặt"
+    },
+    "raw": {
+      "path": "/raw",
+      "title": "Kho dữ liệu thô"
+    },
+    "listenlog": {
+      "path": "/listenlog",
+      "title": "Nhật ký lắng nghe"
+    },
+    "rules": {
+      "path": "/rules",
+      "title": "Quy tắc sàng lọc"
+    },
+    "clean": {
+      "path": "/clean",
+      "title": "Kho sạch & Trí nhớ"
+    },
+    "identity": {
+      "path": "/identity",
+      "title": "Hợp nhất danh tính"
+    },
+    "agents": {
+      "path": "/agents",
+      "title": "Danh tính Agent"
+    },
+    "api": {
+      "path": "/api",
+      "title": "API & Model"
+    },
+    "mcp": {
+      "path": "/mcp",
+      "title": "MCP Hub"
+    },
+    "graph": {
+      "path": "/graph",
+      "title": "Bản đồ quan hệ"
+    },
+    "notebook": {
+      "path": "/notebook",
+      "title": "Sổ tay nhận thức"
+    },
+    "supply": {
+      "path": "/supply",
+      "title": "Cung ↔ Cầu"
+    },
+    "guide": {
+      "path": "/guide",
+      "title": "Hướng dẫn thiết lập"
+    },
+    "account": {
+      "path": "/account",
+      "title": "Tài khoản của tôi"
+    },
+    "help": {
+      "path": "/help",
+      "title": "Trợ giúp"
+    },
+    "social": {
+      "path": "/social",
+      "title": "Tài khoản mạng xã hội"
+    },
+    "boss_checks": {
+      "path": "/guide/viec-sep",
+      "title": "Việc Sếp cần làm"
+    }
+  },
+  "targets": [
+    {
+      "id": "overview.needs_boss",
+      "screen": "overview",
+      "label": "Dải \"Cần Sếp xử lý\"",
+      "description": "Đầu trang Hôm nay: các sự cố Sếp cần tự tay xử lý (kênh rớt, model hết đăng nhập, cập nhật lỗi, sao lưu quá hạn…)",
+      "dynamic": null,
+      "params": null,
+      "permission": "system.manage"
+    },
+    {
+      "id": "overview.setup_followup",
+      "screen": "overview",
+      "label": "Thẻ \"Việc thiết lập tiếp\"",
+      "description": "Thẻ ở Tổng quan liệt kê các việc thiết lập tuỳ chọn còn lại (Zalo/WhatsApp, nhóm lắng nghe, sàng lọc, agent, đội, sao lưu, Facebook, Gen-hub); nút \"Để sau 7 ngày\" ẩn thẻ cùng các việc P3 của Gen",
+      "dynamic": null,
+      "params": null,
+      "permission": "system.manage"
+    },
+    {
+      "id": "overview.kpis",
+      "screen": "overview",
+      "label": "Hàng chỉ số chính",
+      "description": "Các ô số liệu đầu trang Hôm nay (cơ hội, cảnh báo, chờ duyệt…)",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "overview.queue",
+      "screen": "overview",
+      "label": "Hàng đợi cần xử lý",
+      "description": "Khung liệt kê cơ hội, cảnh báo, bản nháp chờ duyệt, việc đến hạn",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "overview.queue.row",
+      "screen": "overview",
+      "label": "Một dòng hàng đợi",
+      "description": "Một mục cụ thể trong Hàng đợi cần xử lý",
+      "dynamic": "row",
+      "params": null
+    },
+    {
+      "id": "overview.queue.open_inbox",
+      "screen": "overview",
+      "label": "Nút \"Mở hộp thư\"",
+      "description": "Mở Hộp thư để xem toàn bộ hàng đợi",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "overview.spotlight",
+      "screen": "overview",
+      "label": "5 đối tượng đáng chú ý",
+      "description": "Năm người/khách nổi bật nhất hôm nay",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "overview.health",
+      "screen": "overview",
+      "label": "Sức khoẻ hệ thống",
+      "description": "Tình trạng kênh, nhóm lắng nghe, sự kiện hôm nay, độ trễ xử lý và tin chờ sàng lọc",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "gen.coach.card",
+      "screen": "overview",
+      "label": "Thẻ \"Hôm nay của Sếp\"",
+      "description": "Đầu khung Gen: Việc cần làm ngay (tối đa 3), Sếp biết chưa? (một mẹo) và Bài học hôm nay (k/19) của Gen hướng dẫn",
+      "dynamic": null,
+      "params": null,
+      "permission": "system.manage"
+    },
+    {
+      "id": "guide.progress",
+      "screen": "guide",
+      "label": "Thanh tiến độ",
+      "description": "Bao nhiêu việc thiết lập đã xong",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "guide.item",
+      "screen": "guide",
+      "label": "Một việc thiết lập",
+      "description": "Thẻ một việc thiết lập (theo số việc n)",
+      "dynamic": "row",
+      "params": null
+    },
+    {
+      "id": "guide.item.do",
+      "screen": "guide",
+      "label": "Nút \"Làm bước này\"",
+      "description": "Mở form làm việc thiết lập n",
+      "dynamic": "row",
+      "params": null
+    },
+    {
+      "id": "boss_checks.row.ai",
+      "screen": "boss_checks",
+      "label": "Dòng 0 \"Nguồn AI\" (bắt buộc duy nhất)",
+      "description": "Dòng 0 của Việc Sếp cần làm: có ít nhất 1 nguồn AI chạy được — bấm Kiểm tra hoặc mở Bộ não AI để thêm nguồn",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "boss_checks.row.hub",
+      "screen": "boss_checks",
+      "label": "Dòng 1 \"Nối Gen-hub\"",
+      "description": "Dòng 1 của Việc Sếp cần làm: dán địa chỉ + token Gen-hub rồi bấm Kiểm tra (cần mã PIN)",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "boss_checks.row.facebook",
+      "screen": "boss_checks",
+      "label": "Dòng 2 \"Kết nối Facebook\"",
+      "description": "Dòng 2 của Việc Sếp cần làm: chọn tài khoản Facebook đã đăng nhập rồi bấm Đọc ngay",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "boss_checks.row.agy",
+      "screen": "boss_checks",
+      "label": "Dòng 3 \"Google (Antigravity)\"",
+      "description": "Dòng 3 của Việc Sếp cần làm: đăng nhập tài khoản Google rồi bấm Gọi thử",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "boss_checks.row.claude",
+      "screen": "boss_checks",
+      "label": "Dòng 4 \"Claude Code CLI\"",
+      "description": "Dòng 4 của Việc Sếp cần làm: đăng nhập Claude Code rồi gọi thử",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "boss_checks.row.jev",
+      "screen": "boss_checks",
+      "label": "Dòng 5 \"Jev\" (không bắt buộc)",
+      "description": "Dòng 5 của Việc Sếp cần làm: kiểm tra khoá Jev — không bắt buộc",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "boss_checks.row.telegram",
+      "screen": "boss_checks",
+      "label": "Dòng 6 \"Telegram\"",
+      "description": "Dòng 6 của Việc Sếp cần làm: Gửi thử một tin Telegram báo động và bản tin",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "boss_checks.row.remote",
+      "screen": "boss_checks",
+      "label": "Dòng 7 \"Truy cập từ xa\"",
+      "description": "Dòng 7 của Việc Sếp cần làm: mở Console từ điện thoại bằng địa chỉ truy cập từ xa rồi bấm Kiểm tra",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "boss_checks.row.facebook_reply",
+      "screen": "boss_checks",
+      "label": "Dòng 8 \"Facebook trả lời\" (không bắt buộc)",
+      "description": "Dòng 8 của Việc Sếp cần làm: thử gửi một câu trả lời bình luận Facebook thật bằng Gen — không bắt buộc",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "boss_checks.row.kho_write",
+      "screen": "boss_checks",
+      "label": "Dòng 9 \"Gen ghi Kho\" (không bắt buộc)",
+      "description": "Dòng 9 của Việc Sếp cần làm: duyệt đề xuất ghi Phiên đầu tiên của Gen vào Kho dữ liệu — không bắt buộc",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "system.tab.brain",
+      "screen": "system",
+      "label": "Tab \"Bộ não AI\"",
+      "description": "Chuyển sang tab nhà cung cấp model, hạn mức, Jev",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "system.tab.org",
+      "screen": "system",
+      "label": "Tab \"Tổ chức\"",
+      "description": "Chuyển sang tab sửa tên tổ chức, múi giờ, tiền tệ, xưng hô",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "system.tab.storage",
+      "screen": "system",
+      "label": "Tab \"Sao lưu & cập nhật\"",
+      "description": "Chuyển sang tab sao lưu & khôi phục, cập nhật phần mềm, hạn lưu dữ liệu",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "system.channels.list",
+      "screen": "connections",
+      "label": "Danh sách kênh",
+      "description": "Thẻ các kênh Zalo/WhatsApp/Telegram và nút tạo mã QR",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "system.channels.facebook",
+      "screen": "connections",
+      "label": "Thẻ Facebook",
+      "description": "Mở trang Tài khoản mạng xã hội (chỉ Owner)",
+      "dynamic": null,
+      "params": null,
+      "permission": "roles.manage"
+    },
+    {
+      "id": "system.channels.telegram",
+      "screen": "connections",
+      "label": "Thẻ Telegram",
+      "description": "Telegram nhận báo động sự cố và bản tin 07:30/17:30: token bot, chat_id, công tắc bản tin và nhắc việc (chỉ Owner)",
+      "dynamic": null,
+      "params": null,
+      "permission": "system.manage"
+    },
+    {
+      "id": "system.channels.telegram.test",
+      "screen": "connections",
+      "label": "Nút \"Gửi thử\" Telegram",
+      "description": "Gửi thử một tin Telegram để chắc tin tới được điện thoại",
+      "dynamic": null,
+      "params": null,
+      "permission": "system.manage"
+    },
+    {
+      "id": "connections.brain",
+      "screen": "connections",
+      "label": "Thẻ \"Bộ não AI\"",
+      "description": "Trạng thái bộ não AI (model, khoá API, tài khoản CLI) và nút mở Bộ não AI ở Cài đặt",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "system.brain.quota",
+      "screen": "system",
+      "label": "Hạn mức theo model",
+      "description": "Bảng dùng trong ngày / còn lại của từng model",
+      "dynamic": null,
+      "params": {
+        "tab": "brain"
+      }
+    },
+    {
+      "id": "system.brain.memory",
+      "screen": "system",
+      "label": "Thẻ \"Gen nhớ\"",
+      "description": "Các quy ước, sở thích Sếp đã xác nhận để Gen nhớ (tối đa 30 ghi chú): xem, sửa tại chỗ, xoá",
+      "dynamic": null,
+      "params": {
+        "tab": "brain"
+      },
+      "permission": "system.manage"
+    },
+    {
+      "id": "system.brain.chain",
+      "screen": "system",
+      "label": "Chuỗi chuyển hướng",
+      "description": "Thứ tự nhà cung cấp model khi một nơi lỗi",
+      "dynamic": null,
+      "params": {
+        "tab": "brain"
+      }
+    },
+    {
+      "id": "system.brain.open_api",
+      "screen": "system",
+      "label": "Nút \"Mở API & Model\"",
+      "description": "Sang màn thêm nhà cung cấp, khoá API, gán model",
+      "dynamic": null,
+      "params": {
+        "tab": "brain"
+      }
+    },
+    {
+      "id": "system.ai_cost",
+      "screen": "system",
+      "label": "Thẻ \"Chi phí & trần ngân sách\"",
+      "description": "Trần chi phí AI mỗi ngày (₫) và bảng giá theo model",
+      "dynamic": null,
+      "params": {
+        "tab": "brain"
+      }
+    },
+    {
+      "id": "system.brain.coach",
+      "screen": "system",
+      "label": "Thẻ \"Gen hướng dẫn\"",
+      "description": "Bật/tắt Gen hướng dẫn, chuông nhắc, số bài học mỗi ngày (0–2), giờ yên lặng và danh sách việc Sếp đã chọn không dùng (có nút Bật lại)",
+      "dynamic": null,
+      "params": {
+        "tab": "brain"
+      },
+      "permission": "system.manage"
+    },
+    {
+      "id": "system.brain.jev",
+      "screen": "system",
+      "label": "Thẻ Jev (System One)",
+      "description": "Cấu hình nguồn model quyết định nhanh Jev",
+      "dynamic": null,
+      "params": {
+        "tab": "brain"
+      }
+    },
+    {
+      "id": "system.brain.jev.test",
+      "screen": "system",
+      "label": "Nút \"Kiểm tra 1 lần\" Jev",
+      "description": "Gọi thử Jev một lần để biết khoá và địa chỉ đúng chưa",
+      "dynamic": null,
+      "params": {
+        "tab": "brain"
+      }
+    },
+    {
+      "id": "system.brain.jev.enable",
+      "screen": "system",
+      "label": "Nút \"Bật Jev\" (1 chạm)",
+      "description": "Bật Jev bằng khoá OpenRouter đang có hoặc dán khoá mới (cần mã PIN); sau đó bấm \"Thử 12 câu mẫu\"",
+      "dynamic": null,
+      "params": {
+        "tab": "brain"
+      },
+      "permission": "system.manage"
+    },
+    {
+      "id": "system.brain.triage",
+      "screen": "system",
+      "label": "Thẻ \"Lọc tin\"",
+      "description": "Bật/tắt lọc tin, chọn mức Thấp/Vừa/Cao; Jev và ngưỡng số ở Nâng cao (chỉ Owner sửa)",
+      "dynamic": null,
+      "params": {
+        "tab": "brain"
+      }
+    },
+    {
+      "id": "system.storage.health",
+      "screen": "system",
+      "label": "Sức khoẻ hệ thống",
+      "description": "Bộ xử lý nền, Trình duyệt nền, hàng lỗi, sao lưu, cập nhật, ổ đĩa; chi tiết kỹ thuật lịch chạy",
+      "dynamic": null,
+      "params": {
+        "tab": "storage"
+      }
+    },
+    {
+      "id": "system.storage.retention",
+      "screen": "system",
+      "label": "Hạn lưu dữ liệu",
+      "description": "Mỗi tập dữ liệu giữ bao lâu",
+      "dynamic": null,
+      "params": {
+        "tab": "storage"
+      }
+    },
+    {
+      "id": "system.remote_access",
+      "screen": "system",
+      "label": "Thẻ \"Truy cập từ xa\"",
+      "description": "Cách nhân viên và điện thoại mở Console: địa chỉ truy cập, chế độ (Tailscale / mạng nội bộ) và lệnh genh remote",
+      "dynamic": null,
+      "params": {
+        "tab": "storage"
+      }
+    },
+    {
+      "id": "system.backup.panel",
+      "screen": "system",
+      "label": "Sao lưu & khôi phục",
+      "description": "Danh sách bản sao lưu, tải về, khôi phục",
+      "dynamic": null,
+      "params": {
+        "tab": "storage"
+      },
+      "sensitive": true,
+      "safe_message": "Đây là thao tác nhạy cảm — Sếp tự xem kỹ và tự quyết định, Gen không làm thay."
+    },
+    {
+      "id": "system.backup.now",
+      "screen": "system",
+      "label": "Nút \"Sao lưu ngay\"",
+      "description": "Tạo bản sao lưu ngay lúc này",
+      "dynamic": null,
+      "params": {
+        "tab": "storage"
+      },
+      "sensitive": true,
+      "safe_message": "Đây là thao tác nhạy cảm — Sếp tự xem kỹ và tự quyết định, Gen không làm thay."
+    },
+    {
+      "id": "system.backup.schedule",
+      "screen": "system",
+      "label": "Lịch sao lưu tự động",
+      "description": "Đổi tần suất và giờ sao lưu tự động",
+      "dynamic": null,
+      "params": {
+        "tab": "storage"
+      },
+      "sensitive": true,
+      "safe_message": "Đây là thao tác nhạy cảm — Sếp tự xem kỹ và tự quyết định, Gen không làm thay."
+    },
+    {
+      "id": "system.storage.offsite",
+      "screen": "system",
+      "label": "Bản sao ngoài máy",
+      "description": "Bản sao dữ liệu ra ổ USB/NAS cắm vào máy chủ: lần gần nhất, cảnh báo quá 7 ngày, nơi lưu, lịch hằng tuần",
+      "dynamic": null,
+      "params": {
+        "tab": "storage"
+      },
+      "sensitive": true,
+      "safe_message": "Đây là thao tác nhạy cảm — Sếp tự xem kỹ và tự quyết định, Gen không làm thay."
+    },
+    {
+      "id": "system.offsite.choose",
+      "screen": "system",
+      "label": "Nút \"Chọn nơi lưu bản sao ngoài máy\"",
+      "description": "Chọn đường dẫn ổ USB/NAS trên máy chủ để lưu bản sao ngoài máy (chỉ Owner, cần mã PIN)",
+      "dynamic": null,
+      "params": {
+        "tab": "storage"
+      },
+      "permission": "roles.manage",
+      "sensitive": true,
+      "safe_message": "Đây là thao tác nhạy cảm — Sếp tự xem kỹ và tự quyết định, Gen không làm thay."
+    },
+    {
+      "id": "system.offsite.run",
+      "screen": "system",
+      "label": "Nút \"Sao lưu ra ổ ngoài ngay\"",
+      "description": "Xuất bản sao ra ổ ngoài ngay lúc này",
+      "dynamic": null,
+      "params": {
+        "tab": "storage"
+      },
+      "permission": "system.manage",
+      "sensitive": true,
+      "safe_message": "Đây là thao tác nhạy cảm — Sếp tự xem kỹ và tự quyết định, Gen không làm thay."
+    },
+    {
+      "id": "system.offsite.portable",
+      "screen": "system",
+      "label": "Nút \"Tải gói mang đi\"",
+      "description": "Tải gói dữ liệu mã hoá về máy đang dùng (chỉ Owner, cần mã PIN)",
+      "dynamic": null,
+      "params": {
+        "tab": "storage"
+      },
+      "permission": "roles.manage",
+      "sensitive": true,
+      "safe_message": "Đây là thao tác nhạy cảm — Sếp tự xem kỹ và tự quyết định, Gen không làm thay."
+    },
+    {
+      "id": "system.offsite.kit",
+      "screen": "system",
+      "label": "Nút \"Bộ khôi phục\"",
+      "description": "Xem/in khoá khôi phục để mở bản sao ngoài máy (chỉ Owner, cần mã PIN)",
+      "dynamic": null,
+      "params": {
+        "tab": "storage"
+      },
+      "permission": "roles.manage",
+      "sensitive": true,
+      "safe_message": "Đây là thao tác nhạy cảm — Sếp tự xem kỹ và tự quyết định, Gen không làm thay."
+    },
+    {
+      "id": "system.users.list",
+      "screen": "team",
+      "label": "Danh sách người dùng",
+      "description": "Tên, email, vai trò, trạng thái, lần đăng nhập gần nhất; nút đặt lại mật khẩu, khoá/mở khoá",
+      "dynamic": null,
+      "params": null,
+      "permission": "roles.manage",
+      "sensitive": true,
+      "safe_message": "Đây là thao tác nhạy cảm — Sếp tự xem kỹ và tự quyết định, Gen không làm thay."
+    },
+    {
+      "id": "system.users.invite",
+      "screen": "team",
+      "label": "Nút \"Mời người dùng\"",
+      "description": "Tạo tài khoản mới với mật khẩu tạm (cần mã PIN)",
+      "dynamic": null,
+      "params": null,
+      "permission": "roles.manage"
+    },
+    {
+      "id": "system.users.temp_password",
+      "screen": "team",
+      "label": "Mật khẩu tạm vừa tạo",
+      "description": "Hộp hiện mật khẩu tạm một lần sau khi mời / đặt lại mật khẩu",
+      "dynamic": null,
+      "params": null,
+      "permission": "roles.manage",
+      "sensitive": true,
+      "safe_message": "Đây là thao tác nhạy cảm — Sếp tự xem kỹ và tự quyết định, Gen không làm thay."
+    },
+    {
+      "id": "system.org.form",
+      "screen": "system",
+      "label": "Thông tin tổ chức",
+      "description": "Tên tổ chức, múi giờ, tiền tệ, Sếp tự xưng là, Agent gọi Sếp là",
+      "dynamic": null,
+      "params": {
+        "tab": "org"
+      }
+    },
+    {
+      "id": "system.org.save",
+      "screen": "system",
+      "label": "Nút \"Lưu thông tin tổ chức\"",
+      "description": "Lưu thay đổi thông tin tổ chức và xưng hô",
+      "dynamic": null,
+      "params": {
+        "tab": "org"
+      }
+    },
+    {
+      "id": "tasks.new",
+      "screen": "tasks",
+      "label": "Nút \"Tạo việc mới\"",
+      "description": "Tạo việc hoặc nhắc hẹn mới (tiêu đề, ưu tiên, hạn)",
+      "dynamic": null,
+      "params": null,
+      "permission": "queue.act"
+    },
+    {
+      "id": "tasks.row",
+      "screen": "tasks",
+      "label": "Một dòng việc",
+      "description": "Một việc cụ thể trong Danh sách việc (theo id việc)",
+      "dynamic": "row",
+      "params": null
+    },
+    {
+      "id": "inbox.hide_junk",
+      "screen": "inbox",
+      "label": "Bộ lọc \"Ẩn rác & trùng\"",
+      "description": "Ẩn các mục trùng, rác hoặc điểm dưới ngưỡng khỏi Hộp thư",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "inbox.row",
+      "screen": "inbox",
+      "label": "Một mục hộp thư",
+      "description": "Một thẻ trong Hộp thư (theo id mục)",
+      "dynamic": "row",
+      "params": null
+    },
+    {
+      "id": "workbench.drafts",
+      "screen": "workbench",
+      "label": "Bản nháp chờ duyệt",
+      "description": "Danh sách bản nháp tin gửi đi đang chờ Sếp duyệt",
+      "dynamic": null,
+      "params": null,
+      "permission": "action.draft",
+      "sensitive": true,
+      "safe_message": "Đây là thao tác nhạy cảm — Sếp tự xem kỹ và tự quyết định, Gen không làm thay."
+    },
+    {
+      "id": "api.add_provider",
+      "screen": "api",
+      "label": "Nút \"Thêm nhà cung cấp\"",
+      "description": "Thêm Gemini/DeepSeek/API tương thích OpenAI",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "api.bindings",
+      "screen": "api",
+      "label": "Gán model cho từng agent",
+      "description": "Chọn model cho từng mục đích, gồm core.gen của Gen",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "mcp.hub_link",
+      "screen": "connections",
+      "label": "Thẻ \"Gen-hub\"",
+      "description": "Nối Gen-hub để Gen đọc Kho dữ liệu, lịch, mail, việc, Drive (đọc; ghi Kho chỉ khi Sếp Xác nhận + mã PIN; chỉ Sếp thao tác): địa chỉ, token, hạn token, trạng thái",
+      "dynamic": null,
+      "params": null,
+      "permission": "system.manage"
+    },
+    {
+      "id": "mcp.hub_link.token",
+      "screen": "connections",
+      "label": "Ô \"Token Gen-hub\"",
+      "description": "Dán token agent tạo trong Gen-hub (chỉ ghi — không bao giờ hiện lại)",
+      "dynamic": null,
+      "params": null,
+      "permission": "system.manage",
+      "sensitive": true,
+      "safe_message": "Đây là thao tác nhạy cảm — Sếp tự xem kỹ và tự quyết định, Gen không làm thay."
+    },
+    {
+      "id": "mcp.hub_link.test",
+      "screen": "connections",
+      "label": "Nút \"Kiểm tra\" Gen-hub",
+      "description": "Thử kết nối, mở đúng tool đọc Kho cho Gen rồi bật liên kết (cần PIN)",
+      "dynamic": null,
+      "params": null,
+      "permission": "system.manage"
+    },
+    {
+      "id": "account.profile",
+      "screen": "account",
+      "label": "Hồ sơ",
+      "description": "Đổi tên hiển thị, email",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "account.password",
+      "screen": "account",
+      "label": "Đổi mật khẩu",
+      "description": "Đặt mật khẩu mới",
+      "dynamic": null,
+      "params": null,
+      "sensitive": true,
+      "safe_message": "Đây là thao tác nhạy cảm — Sếp tự xem kỹ và tự quyết định, Gen không làm thay."
+    },
+    {
+      "id": "account.pin",
+      "screen": "account",
+      "label": "Đổi mã PIN",
+      "description": "Đặt mã PIN 6 số mới",
+      "dynamic": null,
+      "params": null,
+      "sensitive": true,
+      "safe_message": "Đây là thao tác nhạy cảm — Sếp tự xem kỹ và tự quyết định, Gen không làm thay."
+    },
+    {
+      "id": "account.sessions",
+      "screen": "account",
+      "label": "Phiên đăng nhập",
+      "description": "Thiết bị đang đăng nhập, đăng xuất thiết bị khác",
+      "dynamic": null,
+      "params": null,
+      "sensitive": true,
+      "safe_message": "Đây là thao tác nhạy cảm — Sếp tự xem kỹ và tự quyết định, Gen không làm thay."
+    },
+    {
+      "id": "help.version",
+      "screen": "help",
+      "label": "Phiên bản đang chạy",
+      "description": "Phiên bản Gen-Harness, tổ chức, múi giờ, vai trò",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "help.ask_gen",
+      "screen": "help",
+      "label": "Cách hỏi Gen",
+      "description": "Hướng dẫn mở khung Gen và câu hỏi mẫu",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "help.guide",
+      "screen": "help",
+      "label": "Nút \"Mở Hướng dẫn thiết lập\"",
+      "description": "Sang trang hướng dẫn các việc thiết lập để sau (Owner)",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "help.curriculum",
+      "screen": "help",
+      "label": "Thẻ \"Lộ trình học cùng Gen\"",
+      "description": "19 bài học của Gen hướng dẫn kèm trạng thái: xem nội dung, Làm thử, Học lại (chỉ Owner)",
+      "dynamic": null,
+      "params": null,
+      "permission": "system.manage"
+    },
+    {
+      "id": "help.genh",
+      "screen": "help",
+      "label": "Lệnh genh hay dùng",
+      "description": "genh update, reset-password, trust-ca, backup, status — chạy trên máy chủ",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "help.report",
+      "screen": "help",
+      "label": "Nút \"Báo lỗi\"",
+      "description": "Chép thông tin chẩn đoán (phiên bản, trang, trình duyệt) để gửi người hỗ trợ",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "rules.add",
+      "screen": "rules",
+      "label": "Nút \"Thêm quy tắc\"",
+      "description": "Tạo quy tắc sàng lọc mới",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "rules.batch",
+      "screen": "rules",
+      "label": "Nút \"Chạy thử trên 100 bản ghi\"",
+      "description": "Thử bộ quy tắc trên dữ liệu gần nhất",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "rules.list",
+      "screen": "rules",
+      "label": "Danh sách quy tắc",
+      "description": "Các quy tắc sàng lọc đang có",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "rules.weights",
+      "screen": "rules",
+      "label": "Trọng số chấm điểm",
+      "description": "Kéo thanh để đổi trọng số các chiều chấm điểm",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "rules.tryone",
+      "screen": "rules",
+      "label": "Chạy thử một bản ghi",
+      "description": "Dán một tin để xem quy tắc nào khớp",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "agents.add",
+      "screen": "agents",
+      "label": "Nút \"Tạo agent mới\"",
+      "description": "Tạo danh tính agent mới",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "agents.clone",
+      "screen": "agents",
+      "label": "Nút \"Nhân bản\"",
+      "description": "Nhân bản một agent có sẵn",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "agents.list",
+      "screen": "agents",
+      "label": "Danh sách agent",
+      "description": "Các agent đang có, mức tự trị, kênh",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "agents.diplomat",
+      "screen": "agents",
+      "label": "Ô \"Agent ngoại giao\"",
+      "description": "Chọn agent nói thay Gen ở mọi kênh ngoài Console",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "agents.decisions",
+      "screen": "agents",
+      "label": "Agent đã nói gì",
+      "description": "Nhật ký quyết định của agent",
+      "dynamic": null,
+      "params": null
+    },
+    {
+      "id": "agents.templates",
+      "screen": "agents",
+      "label": "Mẫu có sẵn",
+      "description": "Mẫu agent tạo nhanh",
+      "dynamic": null,
+      "params": null
+    }
+  ],
+  "guide": [
+    {
+      "n": 5,
+      "title": "Kết nối Zalo / WhatsApp",
+      "why": "Để agent đọc được tin nhắn trong các nhóm chat của Sếp — không có kênh thì hệ thống chưa có dữ liệu để làm việc.",
+      "steps": [
+        "Bấm \"Làm bước này\" bên dưới.",
+        "Ở thẻ Zalo (hoặc WhatsApp), bấm \"Tạo mã QR\".",
+        "Đọc cảnh báo, tích \"Tôi hiểu rủi ro…\" rồi bấm \"Tôi hiểu, hiện mã QR\".",
+        "Trên điện thoại: Zalo → biểu tượng quét QR (góc trên) · WhatsApp → Cài đặt → Thiết bị đã liên kết → Liên kết thiết bị. Quét mã trên màn hình.",
+        "Chờ thẻ chuyển sang \"Đang kết nối\" và đồng bộ xong danh sách nhóm. Mã QR tự làm mới nếu chưa kịp quét (Zalo 60 giây; WhatsApp 20–60 giây). Mã WhatsApp dày: để điện thoại cách màn hình khoảng 20–30 cm, giữ yên cho tới khi quét xong; nếu điện thoại báo chưa liên kết được, đợi mã mới hiện rồi quét lại.",
+        "Bấm \"Tiếp tục\" để lưu."
+      ],
+      "done_when": "Có ít nhất một kênh ở trạng thái Đang kết nối.",
+      "console": {
+        "label": "Kết nối",
+        "to": "/connections"
+      }
+    },
+    {
+      "n": 6,
+      "title": "Chọn nhóm cho agent lắng nghe",
+      "why": "Nhóm mới mặc định vào “Lắng nghe im lặng”: Gen lưu hết tin nhưng không bao giờ trả lời, kể cả khi được tag — Sếp chọn nhóm nào cho agent trả lời khi được tag, hoặc tắt hẳn.",
+      "steps": [
+        "Bấm \"Làm bước này\".",
+        "Trong bảng nhóm, ở cột \"Chế độ lắng nghe\", mỗi nhóm mới đã ở \"Lắng nghe im lặng — lưu hết, không bao giờ trả lời (kể cả khi được tag)\". Muốn Gen trả lời một nhóm, đổi sang \"Nghe hết, chỉ trả lời khi được tag\" (vẫn lưu mọi tin, chỉ trả lời khi được gọi tên) hoặc \"Chủ động bắt tín hiệu\"; muốn ngừng lưu thì chọn \"Không nghe\". Thiếu nhóm vừa vào? Bấm \"Cập nhật danh sách nhóm\".",
+        "Ở cột \"Phạm vi xem\", ghi lại ý Sếp muốn ai được xem nhóm đó (mặc định \"Chỉ Sếp\"). Cột này hiện mới là ghi chú — quyền xem thật vẫn theo vai trò (Cài đặt › Quyền hạn).",
+        "Bấm \"Tiếp tục\"."
+      ],
+      "done_when": "Có ít nhất một nhóm đã được bật nghe (không còn ở “Chờ Sếp chọn”, “Không nghe” hay “Tạm dừng”).",
+      "console": {
+        "label": "Khách & Cơ hội › Khách & Nhóm",
+        "to": "/directory"
+      }
+    },
+    {
+      "n": 7,
+      "title": "Bật sàng lọc dữ liệu",
+      "why": "Tin nhắn thô được lọc, phân loại và chấm điểm trước khi vào kho sạch — agent chỉ dùng dữ liệu đã lọc.",
+      "steps": [
+        "Bấm \"Làm bước này\".",
+        "Trả lời một câu \"Sếp làm ngành nào?\" — Gen chọn sẵn bộ quy tắc hợp ngành; lịch lọc mặc định là mỗi 15 phút hoặc đủ 500 tin, giữ tin có độ tin cậy từ 0,6.",
+        "Muốn chỉnh chi tiết: mở \"Nâng cao — lịch sàng lọc và từng quy tắc\" (hoặc \"Nâng cao — trọng số chấm điểm\"); không cần thì bỏ qua.",
+        "Bấm \"Tiếp tục\"."
+      ],
+      "done_when": "Có ít nhất một quy tắc sàng lọc đang bật.",
+      "console": {
+        "label": "Quy tắc sàng lọc",
+        "to": "/rules"
+      }
+    },
+    {
+      "n": 8,
+      "title": "Tạo agent đầu tiên",
+      "why": "Agent là \"nhân viên AI\" làm việc thay Sếp trên các kênh — có tên, vai trò và giọng nói riêng.",
+      "steps": [
+        "Bấm \"Làm bước này\".",
+        "Chọn một \"Mẫu\" (ví dụ Trợ lý thương mại, CSKH, Thư ký cá nhân) — tên và vai trò được điền sẵn, chọn mẫu là xong.",
+        "Sửa \"Tên agent\" và \"Vai trò — agent làm gì cho Sếp\" nếu muốn (sửa lại ở Danh tính Agent bất cứ lúc nào).",
+        "Bấm \"Tiếp tục\" để lưu. Gen không gọi model thử ở bước này; muốn trò chuyện thử với agent, làm ở Danh tính Agent."
+      ],
+      "done_when": "Có ít nhất một agent.",
+      "console": {
+        "label": "Danh tính Agent",
+        "to": "/agents"
+      }
+    },
+    {
+      "n": 9,
+      "title": "Đặt mức tự trị cho agent",
+      "why": "Quyết định agent được tự làm tới đâu: chỉ gợi ý, hay soạn sẵn chờ Sếp duyệt rồi mới gửi.",
+      "steps": [
+        "Bấm \"Làm bước này\".",
+        "Ở \"Mức tự trị\", chọn 4 (agent soạn sẵn, Sếp duyệt rồi mới gửi — khuyên dùng) hoặc 3 (agent chỉ gợi ý).",
+        "Đọc danh sách \"Ranh giới khoá cứng\" — các việc agent không bao giờ được tự làm.",
+        "Bấm \"Tiếp tục\" — bấm nghĩa là Sếp đã đọc các ranh giới trên (không còn ô tích riêng)."
+      ],
+      "done_when": "Agent đã có mức tự trị (tạo agent là có mức mặc định; bước này để Sếp chọn lại cho chắc).",
+      "console": {
+        "label": "Danh tính Agent",
+        "to": "/agents"
+      }
+    },
+    {
+      "n": 10,
+      "title": "Mời người trong đội",
+      "why": "Cho quản lý, nhân viên cùng dùng Console với quyền hạn riêng — mỗi người chỉ thấy phần được giao.",
+      "steps": [
+        "Bấm \"Làm bước này\". Chưa cần mời ai thì bấm \"Để sau\" — mời lúc nào cũng được ở Đội ngũ › Người dùng.",
+        "Muốn mời ngay: bấm \"Mời ngay\", rồi \"Thêm người\", điền \"Tên hiển thị\", \"Email\" và chọn \"Vai trò\" (Quản lý, Vận hành, Nhân viên phụ trách, Kiểm soát).",
+        "Thêm đủ người rồi bấm \"Tiếp tục\".",
+        "Hệ thống hiện mật khẩu tạm của từng người — chép lại và tự gửi cho họ qua Zalo/email riêng (chưa có gửi thư tự động).",
+        "Nhân viên ở máy khác hoặc dùng điện thoại cần Truy cập từ xa: Sếp chạy genh remote tailscale (khuyên dùng) trên máy chủ trước khi gửi. Lời nhắn kèm địa chỉ đăng nhập có ở Đội ngũ › Người dùng (nút \"Mời người dùng\" hoặc \"Đặt lại mật khẩu\") — hộp đó cảnh báo đỏ nếu địa chỉ chỉ mở được trên máy chủ.",
+        "Bấm \"Đã lưu, sang bước sau\"."
+      ],
+      "done_when": "Có thêm ít nhất một tài khoản ngoài Sếp.",
+      "console": {
+        "label": "Đội ngũ › Người dùng",
+        "to": "/team"
+      }
+    },
+    {
+      "n": 11,
+      "title": "Đặt lịch sao lưu",
+      "why": "Máy hỏng hay lỡ tay xoá vẫn khôi phục được dữ liệu — bản sao lưu được mã hoá và giữ ngay trong máy.",
+      "steps": [
+        "Bấm \"Làm bước này\".",
+        "Đọc dòng \"Sao lưu đã tự bật\"; muốn giữ nguyên thì bấm \"Tiếp tục\" (hoặc \"Để sau\" — lịch này vẫn chạy).",
+        "Muốn đổi: mở \"Đổi lịch (không bắt buộc)\", chọn \"Tần suất\" rồi nhập \"Giờ chạy (HH:MM)\", ví dụ 03:30, và bấm \"Tiếp tục\"."
+      ],
+      "done_when": "Đã có lịch sao lưu.",
+      "console": {
+        "label": "Cài đặt › Sao lưu & cập nhật",
+        "to": "/system?tab=storage"
+      }
+    },
+    {
+      "n": 13,
+      "title": "Kết nối Facebook",
+      "why": "Để Gen đọc thông báo, tin nhắn và — khi Sếp bấm Xác nhận + nhập mã PIN — trả lời bình luận / nhắn tin thay Sếp; không đăng bài.",
+      "steps": [
+        "Bấm \"Mở trang Tài khoản mạng xã hội\" bên dưới.",
+        "Bấm \"Thêm tài khoản\", đặt tên dễ nhận ra.",
+        "Đọc kỹ cảnh báo rủi ro, tích hai ô xác nhận rồi lưu.",
+        "Bấm \"Đăng nhập\" — Sếp tự đăng nhập ngay trong app (mật khẩu, mã 2FA không lưu lại).",
+        "Khi tài khoản báo Đang kết nối, bấm \"Đọc ngay\" để thử đọc thông báo."
+      ],
+      "done_when": "Đã đăng nhập Facebook ít nhất một lần.",
+      "console": {
+        "label": "Tài khoản mạng xã hội",
+        "to": "/social"
+      }
+    },
+    {
+      "n": 14,
+      "title": "Nối Gen-hub",
+      "why": "Để Gen đọc Kho dữ liệu của Sếp trên Gen-hub — trả lời có căn cứ từ việc, quyết định, bài học đã ghi. Gen chỉ ghi vào Kho dữ liệu (Phiên, Việc) khi Sếp bấm Xác nhận và nhập mã PIN.",
+      "steps": [
+        "Trong Gen-hub: tạo trợ lý mới, chọn thẻ truy cập (token) 90 ngày, bật quyền ĐỌC Kho.",
+        "Tuỳ chọn: tick thêm quyền ĐỌC lịch, đọc mail, đọc việc (Google Tasks) và tìm Drive để bản tin Gen có lịch hôm nay, mail cần trả lời, việc đang mở — KHÔNG bật quyền ghi lịch, mail hay Drive.",
+        "Tuỳ chọn: tick quyền ghi Kho (tạo và sửa bản ghi — tên trong Gen-hub: kho_create, kho_update) nếu muốn Gen ghi Phiên, Việc vào Kho — mỗi lần ghi Sếp vẫn bấm Xác nhận và nhập mã PIN.",
+        "Chép token vừa tạo.",
+        "Bấm \"Mở thẻ Gen-hub\" bên dưới, dán địa chỉ và token vào thẻ Gen-hub.",
+        "Bấm \"Lưu & kiểm tra\" (nhập mã PIN khi được hỏi) và chờ báo Đã nối Kho."
+      ],
+      "done_when": "Kiểm tra xanh ít nhất một lần.",
+      "console": {
+        "label": "Kết nối › Gen-hub",
+        "to": "/connections#genhub"
+      }
+    }
+  ]
+}

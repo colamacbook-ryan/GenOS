@@ -1,0 +1,34 @@
+/* v0.1.29 — Tài khoản mạng xã hội (/social) */
+.social-grid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 14px; align-items: start; }
+.social-main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+@media (max-width: 1000px) { .social-grid { grid-template-columns: minmax(0, 1fr); } }
+
+.social-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.social-row { border: 1px solid var(--color-neutral-800); border-radius: var(--radius-sm); padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.social-row__head { display: flex; align-items: center; gap: 10px; }
+.social-row__main { flex: 1; min-width: 0; }
+.social-row__title { font-size: 13px; font-weight: 600; color: var(--color-text); }
+.social-row__hint { margin: 0; }
+.social-row__actions { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.social-sched { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.social-sched__label { font-size: 12px; color: var(--color-neutral-300); }
+.social-sched .gh-field { flex: 1 1 200px; min-width: 0; }
+
+.social-items ul { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.social-item { display: flex; gap: 8px; align-items: flex-start; font-size: 12px; color: var(--color-neutral-300); line-height: 1.5; }
+.social-item[data-unread] { color: var(--color-text); }
+.social-item__text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+
+.social-dos { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 560px) { .social-dos { grid-template-columns: 1fr; } }
+
+.social-danger { border-color: var(--color-bad); color: var(--color-bad); }
+
+.social-viewer { display: flex; flex-direction: column; gap: 8px; }
+.social-viewer__status { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 12px; color: var(--color-neutral-300); }
+.social-viewer__status[data-state='logged_in'] { color: var(--color-ok); }
+.social-viewer__frame { position: relative; background: #000; border-radius: var(--radius-sm); overflow: hidden; aspect-ratio: 1280 / 800; }
+.social-viewer__canvas { display: block; width: 100%; height: 100%; object-fit: contain; cursor: pointer; outline: none; }
+.social-viewer__canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--color-accent); }
+.social-viewer__wait { position: absolute; inset: 0; display: grid; place-items: center; color: var(--color-neutral-400); font-size: 12px; }
