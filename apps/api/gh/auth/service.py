@@ -235,7 +235,22 @@ class PinResult:
     no_pin: bool = False
 
 
-async def verify_pin(db: AsyncSession, user: CurrentUser, pin: str) -> PinResult:
+#: Khoá PIN tăng dần (v0.1.75): lần khoá thứ 1 → `pin_lock_minutes` (15), thứ 2 → 1 giờ, từ thứ 3 → 24 giờ.
+#: Cấp lưu ở Redis (login_guard.bump_pin_lock_level), đặt lại khi nhập đúng PIN / đặt PIN mới.
+PIN_LOCK_ESCALATION_MINUTES = (60, 24 * 60)
+
+
+def pin_lock_minutes(level: int) -> int:
+    if level <= 1:
+        return get_settings().pin_lock_minutes
+    return PIN_LOCK_ESCALATION_MINUTES[min(level, 3) - 2]
+
+
+async def verify_pin(db: AsyncSession, user: CurrentUser, pin: str, *, redis: Any = None) -> PinResult:
+    # Import tại chỗ: login_guard/notifications import ngược service (tránh vòng).
+    from gh import notifications
+    from gh.auth import login_guard
+
     s = get_settings()
     row = (await db.execute(text(
         "SELECT pin_hash, pin_failed, pin_locked_until FROM core.users WHERE id = :u FOR UPDATE"),
@@ -258,23 +273,37 @@ async def verify_pin(db: AsyncSession, user: CurrentUser, pin: str) -> PinResult
                          {"p": until, "s": user.session_id})
         await actionlog.record(db, org_id=user.org_id, actor_type="user", actor_id=user.actor_id,
                                action="auth.pin_verified", ip=user.ip)
+        await login_guard.clear_pin_lock_level(redis, user.id)
         return PinResult(ok=True, pin_verified_until=until)
     failed = row.pin_failed + 1
     if failed >= s.pin_max_attempts:
-        locked = now() + timedelta(minutes=s.pin_lock_minutes)
+        level = await login_guard.bump_pin_lock_level(redis, user.id)
+        minutes = pin_lock_minutes(level)
+        locked = now() + timedelta(minutes=minutes)
         await db.execute(text("UPDATE core.users SET pin_failed = 0, pin_locked_until = :l WHERE id = :u"),
                          {"l": locked, "u": user.id})
         await db.execute(text("UPDATE core.sessions SET pin_verified_until = NULL WHERE user_id = :u"),
                          {"u": user.id})
         await actionlog.record(db, org_id=user.org_id, actor_type="user", actor_id=user.actor_id,
                                action="auth.pin_locked", result="blocked",
-                               detail={"locked_until": locked.isoformat()}, ip=user.ip)
+                               detail={"locked_until": locked.isoformat(), "level": level, "minutes": minutes},
+                               ip=user.ip)
+        # Chuông cho Owner: PIN bị đoán sai liên tiếp là dấu hiệu có người đang dò (hoặc chính người dùng gõ nhầm).
+        await notifications.notify(
+            db, user.org_id, await notifications.owner_ids(db, user.org_id), kind="alert.pin_locked",
+            title="Mã PIN bị khoá do nhập sai nhiều lần",
+            body=f"Tài khoản {user.display_name} bị khoá mã PIN {_vi_duration(minutes)} (lần khoá thứ {level}).",
+            redis=redis)
         return PinResult(ok=False, locked_until=locked, just_locked=True)
     await db.execute(text("UPDATE core.users SET pin_failed = :f WHERE id = :u"), {"f": failed, "u": user.id})
     await actionlog.record(db, org_id=user.org_id, actor_type="user", actor_id=user.actor_id,
                            action="auth.pin_failed", result="failed",
                            detail={"attempts_left": s.pin_max_attempts - failed}, ip=user.ip)
     return PinResult(ok=False, attempts_left=s.pin_max_attempts - failed)
+
+
+def _vi_duration(minutes: int) -> str:
+    return f"{minutes // 60} giờ" if minutes % 60 == 0 else f"{minutes} phút"
 
 
 async def set_pin(db: AsyncSession, user_id: uuid.UUID, pin: str) -> None:
