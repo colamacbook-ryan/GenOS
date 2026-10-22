@@ -101,7 +101,8 @@ jobs:
           $compose ps -a
 
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
-        with: { node-version: "22", cache: npm }
+        # Không dùng cache npm: workflow này chạy được trên ref tuỳ chọn, không được ghi cache mà ci.yml sẽ đọc lại.
+        with: { node-version: "22" }
       - name: Cài phụ thuộc web (npm ci ở gốc repo)
         run: npm ci --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000
       - name: Phiên bản Playwright (khoá cache trình duyệt)
@@ -111,7 +112,8 @@ jobs:
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ~/.cache/ms-playwright
-          key: ms-playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
+          # Khoá riêng (tiền tố staging-smoke-) để ci.yml không bao giờ khôi phục cache do ref tuỳ chọn ghi.
+          key: staging-smoke-ms-playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
       - name: Cài Chromium cho Playwright
         working-directory: apps/web
         run: npx playwright install --with-deps chromium
