@@ -91,7 +91,7 @@ DENIED_BOX_NOT_INSTALLED = AgyVerdict(False, CODE_BOX_NOT_INSTALLED, REASON_BOX_
 
 
 def decide(agent_key: str, *, owner: bool = True, diplomatic: bool = False, box: str = BOX_NOT_INSTALLED,
-           purpose: str | None = None) -> AgyVerdict:
+           purpose: str | None = None, external: bool = False) -> AgyVerdict:
     """Khoá agent này chạy agy Ở ĐÂU và có dùng được không? (thuần — trạng thái hộp do bên gọi truyền)
 
     - `owner`: người hỏi là Owner (chỉ ảnh hưởng `core.gen`; mặc định True cho mọi lượt không có người hỏi cụ thể);
@@ -99,11 +99,12 @@ def decide(agent_key: str, *, owner: bool = True, diplomatic: bool = False, box:
     - `box`: trạng thái hộp (`ok` | `down` | `not_installed`); mặc định `not_installed` (đóng an toàn — bên gọi thật
       luôn truyền trạng thái thật qua `verdict_for`); chỉ vai chạy qua hộp mới xét;
     - `purpose`: mục đích lượt gọi (thử agent, Dịch / Soạn lại nháp tin khách luôn qua hộp: `placement.BOX_PURPOSES`;
-      thử quy tắc `rule_test` KHÔNG dùng agy: `UNTRUSTED_TEXT_PURPOSES`).
+      thử quy tắc `rule_test` KHÔNG dùng agy: `UNTRUSTED_TEXT_PURPOSES`);
+    - `external`: prompt có chữ người ngoài (v0.1.75 — vd Gen của Sếp vừa đọc tin nhóm) ⇒ vai nào cũng qua hộp.
     Vai trong tiến trình luôn `allowed`. Vai qua hộp: `allowed` đúng khi hộp `ok`; không thì lý do trung thực và KHÔNG
     bao giờ chuyển về chạy trong tiến trình. Khoá lạ (core.embedding…) tính là vai qua hộp (đóng an toàn) — chúng không
     dùng agy nên không ai thấy lý do này."""
-    where = placement.placement(agent_key, diplomatic, owner=owner, purpose=purpose)
+    where = placement.placement(agent_key, diplomatic, owner=owner, purpose=purpose, external=external)
     if purpose in UNTRUSTED_TEXT_PURPOSES:               # không dùng agy ở đâu cả; `where` giữ theo luật vai
         return AgyVerdict(False, CODE_UNTRUSTED_TEXT, REASON_UNTRUSTED_TEXT, where)
     if where == INPROC:
@@ -153,7 +154,7 @@ async def diplomatic_agent_ids(db: AsyncSession, org_id: uuid.UUID,
 
 
 async def verdict_for(db: AsyncSession, org_id: uuid.UUID, agent_key: str, *, owner: bool = True,
-                      purpose: str | None = None) -> AgyVerdict:
+                      purpose: str | None = None, external: bool = False) -> AgyVerdict:
     """`decide` cho MỘT khoá, tự tra DB khi là `agent:<id>` và đọc trạng thái hộp khi vai chạy qua hộp (vai trong tiến
     trình không tốn truy vấn hay lượt kiểm hộp)."""
     if purpose in UNTRUSTED_TEXT_PURPOSES:
@@ -161,9 +162,10 @@ async def verdict_for(db: AsyncSession, org_id: uuid.UUID, agent_key: str, *, ow
     aid = agent_id_of(agent_key)
     diplomatic = (aid is not None and purpose not in placement.BOX_PURPOSES
                   and aid in await diplomatic_agent_ids(db, org_id, only=aid))
-    if placement.placement(agent_key, diplomatic, owner=owner, purpose=purpose) == INPROC:
+    if placement.placement(agent_key, diplomatic, owner=owner, purpose=purpose, external=external) == INPROC:
         return ALLOWED
-    return decide(agent_key, owner=owner, diplomatic=diplomatic, box=await current_box_state(), purpose=purpose)
+    return decide(agent_key, owner=owner, diplomatic=diplomatic, box=await current_box_state(), purpose=purpose,
+                  external=external)
 
 
 async def verdicts_for(db: AsyncSession, org_id: uuid.UUID, agent_keys: list[str], *,

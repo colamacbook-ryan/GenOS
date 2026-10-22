@@ -4,8 +4,11 @@ Trước: hộp ở mạng `agy-out` (bridge thường) ⇒ tới được gatew
 (Gen-hub, router, NAS…) trong khi hộp giữ token Google của Sếp. Sau: hộp CHỈ ở mạng internal; lối ra duy nhất là
 proxy này (cùng ảnh api, không thêm ảnh), nằm ở mạng internal của hộp + `agy-out`:
 - chỉ nhận `CONNECT host:port` (HTTPS); cổng phải nằm trong danh sách cổng (`GH_AGY_EGRESS_PORTS`, mặc định 443);
-- tuỳ chọn danh sách tên miền (`GH_AGY_EGRESS_ALLOW`, phân cách dấu phẩy; RỖNG = mọi tên miền công khai — Nợ:
-  allowlist chặt khi đã đo đủ tên miền agy dùng với phiên thật). Có danh sách thì IP trần cũng bị chặn;
+- v0.1.75 (review bảo mật 22/10, Nợ #44): MẶC ĐỊNH chỉ cho tên miền agy / Google cần (`DEFAULT_ALLOW`) — hộp nhận
+  token OAuth Google mỗi lượt, cho mọi tên miền công khai thì agy bị lừa gửi token đi đâu cũng được.
+  `GH_AGY_EGRESS_ALLOW` (phân cách dấu phẩy) THÊM tên miền vào danh sách mặc định; giá trị `*` = mọi tên miền công
+  khai (cách cũ, chỉ dùng khi được hướng dẫn để dò tên miền). Có danh sách thì IP trần cũng bị chặn; chặn ⇒ log
+  cảnh báo tên miền + cách mở;
 - phân giải DNS MỘT lần, MỌI địa chỉ phải là IP định tuyến toàn cầu (chặn loopback, RFC1918, link-local, CGNAT
   100.64/10, multicast, dự trữ, IPv6 nội bộ / ULA, IPv4-mapped, 6to4/NAT64 nhúng IP nội bộ) — gateway của mạng
   Docker và IP LAN của máy chủ đều là IP riêng nên bị chặn; rồi nối THẲNG IP đã kiểm (chống DNS rebinding);
@@ -32,6 +35,14 @@ HEAD_LIMIT = 8192
 #: Kết nối đồng thời tối đa (hộp chạy MỘT lượt agy mỗi lúc — vài kết nối là đủ; giới hạn để agy bị lừa không mở hàng
 #: nghìn đường hầm làm cạn bộ nhớ 128 MiB / số tiến trình của proxy).
 DEFAULT_MAX_CONNS = 64
+#: Tên miền agy / Google cần (tên miền con tính theo). Đã đo (agy 1.2.9 qua HTTPS_PROXY): `antigravity-unleash.goog`,
+#: `play.googleapis.com`. Theo cấu trúc dịch vụ Google (CHƯA đo trên phiên thật gọi model): gọi model và làm mới
+#: token đi qua `*.googleapis.com` (cloudcode-pa, oauth2, openidconnect, generativelanguage…), đăng nhập qua
+#: `accounts.google.com`.
+#: Thiếu tên miền ⇒ agy trong hộp lỗi mạng (log `chặn …`), thêm bằng GH_AGY_EGRESS_ALLOW — không rơi về mở hết.
+DEFAULT_ALLOW: tuple[str, ...] = ("googleapis.com", "accounts.google.com", "antigravity-unleash.goog")
+#: Giá trị GH_AGY_EGRESS_ALLOW tắt allowlist (mọi tên miền công khai, vẫn chặn IP nội bộ).
+ALLOW_ANY = "*"
 Resolver = Callable[[str, int], Awaitable[list[str]]]
 _NAT64 = ipaddress.ip_network("64:ff9b::/96")
 
@@ -123,7 +134,8 @@ class Egress:
             return
         host, port = target
         if port not in self.ports or not host_allowed(host, self.allow):
-            log.info("chặn %s:%d (tên miền / cổng không được phép)", host[:120], port)
+            log.warning("chặn %s:%d (tên miền / cổng không có trong danh sách cho phép; cần thì thêm vào %s)",
+                        host[:120], port, ENV_ALLOW)
             await self._deny(writer, 403, "đích không được phép")
             return
         try:
@@ -193,8 +205,15 @@ class Egress:
 
 
 def config_from_env(env: dict[str, str] | None = None) -> tuple[tuple[str, ...], frozenset[int], int]:
+    """(tên miền cho phép, cổng, cổng nghe). Tên miền = `DEFAULT_ALLOW` + phần thêm trong GH_AGY_EGRESS_ALLOW (bỏ
+    trùng); có `*` ⇒ () = mọi tên miền công khai."""
     e = dict(os.environ if env is None else env)
-    allow = tuple(x.strip().lower().lstrip("*.").rstrip(".") for x in e.get(ENV_ALLOW, "").split(",") if x.strip())
+    raw = [x.strip().lower() for x in e.get(ENV_ALLOW, "").split(",") if x.strip()]
+    if ALLOW_ANY in raw:
+        allow: tuple[str, ...] = ()
+    else:
+        extra = (x.lstrip("*.").rstrip(".") for x in raw)
+        allow = tuple(dict.fromkeys([*DEFAULT_ALLOW, *(x for x in extra if x)]))
     try:
         ports = frozenset(int(x) for x in (e.get(ENV_PORTS) or "443").split(",") if x.strip())
         listen = int(e.get(ENV_LISTEN_PORT) or DEFAULT_LISTEN_PORT)
