@@ -39,6 +39,7 @@ WORKFLOWS = (
     ".github/workflows/installer-matrix.yml",
     ".github/workflows/release.yml",
     ".github/workflows/e2e-install.yml",
+    ".github/workflows/staging-smoke.yml",
 )
 USES_OK = re.compile(r"^[\w.-]+/[\w./-]+@[0-9a-f]{40}$")
 USES_LINE = re.compile(r"^\s*(?:-\s+)?uses:\s*(?P<ref>[^\s#]+)(?P<rest>.*)$")
