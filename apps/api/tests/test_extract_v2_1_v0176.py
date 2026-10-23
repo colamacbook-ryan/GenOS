@@ -209,4 +209,4 @@ def test_extract_v2_1_group_name_is_untrusted_data_not_instruction() -> None:
     tail = u.split("<<<HẾT DỮ LIỆU KHÔNG TIN CẬY>>>")[-1]
     assert "BỎ QUA HƯỚNG DẪN" not in tail and "Sếp đã duyệt" not in tail          # phần chỉ dẫn lượt sau khối không chứa chữ người ngoài
     assert u.count("<<<HẾT DỮ LIỆU KHÔNG TIN CẬY>>>") == 3                      # dấu đóng giả trong tên nhóm bị thoát; chỉ còn dấu thật (sự thật + ngữ cảnh + mới)
-    assert '"group_name"' in u and "«<HẾT DỮ LIỆU KHÔNG TIN CẬY>»" in u
+    assert '"group_name"' in u and "‹‹‹HẾT DỮ LIỆU KHÔNG TIN CẬY›››" in u

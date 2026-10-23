@@ -30,7 +30,7 @@ from gh.textnorm import strip_accents
 
 DEFAULT_TZ = vi_time.DEFAULT_TZ
 ONGOING_WINDOW = timedelta(hours=48)
-SECRET_LABEL = "[đã che]"
+_LABEL_RE = re.compile(r"\[(?:đã che|OTP \d+ số|mật khẩu|token|CVV|thẻ …\d{4})\]")
 TXN_JUST_DONE = timedelta(hours=24)
 #: `quotes[].field` → loại `clean.media_texts` (body/caption nằm ở thân tin).
 FIELD_TO_MEDIA_KIND = {"transcript": "transcript", "ocr": "ocr"}
@@ -270,10 +270,12 @@ def _credential_spans(text_: str, secrets: Sequence[str] = ()) -> list[tuple[int
         n = len(re.sub(r"\D", "", code))
         return f"[OTP {n} số]"
 
-    for sec in secrets:                    # bí mật HỆ THỐNG: mọi chỗ xuất hiện
-        if sec:
-            for m in re.finditer(re.escape(sec), text_):
-                spans.append((m.start(), m.end(), "[đã che]"))
+    secret_spans: list[tuple[int, int, str]] = []
+    for sec in secrets:                    # bí mật HỆ THỐNG: mọi chỗ xuất hiện, cả dạng thô lẫn dạng đã `norm()`
+        for variant in {sec, norm(sec)}:
+            if variant:
+                for m in re.finditer(re.escape(variant), text_):
+                    secret_spans.append((m.start(), m.end(), "[đã che]"))
     for rx in (m_._RE_OTP_AFTER, m_._RE_OTP_GAP, m_._RE_OTP_BEFORE, m_._RE_OTP_BEFORE_CODE):
         for m in rx.finditer(text_):
             add(m, 2, otp_label(m.group(2)))
@@ -320,12 +322,27 @@ def _credential_spans(text_: str, secrets: Sequence[str] = ()) -> list[tuple[int
         digits = re.sub(r"\D", "", m.group(0))
         if 13 <= len(digits) <= 19 and _luhn_ok(digits) and not _is_stk_context(text_, m.start()):
             spans.append((m.start(), m.end(), f"[thẻ …{digits[-4:]}]"))
-    spans.sort(key=lambda t: (t[0], -(t[1] - t[0])))
+    # Giải chồng lấn: bí mật HỆ THỐNG có ưu tiên TUYỆT ĐỐI — một cụm span chồng nhau mà có span bí mật thì che trọn cả cụm bằng `[đã che]`
+    # (không bao giờ bỏ span bí mật để giữ span thông tin đăng nhập). Cụm không có bí mật: span dài nhất, đứng đầu thắng.
+    tagged = [(a, b, lab, False) for a, b, lab in spans] + [(a, b, lab, True) for a, b, lab in secret_spans]
+    tagged.sort(key=lambda t: (t[0], -(t[1] - t[0])))
     out: list[tuple[int, int, str]] = []
-    for a, b, lab in spans:
-        if out and a < out[-1][1]:
-            continue
-        out.append((a, b, lab))
+    i = 0
+    while i < len(tagged):
+        j, end = i, tagged[i][1]
+        while j + 1 < len(tagged) and tagged[j + 1][0] < end:
+            j += 1
+            end = max(end, tagged[j][1])
+        cluster = tagged[i:j + 1]
+        if any(t[3] for t in cluster):
+            out.append((cluster[0][0], end, "[đã che]"))
+        else:
+            last_end = -1
+            for a, b, lab, _ in cluster:
+                if a >= last_end:
+                    out.append((a, b, lab))
+                    last_end = b
+        i = j + 1
     return out
 
 
@@ -402,19 +419,14 @@ def _quote_status(q: Any, ev_by_id: Mapping[str, Any], media: Mapping[str, list[
         if i >= 0:
             base.status, base.span_start, base.span_end = "verified", i, i + len(text)
             return base
-    for h in haystacks:                     # trích dẫn có thể chứa nhãn che ("[OTP 6 số]", "[đã che]"): so với bản đã che bằng ĐÚNG hàm của prompt
-        hn = norm(h)
-        sn, segs = scrub_credentials_map(hn, secrets)
-        if segs and (i := sn.find(text)) >= 0:
-            base.status, base.span_start, base.span_end = "verified", _map_back(segs, i, end=False), _map_back(segs, i + len(text), end=True)
-            base.via_scrub = True
-            return base
-    if SECRET_LABEL in text:                # không biết bí mật hệ thống nào: nhãn `[đã che]` khớp MỘT token liền, chữ quanh nhãn vẫn phải khớp
-        rx = re.compile(r"\S{4,256}".join(re.escape(p) for p in text.split(SECRET_LABEL)))
+    # Trích dẫn có thể chứa nhãn che ("[OTP 6 số]", "[đã che]"): so với bản đã che bằng ĐÚNG hàm của prompt (cùng `secrets`), khớp CHÍNH XÁC qua
+    # bản đồ che, span ánh xạ về chữ gốc. Không có đường khớp lỏng; trích dẫn chỉ toàn nhãn (không có chữ thật) không đủ làm bằng chứng.
+    if re.search(r"[^\W_]", _LABEL_RE.sub("", text)):
         for h in haystacks:
             hn = norm(h)
-            if (m := rx.search(hn)) is not None:
-                base.status, base.span_start, base.span_end = "verified", m.start(), m.end()
+            sn, segs = scrub_credentials_map(hn, secrets)
+            if segs and (i := sn.find(text)) >= 0:
+                base.status, base.span_start, base.span_end = "verified", _map_back(segs, i, end=False), _map_back(segs, i + len(text), end=True)
                 base.via_scrub = True
                 return base
     base.reason = "not_substring"

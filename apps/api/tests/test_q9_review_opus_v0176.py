@@ -167,8 +167,7 @@ def test_q9_review_verify_recognises_system_secret_label() -> None:
     v = _check(body, quote, secrets=(SECRET,))
     q = v.units[0].quotes[0]
     assert v.units[0].status == "ok" and q.via_scrub and verify.norm(body)[q.span_start:q.span_end] == f"token của em là {SECRET} nhé"
-    lenient = _check(body, quote)                                          # không biết secrets: nhãn khớp một token liền
-    assert lenient.units[0].status == "ok"
+    assert _check(body, quote).units[0].status == "absent"                 # không truyền secrets ⇒ không có đường khớp lỏng (review bảo mật vòng 2)
     assert _check(body, "token của em là [đã che] thôi").units[0].status == "absent"       # chữ quanh nhãn vẫn phải khớp
 
 
