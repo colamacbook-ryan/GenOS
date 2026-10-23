@@ -63,6 +63,8 @@ class Settings(BaseSettings):
     # chống dội với ngưỡng cao hơn hẳn: sau docker-proxy/Tailscale Serve mọi người chung một IP nguồn.
     login_fail_limit: int = 10
     login_ip_fail_limit: int = 100
+    # v0.1.75: thiết bị tin cậy (cookie gh_device hợp lệ) vẫn chịu ngưỡng email, nới hơn — cookie lộ không dò vô hạn.
+    login_trusted_email_fail_limit: int = 20
     login_fail_window_seconds: int = 900
     # v0.1.75: sai mật khẩu hiện tại ở /account/password, /account/pin (có cookie phiên) quá ngần này lần trong cửa sổ
     # trên → thu hồi chính phiên đó (gh/auth/login_guard.py::record_user_failure).

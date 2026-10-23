@@ -207,9 +207,9 @@ services:
   # Review v0.1.63 (P2-2) — PROXY LỐI RA của hộp riêng Antigravity: cùng ảnh api (không thêm ảnh), chạy
   # `python -m gh.agybox.egress` (chỉ stdlib, không khoá, không volume). Chỉ nhận CONNECT tới cổng 443; phân giải tên MỘT lần,
   # mọi IP phải định tuyến toàn cầu (chặn RFC1918, loopback, link-local, CGNAT 100.64/10, gateway, IPv6 nội bộ) rồi nối thẳng
-  # IP đã kiểm (chống DNS rebinding). Tên miền: mặc định chỉ googleapis.com, accounts.google.com, antigravity-unleash.goog
-  # (v0.1.75, Nợ #44); GH_AGY_EGRESS_ALLOW (tuỳ chọn trong .env, phân cách dấu phẩy) THÊM tên miền; "*" = mọi tên miền công khai
-  # (chỉ khi được hướng dẫn). Tên miền bị chặn được ghi log của dịch vụ này.
+  # IP đã kiểm (chống DNS rebinding). Tên miền: mặc định chỉ đúng các host agy cần (gh.agybox.egress.DEFAULT_ALLOW, khớp chính xác)
+  # (v0.1.75, Nợ #44); GH_AGY_EGRESS_ALLOW (tuỳ chọn trong .env, phân cách dấu phẩy) THÊM mục: host = đúng host, *.d = hậu tố
+  # (không mở storage/firebase…), "*" = mọi tên miền công khai (chỉ khi được hướng dẫn). Tên miền bị chặn được ghi log của dịch vụ này.
   # Hai mạng: agy-bus (hộp gọi vào) và agy-out (ra Internet) — KHÔNG mạng default.
   agy-egress:
     build: { context: .., dockerfile: deploy/images/api.Dockerfile }

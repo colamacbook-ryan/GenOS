@@ -138,7 +138,7 @@ async def login(db: AsyncSession, email: str, password: str) -> dict[str, Any] |
         return None
     if not verify_secret(row.password_hash, password):
         return None
-    return {"id": row.id, "org_id": row.org_id}
+    return {"id": row.id, "org_id": row.org_id, "password_hash": row.password_hash}
 
 
 async def load_session(db: AsyncSession, token: str, *, renew: bool = True,

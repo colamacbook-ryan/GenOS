@@ -26,9 +26,10 @@ trình chết giữa chừng không để lại khoá vĩnh viễn); khoá nào 
 Redis lỗi → (v0.1.75) lớp lùi: bộ đếm trong bộ nhớ TIẾN TRÌNH (cùng ngưỡng/cửa sổ, mất khi khởi động lại, không chia
 sẻ giữa các worker — chỉ để dò mật khẩu không thành miễn phí khi Redis chết). Log một dòng, không kèm email.
 
-Thiết bị tin cậy (v0.1.75): đăng nhập đúng được cookie `gh_device` ký HMAC (khoá master, gắn với email, hạn 30 ngày).
-Email đang bị khoá nhưng trình duyệt có cookie hợp lệ của CHÍNH email đó → bỏ qua ngưỡng email (vẫn phải đúng mật khẩu,
-vẫn chịu ngưỡng IP) ⇒ người lạ biết email Owner không khoá được Owner ra ngoài.
+Thiết bị tin cậy (v0.1.75): đăng nhập đúng được cookie `gh_device` ký HMAC (khoá master, gắn với user id +
+băm password_hash hiện tại ⇒ đổi/đặt lại mật khẩu thu hồi mọi cookie cũ, hạn 30 ngày).
+Email đang bị khoá nhưng trình duyệt có cookie hợp lệ của CHÍNH tài khoản đó → được ngưỡng email nới (20 thay vì
+10; vẫn phải đúng mật khẩu, vẫn chịu ngưỡng IP) ⇒ người lạ biết email Owner không khoá được Owner ra ngoài.
 
 Tài khoản (v0.1.75): `/account/password`, `/account/pin` có cookie phiên cũng đếm sai theo user_id
 (`account_pw_fail_limit`, mặc định 5 / cửa sổ trên) — vượt ngưỡng thu hồi chính phiên đó.
@@ -88,23 +89,26 @@ def _mem_incr(k: str, window: int) -> int:
     return n + 1
 
 
-def _device_sig(email: str, exp: int) -> str:
-    return crypto.keyed_digest(b"login-device", f"{_email_hash(email)}:{exp}".encode()).hex()
+def _device_sig(user_id: uuid.UUID | str, cred: str, exp: int) -> str:
+    """Chữ ký gắn với user id VÀ phiên bản thông tin đăng nhập (băm của password_hash hiện tại): đổi/đặt lại mật khẩu
+    (kể cả `genh reset-password`, Owner đặt lại cho nhân viên) ⇒ password_hash đổi ⇒ mọi cookie cũ mất hiệu lực."""
+    cred_h = hashlib.sha256(cred.encode()).hexdigest()
+    return crypto.keyed_digest(b"login-device-v2", f"{user_id}:{cred_h}:{exp}".encode()).hex()
 
 
-def device_token(email: str) -> str:
+def device_token(user_id: uuid.UUID | str, cred: str) -> str:
     exp = int(time.time()) + DEVICE_TTL_S
-    return f"{exp}.{_device_sig(email, exp)}"
+    return f"{exp}.{_device_sig(user_id, cred, exp)}"
 
 
-def device_ok(token: str | None, email: str) -> bool:
-    """Cookie thiết bị tin cậy còn hạn, đúng chữ ký và đúng email này."""
+def device_ok(token: str | None, user_id: uuid.UUID | str, cred: str) -> bool:
+    """Cookie thiết bị tin cậy còn hạn, đúng chữ ký, đúng user này và đúng mật khẩu HIỆN TẠI của user."""
     if not token or "." not in token:
         return False
     exp_s, _, sig = token.partition(".")
     if not exp_s.isdigit() or int(exp_s) < time.time():
         return False
-    return hmac.compare_digest(_device_sig(email, int(exp_s)), sig)
+    return hmac.compare_digest(_device_sig(user_id, cred, int(exp_s)), sig)
 
 
 def _email_hash(email: str) -> str:
@@ -161,8 +165,12 @@ async def _blocked_limits(redis: Any, limits: list[tuple[str, str, int]]) -> tup
 
 async def blocked(redis: Any, ip: str | None, email: str, *, trusted_device: bool = False) -> tuple[int, str] | None:
     """(số giây còn lại — tối thiểu 1, scope "ip" | "email") nếu IP hoặc email đã chạm ngưỡng; không thì None.
-    `trusted_device=True` (cookie thiết bị hợp lệ): bỏ qua ngưỡng email, vẫn áp ngưỡng IP."""
-    limits = [x for x in _limits(ip, email) if not (trusted_device and x[1] == "email")]
+    `trusted_device=True` (cookie thiết bị hợp lệ): ngưỡng email nới lên `login_trusted_email_fail_limit`, vẫn áp
+    ngưỡng IP."""
+    limits = _limits(ip, email)
+    if trusted_device:  # ngưỡng email nới ra (không bỏ): cookie bị lộ không thành đường dò mật khẩu vô hạn
+        limits = [(k, sc, get_settings().login_trusted_email_fail_limit if sc == "email" else lim)
+                  for k, sc, lim in limits]
     return await _blocked_limits(redis, limits)
 
 
@@ -200,8 +208,10 @@ async def user_blocked(redis: Any, user_id: uuid.UUID) -> int | None:
     return hit[0] if hit else None
 
 
-async def record_user_failure(redis: Any, user_id: uuid.UUID) -> int:
-    """Ghi một lần sai, trả số lần sai hiện tại trong cửa sổ."""
+async def reserve_user_attempt(redis: Any, user_id: uuid.UUID) -> int:
+    """ĐẶT CHỖ một lần thử TRƯỚC khi verify (nguyên tử: MULTI/EXEC SET NX EX + INCR + EXPIRE NX; Redis lỗi → bộ nhớ
+    tiến trình, không có `await` giữa đọc và ghi nên nguyên tử trong asyncio). Trả số đếm mới: > ngưỡng ⇒ từ chối,
+    không verify. Nhiều request song song không vượt ngưỡng được vì mỗi request nhận một số đếm riêng."""
     return (await _incr_keys(redis, [user_key(user_id)]))[0]
 
 

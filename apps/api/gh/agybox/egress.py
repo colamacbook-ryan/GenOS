@@ -4,11 +4,14 @@ Trước: hộp ở mạng `agy-out` (bridge thường) ⇒ tới được gatew
 (Gen-hub, router, NAS…) trong khi hộp giữ token Google của Sếp. Sau: hộp CHỈ ở mạng internal; lối ra duy nhất là
 proxy này (cùng ảnh api, không thêm ảnh), nằm ở mạng internal của hộp + `agy-out`:
 - chỉ nhận `CONNECT host:port` (HTTPS); cổng phải nằm trong danh sách cổng (`GH_AGY_EGRESS_PORTS`, mặc định 443);
-- v0.1.75 (review bảo mật 22/10, Nợ #44): MẶC ĐỊNH chỉ cho tên miền agy / Google cần (`DEFAULT_ALLOW`) — hộp nhận
+- v0.1.75 (review bảo mật 22/10, Nợ #44): MẶC ĐỊNH chỉ cho đúng các HOST agy cần (`DEFAULT_ALLOW`, so khớp CHÍNH XÁC —
+  review 23/10: hậu tố `googleapis.com` cũ cho cả storage.googleapis.com, firebase… = kênh rò dữ liệu) — hộp nhận
   token OAuth Google mỗi lượt, cho mọi tên miền công khai thì agy bị lừa gửi token đi đâu cũng được.
-  `GH_AGY_EGRESS_ALLOW` (phân cách dấu phẩy) THÊM tên miền vào danh sách mặc định; giá trị `*` = mọi tên miền công
-  khai (cách cũ, chỉ dùng khi được hướng dẫn để dò tên miền). Có danh sách thì IP trần cũng bị chặn; chặn ⇒ log
-  cảnh báo tên miền + cách mở;
+  `GH_AGY_EGRESS_ALLOW` (phân cách dấu phẩy) THÊM mục vào danh sách mặc định: `host` = đúng host đó; `*.example.com`
+  = example.com và mọi tên miền con (so khớp hậu tố CHỈ cho mục có tiền tố `*.`); `*` = mọi tên miền công khai (cách
+  cũ, chỉ dùng khi được hướng dẫn để dò tên miền). Mục hậu tố KHÔNG mở các dịch vụ lưu trữ / chia sẻ trong
+  `DENY_SUFFIX` (storage.googleapis.com, firebase…) — chỉ `*` hoặc ghi đúng host mới mở. Có danh sách thì IP trần
+  cũng bị chặn; chặn ⇒ log cảnh báo tên miền + cách mở;
 - phân giải DNS MỘT lần, MỌI địa chỉ phải là IP định tuyến toàn cầu (chặn loopback, RFC1918, link-local, CGNAT
   100.64/10, multicast, dự trữ, IPv6 nội bộ / ULA, IPv4-mapped, 6to4/NAT64 nhúng IP nội bộ) — gateway của mạng
   Docker và IP LAN của máy chủ đều là IP riêng nên bị chặn; rồi nối THẲNG IP đã kiểm (chống DNS rebinding);
@@ -35,12 +38,30 @@ HEAD_LIMIT = 8192
 #: Kết nối đồng thời tối đa (hộp chạy MỘT lượt agy mỗi lúc — vài kết nối là đủ; giới hạn để agy bị lừa không mở hàng
 #: nghìn đường hầm làm cạn bộ nhớ 128 MiB / số tiến trình của proxy).
 DEFAULT_MAX_CONNS = 64
-#: Tên miền agy / Google cần (tên miền con tính theo). Đã đo (agy 1.2.9 qua HTTPS_PROXY): `antigravity-unleash.goog`,
-#: `play.googleapis.com`. Theo cấu trúc dịch vụ Google (CHƯA đo trên phiên thật gọi model): gọi model và làm mới
-#: token đi qua `*.googleapis.com` (cloudcode-pa, oauth2, openidconnect, generativelanguage…), đăng nhập qua
-#: `accounts.google.com`.
-#: Thiếu tên miền ⇒ agy trong hộp lỗi mạng (log `chặn …`), thêm bằng GH_AGY_EGRESS_ALLOW — không rơi về mở hết.
-DEFAULT_ALLOW: tuple[str, ...] = ("googleapis.com", "accounts.google.com", "antigravity-unleash.goog")
+#: Host agy cần — so khớp CHÍNH XÁC (không tính tên miền con).
+#: ĐÃ ĐO (agy 1.2.9 qua HTTPS_PROXY, token giả — docs/releases/v0.1.63.md): `antigravity-unleash.goog`,
+#: `play.googleapis.com`.
+#: SUY LUẬN (chưa đo trên phiên thật gọi model; agy là họ Gemini Code Assist / gemini-cli): gọi model qua
+#: `cloudcode-pa.googleapis.com`, làm mới token OAuth qua `oauth2.googleapis.com`, đăng nhập `accounts.google.com`,
+#: thông tin tài khoản `openidconnect.googleapis.com` (api cũng gọi host này ở `gh.providers.cli`).
+#: KHÔNG đưa `generativelanguage.googleapis.com` (chỉ nguồn khoá API Gemini trong api dùng, agy không cần).
+#: Thiếu host ⇒ agy trong hộp lỗi mạng (log `chặn …`), thêm bằng GH_AGY_EGRESS_ALLOW — không rơi về mở hết.
+DEFAULT_ALLOW: tuple[str, ...] = (
+    "antigravity-unleash.goog", "play.googleapis.com",                                # đã đo
+    "cloudcode-pa.googleapis.com", "oauth2.googleapis.com", "accounts.google.com",    # suy luận
+    "openidconnect.googleapis.com",                                                   # suy luận
+)
+#: Dịch vụ lưu trữ / chia sẻ / chạy mã của Google (tên miền con tính theo) — kênh rò dữ liệu nếu agy bị lừa: mục hậu
+#: tố `*.…` của người vận hành (vd `*.googleapis.com`) KHÔNG mở các host này; chỉ `*` hoặc ghi đúng host mới mở.
+DENY_SUFFIX: tuple[str, ...] = (
+    "storage.googleapis.com", "storage-download.googleapis.com", "storage-upload.googleapis.com",
+    "firebasestorage.googleapis.com", "firebase.googleapis.com", "firestore.googleapis.com",
+    "firebaseio.com", "firebasedatabase.app", "firebaseapp.com", "web.app",
+    "pubsub.googleapis.com", "bigquery.googleapis.com", "logging.googleapis.com",
+    "drive.googleapis.com", "sheets.googleapis.com", "docs.googleapis.com", "gmail.googleapis.com",
+    "script.google.com", "script.googleusercontent.com", "appspot.com", "run.app", "cloudfunctions.net",
+)
+WILDCARD = "*."
 #: Giá trị GH_AGY_EGRESS_ALLOW tắt allowlist (mọi tên miền công khai, vẫn chặn IP nội bộ).
 ALLOW_ANY = "*"
 Resolver = Callable[[str, int], Awaitable[list[str]]]
@@ -67,15 +88,24 @@ def ip_forbidden(ip: str) -> bool:
             or addr.is_reserved or addr.is_unspecified)
 
 
+def _under(h: str, d: str) -> bool:
+    return h == d or h.endswith("." + d)
+
+
 def host_allowed(host: str, allow: tuple[str, ...]) -> bool:
-    """Danh sách rỗng ⇒ mọi tên miền; có danh sách ⇒ đúng tên miền hoặc tên miền con, IP trần không được."""
+    """Danh sách rỗng ⇒ mọi tên miền. Có danh sách: mục thường = đúng host; mục `*.d` = d và tên miền con, trừ host
+    thuộc `DENY_SUFFIX`; IP trần không được."""
     if not allow:
         return True
     h = host.lower().rstrip(".")
     with contextlib.suppress(ValueError):
         ipaddress.ip_address(h)
         return False
-    return any(h == d or h.endswith("." + d) for d in allow)
+    if h in allow:
+        return True
+    if any(_under(h, d) for d in DENY_SUFFIX):
+        return False
+    return any(_under(h, d[len(WILDCARD):]) for d in allow if d.startswith(WILDCARD))
 
 
 async def system_resolve(host: str, port: int) -> list[str]:
@@ -205,14 +235,14 @@ class Egress:
 
 
 def config_from_env(env: dict[str, str] | None = None) -> tuple[tuple[str, ...], frozenset[int], int]:
-    """(tên miền cho phép, cổng, cổng nghe). Tên miền = `DEFAULT_ALLOW` + phần thêm trong GH_AGY_EGRESS_ALLOW (bỏ
-    trùng); có `*` ⇒ () = mọi tên miền công khai."""
+    """(mục cho phép, cổng, cổng nghe). Mục = `DEFAULT_ALLOW` + phần thêm trong GH_AGY_EGRESS_ALLOW (bỏ trùng; `host`
+    giữ nguyên = khớp chính xác, `*.d` giữ tiền tố = khớp hậu tố); có `*` ⇒ () = mọi tên miền công khai."""
     e = dict(os.environ if env is None else env)
     raw = [x.strip().lower() for x in e.get(ENV_ALLOW, "").split(",") if x.strip()]
     if ALLOW_ANY in raw:
         allow: tuple[str, ...] = ()
     else:
-        extra = (x.lstrip("*.").rstrip(".") for x in raw)
+        extra = (x.rstrip(".") for x in raw)
         allow = tuple(dict.fromkeys([*DEFAULT_ALLOW, *(x for x in extra if x)]))
     try:
         ports = frozenset(int(x) for x in (e.get(ENV_PORTS) or "443").split(",") if x.strip())

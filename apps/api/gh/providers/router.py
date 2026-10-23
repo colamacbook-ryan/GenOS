@@ -73,6 +73,7 @@ from gh.providers.clients import (
     QuotaExhausted,
     RateLimited,
 )
+from gh.untrusted import prompt_has_untrusted
 
 log = logging.getLogger("gh.providers")
 
@@ -630,6 +631,9 @@ class ModelRouter:
         suy nghĩ; ưu tiên: tham số → `bindings.effort` → hồ sơ → `models.effort`, chỉ gửi khi model hỗ trợ mức đó. Thiếu
         nguồn cho việc nền ⇒ giữ hành vi cũ (hết chuỗi → ModelUnavailable / bản tin để trống), KHÔNG tự chuyển sang
         Claude Code CLI."""
+        # Review 23/10 (HIGH): MỘT nguồn sự thật — prompt có khối `wrap_untrusted` (Bản tin, tin khách, ngữ cảnh kênh,
+        # kết quả tool ngoài…) ⇒ lượt có chữ người ngoài ⇒ agy qua hộp, kể cả khi nơi gọi quên truyền `external`.
+        external = external or prompt_has_untrusted(messages)
         background = is_background(purpose)
         reasons: list[str] = []
         async with self.sm() as db:
