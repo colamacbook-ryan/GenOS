@@ -2,7 +2,7 @@
 """API trí nhớ — phần của L1 (spec §7.2b): sự thật hai thời gian, sửa sự thật, nhãn bối cảnh nhóm.
 
 Quyền: Owner. Mọi response có `breadcrumb: [{tier: me|overview|context|object|evidence, id, label}]` để giao diện lên/xuống tầng
-không mất ngữ cảnh; mọi mục nhận định có `fact_ids`/`evidence_ids`. Sự thật `hr` (đánh giá nhân sự) cần PIN: truy vấn đích danh
+không mất ngữ cảnh; mọi mục nhận định có `fact_ids`/`evidence_ids`. Sự thật nhạy cảm (`sensitive`: STK, SĐT, sức khoẻ, người nhà; `hr`: nhân sự) cần PIN: truy vấn đích danh
 mà thiếu PIN ⇒ 423, danh sách chung thì ẩn và báo `hidden_pin_n`. `view_routes` (L4) được gắn vào router này.
 """
 
@@ -65,7 +65,7 @@ async def query_facts(subject_id: uuid.UUID, predicate: str | None = None, at: d
     rows = await facts.at(db, user.org_id, subject_id, predicate, at, known_at=known_at)
     hidden = 0
     if not user.pin_active():
-        shown = [f for f in rows if f.sensitivity != "hr"]
+        shown = [f for f in rows if f.sensitivity == "normal"]
         hidden = len(rows) - len(shown)
         if hidden and predicate is not None:
             raise pin_required()
@@ -98,6 +98,8 @@ async def correct_fact(fact_id: uuid.UUID, body: CorrectIn, user: service.Curren
     old = await facts.get(db, user.org_id, fact_id)
     if old is None:
         raise not_found("Sự thật")
+    if old.sensitivity != "normal" and not user.pin_active():      # PIN TRƯỚC mọi lần ghi (STK chỉ Sếp đổi, spec 096)
+        raise pin_required()
     subject = await entities.get(db, old.subject_id)
     label = subject.display_name if subject else str(old.subject_id)
     log_id = await actionlog.record(db, org_id=user.org_id, actor_type="user", actor_id=user.actor_id,

@@ -194,3 +194,24 @@ async def test_mem_core_routes_group_contexts_roundtrip(owner_api, db) -> None: 
 
 def test_mem_core_utc_helper_sanity() -> None:
     assert T(3).tzinfo is UTC and T(3) < datetime(2026, 10, 4, tzinfo=UTC)
+
+
+async def test_mem_core_routes_sensitive_facts_need_pin_for_read_and_correct(owner_api, db) -> None:  # type: ignore[no-untyped-def]
+    api: Api = owner_api
+    org = await org_id(db)
+    lan = await mk_entity(db, org, "Chị Lan")
+    stk = await facts.assert_fact(db, mkfact(org, lan, {"digest": "aa", "last3": "123"}, T(1), predicate="payment_account"))
+    phone = await facts.assert_fact(db, mkfact(org, lan, "0901", T(1)))
+    hr = await facts.assert_fact(db, mkfact(org, lan, "nghỉ", T(1), predicate="said_will_leave"))
+    await db.commit()
+    for f in (stk, phone, hr):                                   # chưa PIN: không sửa/xoá được, không ghi gì
+        r = await api.send("POST", f"/facts/{f.id}/correct", {"retract": True})
+        assert r.status_code == 423, r.text
+    assert (await db.execute(text("SELECT count(*) FROM mem.facts WHERE status = 'retracted'"))).scalar_one() == 0
+    assert (await db.execute(text("SELECT count(*) FROM ops.action_log WHERE action = 'mem.fact_correct'"))).scalar_one() == 0
+    assert (await api.get(f"/facts?subject_id={lan}&predicate=payment_account")).status_code == 423
+    assert (await api.get(f"/facts?subject_id={lan}")).json()["hidden_pin_n"] == 3
+    await _pin(api)
+    assert (await api.get(f"/facts?subject_id={lan}&predicate=payment_account")).status_code == 200
+    r = await api.send("POST", f"/facts/{stk.id}/correct", {"retract": True})
+    assert r.status_code == 200 and r.json()["fact"]["status"] == "retracted"
