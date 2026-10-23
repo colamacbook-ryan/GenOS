@@ -247,6 +247,27 @@ services:
     depends_on:
       redis: { condition: service_healthy }
 
+  # L5 (v0.1.76) — STT tại máy, TUỲ CHỌN, TẮT MẶC ĐỊNH (profile `stt-local`): faster-whisper qua máy chủ API kiểu OpenAI
+  # (/v1/audio/transcriptions, cổng 8000 chỉ trong mạng compose — KHÔNG publish ra host). Bật: Cài đặt → Đa phương tiện chọn
+  # "tại máy" rồi `docker compose --profile stt-local up -d stt-local` (api/worker gọi http://stt-local:8000, biến GH_STT_LOCAL_URL
+  # đổi được ở .env của máy). Mặc định KHÔNG dùng: voice đi qua bộ định tuyến (gói thuê bao đã nối, 0 ₫ thêm). Chỉ nhận âm thanh,
+  # không giữ khoá/DB/Redis, không thấy tệp nào của Gen. Lần chạy đầu tải mô hình Whisper từ Hugging Face vào thư mục cache của container
+  # (cần Internet; mô hình nằm trong lớp ghi của container nên tải lại khi container bị tạo lại — chưa thêm volume vì danh sách volume của genh là hợp đồng riêng). Cần máy đủ mạnh (≈ 2 vCPU + 2 GB RAM cho mô hình small); máy yếu để mặc định.
+  stt-local:
+    image: ghcr.io/speaches-ai/speaches:0.8.3-cpu@sha256:21e3df06d842fb7802ab470dd77c25f0e8c0d22950e8d8c6ae886e851af53ef8
+    profiles: ["stt-local"]
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      HF_HOME: /home/ubuntu/.cache/huggingface
+      WHISPER__MODEL: ${GH_STT_LOCAL_MODEL:-Systran/faster-whisper-small}
+      WHISPER__INFERENCE_DEVICE: cpu
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 3g
+    cpus: 2
+    pids_limit: 256
+
   # v0.1.29 — Gen đọc mạng xã hội (docs/design/gen-browser-agent.md §3.1): Playwright + Chromium trong container
   # RIÊNG. KHÔNG truy cập Postgres, KHÔNG giữ khoá master, không gọi model, KHÔNG thấy Redis chính (hàng đợi arq của
   # worker giữ khoá master) — chỉ nói với browser-redis. Chỉ ở mạng nội bộ `browser` (không có đường ra Internet) — lối

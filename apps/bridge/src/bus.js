@@ -1,6 +1,6 @@
 // Event bus trên Redis Streams: publish (XADD + envelope) và đọc consumer group `bridge` có ack.
 // Cùng giao diện với FakeBus trong test: publish · isListening · listenDirect · claimNonce · ping · setHeartbeat.
-import { envelope } from './envelope.js';
+import { MEDIA_RESULT_TTL_S, envelope, mediaResultKey } from './envelope.js';
 
 export const GROUP = 'bridge';
 export const CONTROL_STREAM = 'gh.bridge.control';
@@ -93,6 +93,12 @@ export class RedisBus {
   /** Nhóm đang bật chế độ hỗ trợ: `gh:bridge:support:<kênh>`. */
   async isSupportGroup(channel, groupId) {
     return Boolean(await this.redis.sIsMember(`gh:bridge:support:${channel}`, String(groupId)));
+  }
+
+  /** Kết quả `media.fetch` cho lõi: RPUSH một phần tử JSON + hạn ngắn (lõi BLPOP rồi xoá). */
+  async putMediaResult(requestId, result) {
+    const key = mediaResultKey(requestId);
+    await this.redis.multi().rPush(key, JSON.stringify(result)).expire(key, MEDIA_RESULT_TTL_S).exec();
   }
 
   /** SET gh:permit:used:<nonce> 1 NX EX 600 → true nếu lần đầu. */

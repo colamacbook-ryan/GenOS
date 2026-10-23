@@ -6,6 +6,9 @@ import { EventEmitter } from 'node:events';
 import { VERSION } from '../config.js';
 import { silentLogger } from '../log.js';
 import { RecentIds, errorCode, toIso, toPlain, withMeta } from '../util.js';
+import {
+  MEDIA_ERRORS, MediaCache, MediaError, checkDeclared, collectCapped, baseMime, capBytes, mediaRef,
+} from '../media.js';
 
 export const WA_FIRST_QR_TTL_MS = 60000; // Baileys: QR đầu sống 60 giây, các QR sau 20 giây
 export const WA_NEXT_QR_TTL_MS = 20000;
@@ -94,6 +97,7 @@ export async function loadWhatsAppLib() {
     initAuthCreds: b.initAuthCreds,
     BufferJSON: b.BufferJSON,
     proto: b.proto,
+    downloadContentFromMessage: b.downloadContentFromMessage,
     version: undefined,
     bundledVersion: bundled,
     getVersion,
@@ -165,6 +169,26 @@ function unwrap(message) {
   return m;
 }
 
+// Khoá giải mã/URL ký sẵn KHÔNG được vào payload thô (Kho thô, bus, log): chỉ ở sổ RAM của bridge để tải khi lõi yêu cầu.
+const MEDIA_SECRET_KEYS = ['url', 'directPath', 'mediaKey', 'fileEncSha256', 'streamingSidecar', 'jpegThumbnail', 'thumbnailDirectPath',
+  'thumbnailSha256', 'thumbnailEncSha256', 'waveform', 'midQualityFileSha256', 'mediaKeyTimestamp'];
+
+function stripMediaSecrets(node) {
+  if (!node || typeof node !== 'object') return node;
+  for (const [k, v] of Object.entries(node)) {
+    if (MEDIA_SECRET_KEYS.includes(k)) delete node[k];
+    else if (v && typeof v === 'object') stripMediaSecrets(v);
+  }
+  return node;
+}
+
+// SSRF: Baileys rc14 lấy host tải từ trường `url` do NGƯỜI GỬI đặt (nằm trong tin mã hoá đầu-cuối) ⇒ chỉ đưa vào Baileys
+// directPath đúng khuôn + ép host mặc định của WhatsApp, tuyệt đối không chuyển `url`.
+const WA_MEDIA_HOST = 'mmg.whatsapp.net';
+// protobuf có thể trả Long ({low, high}) cho fileLength/seconds.
+const asNumber = (v) => (typeof v?.toNumber === 'function' ? v.toNumber() : Number(v)) || 0;
+const DIRECT_PATH_RE = /^\/[A-Za-z0-9_\-./=?&%~+:]{1,1000}$/;
+
 /** → { kind, body, ctx } hoặc null (tin giao thức nội bộ, bỏ qua). */
 function classify(message, stubType) {
   const m = unwrap(message);
@@ -175,16 +199,17 @@ function classify(message, stubType) {
   switch (type) {
     case 'conversation': return { kind: 'text', body: String(c), ctx: null };
     case 'extendedTextMessage': return { kind: 'text', body: c.text ?? null, ctx: c.contextInfo };
-    case 'imageMessage': return { kind: 'image', body: c.caption || null, ctx: c.contextInfo };
+    case 'imageMessage': return { kind: 'image', body: c.caption || null, ctx: c.contextInfo, media: { type: 'image', content: c } };
     case 'stickerMessage': return { kind: 'sticker', body: null, ctx: c.contextInfo };
     case 'documentMessage': return { kind: 'file', body: c.caption || c.fileName || null, ctx: c.contextInfo };
     case 'videoMessage':
     case 'ptvMessage': return { kind: 'other', body: c.caption || null, ctx: c.contextInfo };
-    case 'audioMessage': return { kind: 'other', body: null, ctx: c.contextInfo };
+    case 'audioMessage': return { kind: 'voice', body: null, ctx: c.contextInfo, media: { type: 'audio', content: c } };
     case 'reactionMessage': return { kind: 'reaction', body: c.text || null, ctx: null };
     case 'protocolMessage':
       // Chỉ giữ thu hồi tin (REVOKE = 0); các loại khác là đồng bộ nội bộ của WhatsApp.
-      return Number(c?.type ?? -1) === 0 ? { kind: 'system', body: null, ctx: null } : null;
+      // `revokes` = id tin bị thu hồi (CNS-089e): refinery hiện "(tin đã thu hồi)" cho trích dẫn trỏ tin đó.
+      return Number(c?.type ?? -1) === 0 ? { kind: 'system', body: null, ctx: null, revokes: c?.key?.id ? String(c.key.id) : null } : null;
     default: return { kind: 'other', body: null, ctx: c?.contextInfo || null };
   }
 }
@@ -201,6 +226,7 @@ export class WhatsAppAdapter extends EventEmitter {
     this.now = now;
     this.reconnectBaseMs = reconnectBaseMs;
     this.state = 'idle';
+    this.media = new MediaCache({ now });
     this.sock = null;
     this.gen = 0;
     this.qrCount = 0;
@@ -615,12 +641,28 @@ export class WhatsAppAdapter extends EventEmitter {
       mentions_self: mentioned.some((j) => mine.includes(j)),
       // Trả lời (trích dẫn) tin của chính mình: contextInfo.participant = người viết tin được trích (JID hoặc LID).
       replies_to_self: Boolean(cls.ctx?.participant && mine.includes(bareJid(cls.ctx.participant))),
-      payload: toPlain(m),
+      payload: stripMediaSecrets(toPlain(m)),
     };
+    if (cls.revokes) out.revokes = cls.revokes;
+    if (cls.media) {
+      const c = cls.media.content;
+      const kind = cls.kind;
+      const ref = mediaRef('whatsapp', this.sessionId, String(key.id || ''));
+      const desc = {
+        kind, mime: baseMime(c.mimetype), size: asNumber(c.fileLength), seconds: asNumber(c.seconds), ptt: Boolean(c.ptt),
+      };
+      if (ref) {
+        // Sổ RAM giữ thứ cần để tải (khoá giải mã, directPath); chỉ mô tả KHAI BÁO (không bí mật) đi theo tin.
+        this.media.set(ref, { ...desc, type: cls.media.type, download: { mediaKey: c.mediaKey, directPath: c.directPath } });
+        out.media_ref = ref;
+        out.media = desc;
+      }
+    }
     if (isGroup && this.groupNames.has(remote)) out.group_name = this.groupNames.get(remote);
     const phone = phoneOf(sender) || phoneOf(senderAlt);
     if (phone) out.sender_phone = phone;
     const forwarded = Boolean(cls.ctx?.isForwarded || Number(cls.ctx?.forwardingScore || 0) > 0);
+    out.forwarded = forwarded; // WhatsApp có cờ thật; refinery dùng cho nguồn `forwarded` (§4D.4)
     return withMeta(out, {
       thread_ids: isGroup ? [] : [remote, key.remoteJidAlt].map(bareJid).filter(Boolean),
       sender_alt_id: fromMe ? null : (senderAlt || null),
@@ -629,6 +671,29 @@ export class WhatsAppAdapter extends EventEmitter {
       forwarded,
       read_ref: isGroup || fromMe ? null : { remoteJid: remote, id: String(key.id || ''), fromMe: false },
     });
+  }
+
+  /**
+   * `media.fetch`: tải file của một tin ĐÃ thấy (theo `media_ref` trong sổ RAM) bằng phiên đang có. Không nhận URL.
+   * @returns {Promise<{bytes: Buffer, mime: string}>}; lỗi = MediaError (chỉ mã).
+   */
+  async fetchMedia(ref) {
+    const d = this.media.get(ref);
+    if (!d) throw new MediaError(MEDIA_ERRORS.notFound);
+    const bad = checkDeclared(d);
+    if (bad) throw new MediaError(bad);
+    if (this.state !== 'active' || !this.sock) throw new MediaError(MEDIA_ERRORS.sessionInactive);
+    const { mediaKey, directPath } = d.download || {};
+    if (!mediaKey || typeof directPath !== 'string' || !DIRECT_PATH_RE.test(directPath)) throw new MediaError(MEDIA_ERRORS.badRequest);
+    let stream;
+    try {
+      stream = await this.lib.downloadContentFromMessage({ mediaKey, directPath }, d.type, { host: WA_MEDIA_HOST });
+    } catch { throw new MediaError(MEDIA_ERRORS.downloadFailed); }
+    let bytes;
+    try { bytes = await collectCapped(stream, capBytes(d.kind)); } catch (err) {
+      throw err instanceof MediaError ? err : new MediaError(MEDIA_ERRORS.downloadFailed);
+    }
+    return { bytes, mime: d.mime };
   }
 
   /** v0.1.73: đánh dấu «đã xem» tin 1-1 (CHỈ kênh quản trị với Sếp — SessionManager quyết định gọi). */

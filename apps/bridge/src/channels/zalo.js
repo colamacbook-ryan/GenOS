@@ -4,6 +4,9 @@
 import { EventEmitter } from 'node:events';
 import { silentLogger } from '../log.js';
 import { RecentIds, errorCode, toIso, toPlain, withMeta } from '../util.js';
+import {
+  MEDIA_ERRORS, MediaCache, MediaError, baseMime, capBytes, checkDeclared, guardedFetch, mediaRef, mimeAllowed,
+} from '../media.js';
 
 export const ZALO_QR_TTL_MS = 100000; // zca-js tự hết hạn QR sau 100 giây
 export const ZALO_RETRY_MAX_MS = 60000; // lùi tối đa 60 giây giữa hai lần thử nối lại
@@ -44,6 +47,7 @@ const KIND_BY_MSGTYPE = {
   webchat: 'text',
   'chat.link': 'text',
   'chat.photo': 'image',
+  'chat.voice': 'voice', // tên msgType theo zca-js 2.2.0 (utils.getClientMessageType); nội dung nhận về chưa thử trên voice thật
   'chat.gif': 'image',
   'chat.doodle': 'image',
   'chat.sticker': 'sticker',
@@ -67,7 +71,7 @@ export class ZaloAdapter extends EventEmitter {
   constructor({
     lib, sessionId, logger = silentLogger, qrMax = 5, now = Date.now, reconnectDelayMs = 5000,
     retryMaxMs = ZALO_RETRY_MAX_MS, retryNoticeAfter = ZALO_RETRY_NOTICE_AFTER, unknownRetryMax = ZALO_UNKNOWN_RETRY_MAX,
-    directoryGapMs = 0,
+    directoryGapMs = 0, fetchImpl = globalThis.fetch, lookup, mediaTimeoutMs = 20000,
   } = {}) {
     super();
     this.lib = lib;
@@ -88,6 +92,10 @@ export class ZaloAdapter extends EventEmitter {
     this.ownId = '';
     this.groupNames = new Map();
     this.directoryGapMs = directoryGapMs;
+    this.media = new MediaCache({ now });
+    this.fetchImpl = fetchImpl;
+    this.lookup = lookup;
+    this.mediaTimeoutMs = mediaTimeoutMs;
     this.lastSyncComplete = true;
     this.recent = new RecentIds(2000);
     this.qrCount = 0;
@@ -242,6 +250,52 @@ export class ZaloAdapter extends EventEmitter {
     this.emit('inbound', p);
   }
 
+  #onUndo(raw) {
+    let p;
+    try { p = this.normaliseUndo(raw); } catch (err) {
+      this.log.warn('zalo: không chuẩn hoá được thu hồi tin', { error: errorCode(err) });
+      return;
+    }
+    if (!p) return;
+    if (!this.recent.add(`${p.kind}:${p.external_msg_id}:${p.sender_external_id}`)) return;
+    this.emit('inbound', p);
+  }
+
+  /**
+   * Sự kiện `undo` của zca-js → tin `kind:'system'` mang `revokes` (msgId toàn cục của tin bị thu hồi) và `revokes_cli`
+   * (cliMsgId, dự phòng: msgId lớn có thể mất độ chính xác khi JSON.parse thành số). Đi chung đường tin thường nên
+   * qua cùng bộ lọc tập nghe. Chưa thử trên Zalo thật.
+   */
+  normaliseUndo(u) {
+    const d = u?.data;
+    if (!d) return null;
+    const target = d.content?.globalMsgId ?? d.content?.srcId;
+    const cli = d.content?.cliMsgId;
+    if (target === undefined && cli === undefined) return null;
+    const isGroup = Boolean(u.isGroup);
+    const threadId = String(u.threadId ?? '');
+    const out = {
+      channel: 'zalo',
+      session_id: this.sessionId,
+      external_msg_id: `undo:${String(d.msgId ?? d.realMsgId ?? d.cliMsgId ?? '')}`,
+      external_group_id: isGroup ? threadId : null,
+      sender_external_id: String(d.uidFrom ?? ''),
+      sender_name: d.dName || '',
+      occurred_at: toIso(d.ts, 'ms', this.now),
+      kind: 'system',
+      body_text: null,
+      direction: u.isSelf ? 'outbound' : 'inbound',
+      mentions_self: false,
+      replies_to_self: false,
+      revokes: target === undefined ? null : String(target),
+      revokes_cli: cli === undefined ? null : String(cli),
+      payload: toPlain({ event: 'undo', threadId: u.threadId, isSelf: u.isSelf, isGroup: u.isGroup, data: d }),
+      forwarded: null,
+    };
+    if (isGroup && this.groupNames.has(threadId)) out.group_name = this.groupNames.get(threadId);
+    return withMeta(out, { thread_ids: isGroup ? [] : [threadId], sender_alt_id: null, forwarded: null, read_ref: null });
+  }
+
   #onGroupEvent(raw) {
     let ev;
     try { ev = this.normaliseGroupEvent(raw); } catch (err) {
@@ -288,6 +342,7 @@ export class ZaloAdapter extends EventEmitter {
     const L = api.listener;
     L.on('message', (msg) => this.#onLibEvent(msg));
     L.on('reaction', (r) => this.#onLibEvent(r));
+    L.on('undo', (u) => this.#onUndo(u)); // thu hồi tin (CNS-089e)
     L.on('group_event', (ev) => this.#onGroupEvent(ev));
     L.on('error', (err) => this.log.warn('zalo: websocket lỗi', { error: errorCode(err) }));
     L.on('closed', (code) => { this.#onClosed(code); });
@@ -459,6 +514,22 @@ export class ZaloAdapter extends EventEmitter {
       }
     }
     const mentions = Array.isArray(d.mentions) ? d.mentions : [];
+    let mediaOut = null;
+    if (!isReaction && (kind === 'voice' || (kind === 'image' && d.msgType === 'chat.photo')) && d.content && typeof d.content === 'object') {
+      const c = d.content;
+      let params = {};
+      try { params = typeof c.params === 'string' ? JSON.parse(c.params) : (c.params || {}); } catch { params = {}; }
+      const ref = typeof c.href === 'string' ? mediaRef('zalo', this.sessionId, String(d.msgId ?? d.realMsgId ?? d.cliMsgId ?? '')) : null;
+      if (ref) {
+        // Zalo không khai mime; thời lượng trong params (ms) nếu có. Khai báo chỉ để lõi báo trước too_large.
+        const desc = {
+          kind, mime: '', size: Number(params.fileSize ?? params.size) || 0,
+          seconds: kind === 'voice' ? Math.round((Number(params.duration) || 0) / 1000) : 0, ptt: kind === 'voice',
+        };
+        this.media.set(ref, { ...desc, href: c.href });
+        mediaOut = { ref, desc };
+      }
+    }
     const out = {
       channel: 'zalo',
       session_id: this.sessionId,
@@ -475,15 +546,40 @@ export class ZaloAdapter extends EventEmitter {
       replies_to_self: Boolean(this.ownId && d.quote && String(d.quote.ownerId ?? '') === this.ownId),
       payload: toPlain({ type: msg.type, threadId: msg.threadId, isSelf: msg.isSelf, isGroup: msg.isGroup, data: d }),
     };
+    if (mediaOut) { out.media_ref = mediaOut.ref; out.media = mediaOut.desc; }
+    if (mediaOut) {
+      // href là URL của CDN (có thể ký sẵn): không để trong payload thô; chỉ sổ RAM giữ để tải khi lõi yêu cầu.
+      const c = out.payload?.data?.content;
+      if (c && typeof c === 'object') for (const k of ['href', 'thumb']) delete c[k];
+    }
     if (isGroup && this.groupNames.has(threadId)) {
       out.group_name = this.groupNames.get(threadId);
     }
-    // zca-js 2.2.0 không có cờ «chuyển tiếp» ⇒ forwarded=false; thread 1-1 = threadId (UID người kia, cả khi mình gửi).
+    out.forwarded = null; // zca-js 2.2.0 không có cờ «chuyển tiếp» ⇒ KHÔNG BIẾT (null), không phải «không» (false); thread 1-1 = threadId (UID người kia, cả khi mình gửi).
     // `read_ref`: đủ trường để đánh dấu «đã xem» tin 1-1 của người khác (chỉ RAM, không vào JSON). Nhóm / tin mình gửi ⇒ null.
     const readRef = isGroup || isReaction || msg.isSelf ? null : {
       msgId: d.msgId, cliMsgId: d.cliMsgId, uidFrom: d.uidFrom, idTo: d.idTo, msgType: d.msgType, st: d.st, at: d.at, cmd: d.cmd, ts: d.ts,
     };
-    return withMeta(out, { thread_ids: isGroup ? [] : [threadId], sender_alt_id: null, forwarded: false, read_ref: readRef });
+    return withMeta(out, { thread_ids: isGroup ? [] : [threadId], sender_alt_id: null, forwarded: null, read_ref: readRef });
+  }
+
+  /**
+   * `media.fetch`: tải file của tin ĐÃ thấy theo `media_ref` trong sổ RAM. KHÔNG nhận URL từ ngoài: URL lấy từ chính
+   * sự kiện của phiên Zalo, vẫn qua allowlist CDN + chặn IP nội bộ (`guardedFetch`).
+   */
+  async fetchMedia(ref) {
+    const d = this.media.get(ref);
+    if (!d) throw new MediaError(MEDIA_ERRORS.notFound);
+    const bad = checkDeclared(d);
+    if (bad) throw new MediaError(bad);
+    if (this.state !== 'active') throw new MediaError(MEDIA_ERRORS.sessionInactive);
+    const got = await guardedFetch(d.href, {
+      cap: capBytes(d.kind), fetchImpl: this.fetchImpl, timeoutMs: this.mediaTimeoutMs, ...(this.lookup ? { lookup: this.lookup } : {}),
+    });
+    // Zalo không khai mime: tin phản hồi; generic ⇒ rỗng (lõi dò theo magic bytes); mime lạ rõ ràng thì từ chối.
+    const mime = baseMime(got.mime);
+    if (mime && !mimeAllowed(d.kind, mime)) throw new MediaError(MEDIA_ERRORS.mimeNotAllowed);
+    return { bytes: got.bytes, mime };
   }
 
   /** v0.1.73: đánh dấu «đã xem» một tin 1-1 (CHỈ kênh quản trị với Sếp — SessionManager quyết định gọi). */
