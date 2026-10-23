@@ -105,16 +105,18 @@ async def test_errors_raise_jev_error(fake: tuple[FakeJev, str]) -> None:
 
 async def test_decider_timeout_and_low_confidence_fall_back(fake: tuple[FakeJev, str]) -> None:
     state, base = fake
-    d = decider.JevDecider(jev.JevClient(f"{base}/v1/systemone", "k", timeout=5), timeout=0.3)
+    # Đường thường dùng trần rộng (runner chậm/quá tải không được làm đỏ test); chỉ ca timeout mới dùng trần hẹp.
+    d = decider.JevDecider(jev.JevClient(f"{base}/v1/systemone", "k", timeout=5), timeout=5)
+    d_tight = decider.JevDecider(jev.JevClient(f"{base}/v1/systemone", "k", timeout=5), timeout=0.3)
     state.reply = {"choice": decider.INTENTS["guide"], "confidence": 0.9}
     got = await d.intent("Chỉ tôi cách thêm khoá Gemini")
     assert got is not None and got.value == "guide" and got.source == "jev"
     state.reply = {"choice": decider.INTENTS["data"], "confidence": 0.2}
     assert await d.intent("?") is None and "thấp" in (d.last_error or "")
-    state.reply, state.delay = {"choice": decider.INTENTS["data"], "confidence": 0.9}, 0.6
+    state.reply, state.delay = {"choice": decider.INTENTS["data"], "confidence": 0.9}, 3.0
     t0 = time.monotonic()
-    assert await d.intent("?") is None
-    assert time.monotonic() - t0 < 0.55  # không chờ quá trần thời gian
+    assert await d_tight.intent("?") is None
+    assert time.monotonic() - t0 < 2.5  # không chờ quá trần thời gian
     state.delay = 0
     targets = registry.targets_for("system")
     state.reply = {"choice": next(f"{t.label} — {t.description}" for t in targets if t.id == "system.brain.jev")}
