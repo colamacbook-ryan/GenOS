@@ -29,10 +29,61 @@ def test_default_allowlist_covers_measured_agy_hosts_only() -> None:
         assert not host_allowed(host, allow), host
 
 
+def test_default_allowlist_is_exact_hosts() -> None:
+    """Review 23/10 (MEDIUM): mặc định là HOST CHÍNH XÁC — hậu tố `googleapis.com` cũ mở cả storage / firebase (kênh rò
+    dữ liệu)."""
+    allow, _, _ = egress.config_from_env({})
+    assert all(not d.startswith("*") for d in egress.DEFAULT_ALLOW)
+    for host in ("storage.googleapis.com", "bucket.storage.googleapis.com", "firebasestorage.googleapis.com",
+                 "firestore.googleapis.com", "generativelanguage.googleapis.com", "www.googleapis.com",
+                 "x.play.googleapis.com", "proj.firebaseio.com", "sheets.googleapis.com"):
+        assert not host_allowed(host, allow), host
+
+
+def test_operator_suffix_never_opens_storage_but_star_does() -> None:
+    allow, _, _ = egress.config_from_env({"GH_AGY_EGRESS_ALLOW": "*.googleapis.com, *.firebaseio.com"})
+    assert host_allowed("generativelanguage.googleapis.com", allow) and host_allowed("www.googleapis.com", allow)
+    for host in ("storage.googleapis.com", "my-bucket.storage.googleapis.com", "firebasestorage.googleapis.com",
+                 "firestore.googleapis.com", "proj.firebaseio.com", "drive.googleapis.com"):
+        assert not host_allowed(host, allow), host
+    # Ghi đúng host = chủ ý của người vận hành ⇒ mở đúng host đó (tên miền con vẫn chặn).
+    exact, _, _ = egress.config_from_env({"GH_AGY_EGRESS_ALLOW": "storage.googleapis.com"})
+    assert host_allowed("storage.googleapis.com", exact) and not host_allowed("b.storage.googleapis.com", exact)
+    # `*` = mở hết, kể cả storage.
+    star, _, _ = egress.config_from_env({"GH_AGY_EGRESS_ALLOW": "*.googleapis.com, *"})
+    assert star == () and host_allowed("storage.googleapis.com", star) and host_allowed("evil.example", star)
+
+
+async def test_storage_host_is_denied_and_logged(caplog: pytest.LogCaptureFixture) -> None:
+    allow, _, _ = egress.config_from_env({"GH_AGY_EGRESS_ALLOW": "*.googleapis.com"})
+
+    async def never(host: str, port: int) -> list[str]:
+        raise AssertionError("không được phân giải tên miền bị chặn")
+
+    eg = Egress(allow, resolver=never)
+    srv = await asyncio.start_server(eg.handle, "127.0.0.1", 0)
+    port = srv.sockets[0].getsockname()[1]
+    caplog.set_level(logging.WARNING, logger="agy-egress")
+    try:
+        r, w = await asyncio.open_connection("127.0.0.1", port)
+        w.write(b"CONNECT storage.googleapis.com:443 HTTP/1.1\r\n\r\n")
+        await w.drain()
+        head = await asyncio.wait_for(r.read(200), timeout=5)
+        w.close()
+    finally:
+        srv.close()
+        await srv.wait_closed()
+    assert head.startswith(b"HTTP/1.1 403")
+    assert any("storage.googleapis.com" in m and "GH_AGY_EGRESS_ALLOW" in m for m in caplog.messages)
+
+
 def test_env_extends_default_and_star_opens_all() -> None:
-    allow, _, _ = egress.config_from_env({"GH_AGY_EGRESS_ALLOW": "gstatic.com, *.example.org."})
+    allow, _, _ = egress.config_from_env({"GH_AGY_EGRESS_ALLOW": "www.gstatic.com, *.example.org."})
     assert allow[: len(egress.DEFAULT_ALLOW)] == egress.DEFAULT_ALLOW
-    assert host_allowed("www.gstatic.com", allow) and host_allowed("a.example.org", allow)
+    # Mục thường: đúng host; mục `*.`: hậu tố.
+    assert host_allowed("www.gstatic.com", allow) and not host_allowed("fonts.gstatic.com", allow)
+    assert host_allowed("a.example.org", allow) and host_allowed("b.c.example.org", allow)
+    assert host_allowed("example.org", allow) and not host_allowed("evilexample.org", allow)
     assert host_allowed("play.googleapis.com", allow)                 # thêm, không thay thế mặc định
     assert egress.config_from_env({"GH_AGY_EGRESS_ALLOW": "*"})[0] == ()
     assert host_allowed("anything.example", egress.config_from_env({"GH_AGY_EGRESS_ALLOW": " * "})[0])

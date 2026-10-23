@@ -100,11 +100,16 @@ st = await box_status()          # cache 10 giây; không tham số = đọc GH_
   sạch của agy. Proxy chỉ nhận `CONNECT host:443`, phân giải tên MỘT lần, mọi IP phải định tuyến toàn cầu (chặn loopback, RFC1918, link-local,
   CGNAT 100.64/10, gateway Docker, IPv6 nội bộ/ULA, IPv4-mapped, 6to4/NAT64 nhúng IP nội bộ) rồi nối THẲNG IP đã kiểm (chống DNS rebinding). Trước đây hộp ở
   `agy-out` (bridge thường) nên tới được gateway và mọi dịch vụ trong LAN của máy chủ.
-- Allowlist tên miền (v0.1.75, Nợ #44): **mặc định chỉ `googleapis.com`, `accounts.google.com`, `antigravity-unleash.goog`** (tên miền con tính theo,
-  `gh.agybox.egress.DEFAULT_ALLOW`). `GH_AGY_EGRESS_ALLOW` (trong `.env`, phân cách dấu phẩy) THÊM tên miền; `*` = mọi tên miền công khai (cách cũ, chỉ
-  chặn IP nội bộ). Tên miền bị chặn ⇒ 403 + log cảnh báo `chặn host:port …` của `agy-egress`. Đã đo (agy 1.2.9, token giả): agy có theo `HTTPS_PROXY`, thấy
-  CONNECT tới `antigravity-unleash.goog:443`, `play.googleapis.com:443`; đường gọi model/OAuth thật suy theo cấu trúc dịch vụ Google, chưa đo — thiếu tên
-  miền thì agy trong hộp lỗi mạng, thêm bằng biến trên.
+- Allowlist tên miền (v0.1.75, Nợ #44; thu hẹp theo review bảo mật 23/10): **mặc định chỉ đúng các HOST** (so khớp chính xác, không tính tên miền con —
+  `gh.agybox.egress.DEFAULT_ALLOW`): đã đo `antigravity-unleash.goog`, `play.googleapis.com`; suy luận (chưa đo trên phiên thật gọi model)
+  `cloudcode-pa.googleapis.com` (gọi model), `oauth2.googleapis.com` (làm mới token), `accounts.google.com` (đăng nhập), `openidconnect.googleapis.com`
+  (thông tin tài khoản). Hậu tố `googleapis.com` cũ đã bỏ — nó mở cả `storage.googleapis.com`, firebase… (kênh rò dữ liệu).
+  `GH_AGY_EGRESS_ALLOW` (trong `.env`, phân cách dấu phẩy) THÊM mục: `host` = đúng host đó; `*.example.com` = example.com và mọi tên miền con (so khớp
+  hậu tố CHỈ cho mục có tiền tố `*.`); `*` = mọi tên miền công khai (cách cũ, chỉ chặn IP nội bộ). Mục hậu tố KHÔNG mở các dịch vụ lưu trữ / chia sẻ /
+  chạy mã trong `DENY_SUFFIX` (storage*, firebase*, firestore, pubsub, bigquery, drive, sheets, docs, gmail, appspot, run.app…) kể cả khi có
+  `*.googleapis.com` — chỉ `*` hoặc ghi đúng host mới mở. Tên miền bị chặn ⇒ 403 + log cảnh báo `chặn host:port …` của `agy-egress`. Đã đo (agy 1.2.9,
+  token giả): agy có theo `HTTPS_PROXY`, thấy CONNECT tới `antigravity-unleash.goog:443`, `play.googleapis.com:443` — thiếu host thì agy trong hộp lỗi
+  mạng, thêm đúng host bằng biến trên.
 - **Rủi ro còn lại — token Google của Sếp nằm trong hộp**: mỗi lượt hộp nhận tệp token OAuth (access + refresh token) của tài khoản Google đang đăng nhập
   Antigravity. Tin khách lừa được agy trong hộp chạy lệnh thì đọc được token đó và gửi ra ngoài qua proxy — từ v0.1.75 chỉ tới tên miền
   trong allowlist (Google), trước đó tới bất kỳ tên miền công khai nào — token có quyền của tài khoản Google đó trong phạm vi OAuth agy xin. Gợi ý: dùng **một tài khoản Google riêng** cho Antigravity (không phải

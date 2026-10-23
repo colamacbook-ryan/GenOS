@@ -44,9 +44,10 @@ def test_parse_target() -> None:
 
 def test_host_allowlist() -> None:
     assert host_allowed("anything.example", ())
-    allow = ("googleapis.com", "accounts.google.com")
+    allow = ("*.googleapis.com", "accounts.google.com")
     assert host_allowed("oauth2.googleapis.com", allow) and host_allowed("accounts.google.com", allow)
     assert not host_allowed("evilgoogleapis.com", allow) and not host_allowed("google.com", allow)
+    assert not host_allowed("x.accounts.google.com", allow)           # mục thường = đúng host (review 23/10)
     assert not host_allowed("142.250.72.14", allow)                   # có danh sách ⇒ IP trần bị chặn
 
 
@@ -55,8 +56,8 @@ def test_config_from_env() -> None:
     assert egress.config_from_env({}) == (egress.DEFAULT_ALLOW, frozenset({443}), 3128)
     allow, ports, listen = egress.config_from_env({"GH_AGY_EGRESS_ALLOW": " *.googleapis.com, accounts.google.com ,",
                                                    "GH_AGY_EGRESS_PORTS": "443,8443", "GH_AGY_EGRESS_PORT": "3129"})
-    # Trùng tên miền mặc định ⇒ bỏ trùng.
-    assert allow == egress.DEFAULT_ALLOW and ports == frozenset({443, 8443}) and listen == 3129
+    # Trùng host mặc định ⇒ bỏ trùng; mục `*.` giữ tiền tố (khớp hậu tố).
+    assert allow == (*egress.DEFAULT_ALLOW, "*.googleapis.com") and ports == frozenset({443, 8443}) and listen == 3129
     with pytest.raises(RuntimeError):
         egress.config_from_env({"GH_AGY_EGRESS_PORTS": "x"})
 

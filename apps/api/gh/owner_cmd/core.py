@@ -505,11 +505,14 @@ async def nhap(cmd: OwnerCommand, ctx: Context) -> Reply:
         await store.add_message(db, ctx.org_id, cid, "user", {"text": cmd.text, "via": cmd.via}, turn_id)
         await db.commit()
     try:
+        # Review 23/10: lệnh nháp đến từ kênh quản trị (Telegram / Zalo / WhatsApp) ⇒ cùng luật với bộ máy Gen
+        # (`external = bool(inp.channel)`): agy chỉ chạy qua hộp riêng.
         routed = await ctx.router.generate(
             ctx.org_id,
             agent_key=AGENT_KEY,
             purpose=purpose_of(cmd.via),
             json_mode=True,
+            external=True,
             messages=[
                 Message(
                     "system",
@@ -528,6 +531,8 @@ async def nhap(cmd: OwnerCommand, ctx: Context) -> Reply:
         )
         env = envelope.parse(routed.text)
     except ModelUnavailable as e:
+        if box_unavailable(e.reasons):
+            return Reply(BOX_NEEDED.format(addr=_addr(user)))
         return Reply(MODEL_DOWN if e.no_chain is False else NO_MODEL)
     except envelope.EnvelopeError:
         return Reply(NOT_UNDERSTOOD)
