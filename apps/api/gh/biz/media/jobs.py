@@ -309,7 +309,7 @@ async def _process(d: Deps, ev: PendingEvent) -> str:
             await _write_text(db, ev, att_id, kind=kind, status="ok", text_=res.text, lang=res.lang, engine=res.engine,
                               version=res.engine_version, confidence=res.confidence)
             if res.text:
-                hits += len(d.scan(res.text, prefilter_port.SOURCE_FIELD) or [])
+                hits += len(d.scan(res.text, prefilter_port.source_field_for(kind)) or [])
         if hits:
             await _escalate_fast(db, ev)
         await db.commit()
