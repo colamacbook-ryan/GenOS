@@ -168,7 +168,7 @@ async def test_schema_net_every_person_column_is_handled_or_excluded(app, db) ->
         SELECT c.table_schema || '.' || c.table_name AS tbl, c.column_name AS col
         FROM information_schema.columns c JOIN information_schema.tables t
           ON t.table_schema = c.table_schema AND t.table_name = c.table_name AND t.table_type = 'BASE TABLE'
-        WHERE c.table_schema IN ('biz', 'clean', 'core', 'ops', 'memory', 'refinery', 'raw', 'agent')
+        WHERE c.table_schema IN ('biz', 'clean', 'core', 'ops', 'memory', 'refinery', 'raw', 'agent', 'mem')
           AND (c.column_name IN ('person_id', 'subject_id', 'from_person', 'to_person')
                OR c.column_name LIKE '%\\_person\\_id')
           AND NOT EXISTS (SELECT 1 FROM pg_inherits i
