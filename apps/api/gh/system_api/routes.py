@@ -20,6 +20,7 @@ from gh.audit.routes import export_rows, query_log
 from gh.auth import rbac, service
 from gh.auth.deps import require, require_owner, require_pin
 from gh.biz.core.scope import group_row_view_sql
+from gh.biz.mem import forget as mem_forget
 from gh.boss_checks import service as boss_service
 from gh.chassis import actionlog
 from gh.chassis.bus import BRIDGE_CONTROL
@@ -1498,6 +1499,7 @@ async def create_data_request(person_id: uuid.UUID, body: DataRequestIn, user: s
                                        VALUES (:o, :p, :k, 'open') RETURNING id"""),
                                {"o": user.org_id, "p": person_id, "k": body.kind})).scalar_one()
     result: dict[str, Any]
+    mem_counts: dict[str, int] = {}
     if body.kind == "export":
         result = await _export_person_bundle(db, person)
     elif body.kind == "erase":
@@ -1510,6 +1512,9 @@ async def create_data_request(person_id: uuid.UUID, body: DataRequestIn, user: s
         await db.execute(text("""DELETE FROM memory.entries WHERE notebook_id IN
                                  (SELECT id FROM memory.notebooks
                                    WHERE subject_type = 'person' AND subject_id = :i)"""), {"i": person_id})
+        # Lõi trí nhớ (v0.1.76): xoá THẬT bí danh, nhắc tới, bằng chứng, nhật ký trạng thái và mọi sự thật có người
+        # này làm chủ thể/đối tượng (kể cả thực thể đã gộp vào). Con số (không nội dung) vào Nhật ký thao tác.
+        mem_counts = await mem_forget.erase_entity(db, user.org_id, person_id)
         result = {"erased": True}
     else:
         await db.execute(text("""UPDATE core.persons SET attrs = attrs || '{"data_restricted": true}'::jsonb
@@ -1519,7 +1524,9 @@ async def create_data_request(person_id: uuid.UUID, body: DataRequestIn, user: s
                      {"i": req_id})
     await actionlog.record(db, org_id=user.org_id, actor_type="user", actor_id=user.actor_id,
                            action=f"person_data.{body.kind}", target_type="person", target_id=person.code,
-                           target_label=person.display_name, detail={"request_id": str(req_id)}, ip=user.ip)
+                           target_label=person.display_name,
+                           detail={"request_id": str(req_id),
+                                   **({"mem_erased": mem_counts} if body.kind == "erase" else {})}, ip=user.ip)
     return {"id": str(req_id), "kind": body.kind, "status": "completed", "result": result}
 
 

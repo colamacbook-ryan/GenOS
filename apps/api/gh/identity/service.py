@@ -14,6 +14,7 @@ import orjson
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from gh.biz.mem import entities as mem_entities
 from gh.data.common import CHANNEL_NAME
 from gh.errors import ApiError, conflict, not_found
 from gh.refinery import scoring
@@ -288,6 +289,11 @@ PERSON_REFS_EXCLUDED: dict[str, str] = {
     "core.identity_merge_log.from_person": "chính nhật ký gộp",
     "core.identity_merge_log.to_person": "chính nhật ký gộp",
     "ops.owner_questions.subject_id": "câu hỏi chờ Owner (v0.1.71): luôn trỏ về NHÓM (group_id), không phải người",
+    # v0.1.76 (lõi trí nhớ): gộp người KHÔNG dời dòng — `mem.entities.merged_into` chuyển hướng (móc ở merge/revert);
+    # sự thật giữ nguyên `subject_id` gốc, đọc luôn qua coalesce(merged_into, id).
+    "mem.entities.person_id": "thực thể trí nhớ — chuyển hướng bằng merged_into (entities.merge_persons), không dời",
+    "mem.facts.subject_id": "trỏ về mem.entities (không phải core.persons); gộp = merged_into của thực thể",
+    "mem.disputes.subject_id": "trỏ về mem.entities (không phải core.persons); gộp = merged_into của thực thể",
 }
 _REFS_BY_KEY = {f"{r.table}.{r.col}": r for r in PERSON_REFS}
 
@@ -388,6 +394,10 @@ async def merge(db: AsyncSession, org_id: uuid.UUID, candidate_id: uuid.UUID, ac
     keep, drop = await _pick_keep(db, c.a_pid, c.b_pid)
     await _pin_dm_targets(db, keep, drop)      # bản nháp 1-1 đang chờ giữ đúng tài khoản nhận qua gộp/đảo ngược
     moved = await _move(db, drop, keep, None)
+    # Lõi trí nhớ (v0.1.76): gộp hai thực thể (chuyển hướng merged_into, không dời sự thật); ghi bản ghi để đảo ngược.
+    mem_moved = await mem_entities.merge_persons(db, org_id, drop, keep)
+    if mem_moved is not None:
+        moved["mem"] = mem_moved
     await _refresh_scores(db, org_id, keep)
     await db.execute(text("""UPDATE core.persons SET merged_into_id = :k,
                              attrs = attrs || '{"auto": false}' WHERE id = :d"""), {"k": keep, "d": drop})
@@ -528,6 +538,7 @@ async def revert(db: AsyncSession, org_id: uuid.UUID, log_id: uuid.UUID, actor: 
             await db.execute(text("""UPDATE core.identity_merge_candidates SET status = 'pending', decided_by = NULL,
                                      decided_at = NULL WHERE id = :c"""), {"c": lg.candidate_id})
         restored = lg.from_person
+        await mem_entities.unmerge_persons(db, org_id, snap.get("mem"))  # tách lại thực thể trí nhớ theo bản ghi
         await _refresh_scores(db, org_id, lg.to_person)  # hồ sơ giữ mất các đơn vị đã trả ⇒ tính lại điểm
     else:
         # Tách: trả tài khoản + đơn vị về hồ sơ gốc; hồ sơ tách ra trỏ về gốc.
@@ -537,6 +548,7 @@ async def revert(db: AsyncSession, org_id: uuid.UUID, log_id: uuid.UUID, actor: 
                          {"f": lg.from_person, "ids": units})
         await db.execute(text("UPDATE core.persons SET merged_into_id = :f WHERE id = :t"),
                          {"f": lg.from_person, "t": lg.to_person})
+        await mem_entities.merge_persons(db, org_id, lg.to_person, lg.from_person)  # hồ sơ tách ra gộp lại gốc
         restored = lg.from_person
     await db.execute(text("UPDATE core.identity_merge_log SET reverted_at = now(), reverted_by = :u WHERE id = :i"),
                      {"u": actor, "i": lg.id})
