@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import Dataset, load_dataset, write_json  # noqa: E402
+from common import Dataset, load_dataset, refuse_inside_repo, write_json  # noqa: E402
 from gkb_score import Run, load_key, score_run  # noqa: E402
 
 TOLERANCE = 0.02
@@ -54,6 +54,8 @@ def main() -> None:
     ap.add_argument("--thread", nargs="+", required=True)
     ap.add_argument("--out")
     a = ap.parse_args()
+    if a.out:
+        refuse_inside_repo(a.out)
     res = compare(load_dataset(a.data), load_key(a.key), a.batch, a.thread)
     if a.out:
         write_json(a.out, res)

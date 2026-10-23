@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import Dataset, load_dataset, write_json  # noqa: E402
+from common import Dataset, load_dataset, refuse_inside_repo, write_json  # noqa: E402
 from gkb_score import Run, load_key, score_run  # noqa: E402
 
 
@@ -59,6 +59,7 @@ def main() -> None:
     ap.add_argument("--out", required=True)
     ap.add_argument("--manual")
     a = ap.parse_args()
+    refuse_inside_repo(a.out)
     ds = load_dataset(a.data)
     manual = json.loads(Path(a.manual).read_text()) if a.manual else None
     md, template = build_sheet(ds, Run(a.run, ds), load_key(a.key), manual)

@@ -242,7 +242,7 @@ async def test_precision_manual_review_blocks_until_all_unmatched_reviewed(world
     r0 = gs.score_run(gs.Run(runs[0], world["ds"]), world["key"])
     assert len(r0["unmatched_units"]) == 1 and r0["manual_pending"] == r0["unmatched_units"]
     g = full_score(world, runs)["gate"]
-    assert g["manual_pending_total"] == 3 and g["note"]
+    assert g["manual_pending_total"] == 3 and g["note"] and not g["rows"]["precision_ge_95"]["pass"]
     k = r0["unmatched_units"][0]
     good = full_score(world, runs, manual={k: "ok"})["gate"]
     assert good["manual_pending_total"] == 0 and good["rows"]["precision_ge_95"]["pass"]
@@ -314,3 +314,67 @@ def test_no_answer_key_file_inside_repo_scripts() -> None:
             if p.is_file() and p.suffix in (".json", ".jsonl"):
                 assert "intel-key/1" not in p.read_text(encoding="utf-8", errors="ignore"), p
             assert "evalkey" not in p.name
+
+
+async def test_precision_pending_manual_items_count_as_wrong_one_good_nine_junk(world) -> None:  # type: ignore[no-untyped-def]
+    """Review L6 🔴1: mục chưa rà từng bị bỏ khỏi mẫu số ⇒ precision 100% giả. Nay: chưa rà = sai ⇒ 'chưa chốt', gate trượt."""
+    unkeyed = [m for m in world["ds"].msgs if m.group == "G1" and m.text.startswith("tin thường") and m.reply_to is None][:9]
+    ids = {m.id for m in unkeyed}
+
+    def extra(inp: Any, n: int) -> list[dict[str, Any]]:
+        return [{"unit_ref": f"j{n}_{m['id']}", "event_ref": "j", "kind": "viec_han", "quotes": [{"message_id": m["message_id"], "field": "body", "text": m["text"][:80]}],
+                 "summary": "rác", "level_hint": "amber"} for m in inp.new if m["id"] in ids]
+
+    class OneRight(h.Oracle):
+        async def analyze(self, inp: Any) -> Any:
+            r = await super().analyze(inp)
+            keep = [u for u in r.output["units"] if u["event_ref"] in ("E2", "j") or u["unit_ref"].startswith("j")]
+            r.output["units"] = keep
+            r.output["facts_proposed"] = []
+            return r
+
+    runs = await do_runs(world, [OneRight(world["key"], extra=extra) for _ in range(3)])
+    s0 = gs.score_run(gs.Run(runs[0], world["ds"]), world["key"])
+    assert len(s0["unmatched_units"]) == 9 and len(s0["manual_pending"]) == 9
+    assert s0["precision_manual"]["p"] == pytest.approx(1 / 10)           # 1 đúng + 9 rác, KHÔNG phải 100%
+    g = full_score(world, runs)["gate"]
+    assert not g["rows"]["precision_ge_95"]["pass"] and "chưa chốt" in g["rows"]["precision_ge_95"]["detail"]["status"] and not g["pass"]
+    # rà xong: 9 mục 'bad' ⇒ vẫn trượt vì thật sự sai; 9 'ok' ⇒ qua dòng này
+    allbad = {k: "bad" for k in s0["unmatched_units"]}
+    assert not full_score(world, runs, manual={k: "bad" for r in runs for k in gs.score_run(gs.Run(r, world["ds"]), world["key"])["unmatched_units"]})["gate"]["rows"]["precision_ge_95"]["pass"]
+    assert allbad
+
+
+async def test_full_gate_fails_without_unconfirmed_run_or_distribution_summary(world) -> None:  # type: ignore[no-untyped-def]
+    """Review L6 🟠5: thiếu lần chạy chưa xác nhận hoặc thiếu summary.json phân phối ở chế độ đầy đủ ⇒ trượt (trước đây lặng lẽ bỏ qua)."""
+    runs = await do_runs(world, oracle_n(world))
+    g = full_score(world, runs)["gate"]
+    assert not g["rows"]["unconfirmed_zero_opportunity_and_people_eval"]["pass"] and not g["pass"]
+    for r in runs:
+        (Path(r) / "summary.json").unlink()
+    g2 = full_score(world, runs, extraction_only=False)["gate"]
+    assert not g2["rows"]["distribution_cns101"]["pass"] and "thiếu summary" in g2["rows"]["distribution_cns101"]["detail"]
+    ext = full_score(world, runs, extraction_only=True)["gate"]
+    assert "distribution_cns101" not in ext["rows"] and "unconfirmed_zero_opportunity_and_people_eval" not in ext["rows"]
+
+
+def test_out_path_inside_repo_refused() -> None:
+    with pytest.raises(SystemExit, match="TRONG repo"):
+        common.refuse_inside_repo(h.REPO / "scripts" / "gate.json")
+    common.refuse_inside_repo("/tmp/gate.json")
+
+
+def test_no_real_kb_ids_in_l6_sources() -> None:
+    """Review L6 🟠3: không id nào của kb thật (dạng m0xxx / S\\d\\d đi cùng) trong mã L6; id tổng hợp dùng tiền tố khác."""
+    import re
+
+    bad = []
+    for sub in ("scripts/intel-eval", "scripts/import-export", "apps/api/tests/scenarios", "apps/web/e2e-live/fake_bridge.py"):
+        base = h.REPO / sub
+        for p in ([base] if base.is_file() else base.rglob("*.py")):
+            t = p.read_text(encoding="utf-8")
+            if p.name == "test_intel_score.py" and "test_no_real_kb_ids" in t:
+                t = t.split("def test_no_real_kb_ids_in_l6_sources")[0]
+            for m in re.finditer(r"\bm0\d{3}\b|\"S\d\d\"", t):
+                bad.append((p.name, m.group()))
+    assert not bad, bad

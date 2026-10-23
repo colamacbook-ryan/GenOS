@@ -132,6 +132,27 @@ async def play_script(bus, events: list[dict], *, org: str, pace: bool = True) -
     return n
 
 
+_TASKS: set = set()
+
+
+def spawn(coro, name: str = "fake-bridge-task"):
+    """Chạy nền NHƯNG giữ tham chiếu (asyncio chỉ giữ tham chiếu yếu ⇒ task có thể bị thu gom giữa chừng) và ghi lỗi ra log thay vì nuốt."""
+    t = asyncio.ensure_future(coro)
+    _TASKS.add(t)
+
+    def _done(task) -> None:
+        _TASKS.discard(task)
+        if not task.cancelled() and task.exception() is not None:
+            print(f"[fake_bridge] {name} lỗi: {task.exception()!r}", file=sys.stderr, flush=True)
+    t.add_done_callback(_done)
+    return t
+
+
+def handle_script(bus, payload: dict, org: str):
+    """`fake.script` KHÔNG chặn bộ xử lý điều khiển (session.login vẫn được phục vụ trong lúc kịch bản đang chờ `sleep`)."""
+    return spawn(play_script(bus, payload.get("events", []), org=org, pace=bool(payload.get("pace", True))), "fake.script")
+
+
 async def main():
     from redis.asyncio import Redis
     from gh.chassis.bus import EventBus, BRIDGE_CONTROL, BRIDGE_STATUS, BRIDGE_DIRECTORY, BRIDGE_OUTBOUND
@@ -142,12 +163,12 @@ async def main():
     async def hb():
         while True:
             await r.set("gh:bridge:heartbeat", str(time.time()), ex=30); await asyncio.sleep(5)
-    asyncio.create_task(hb())
+    spawn(hb(), "heartbeat")
     await bus.publish(BRIDGE_STATUS, "bridge.hello", {}, actor="bridge", org_id=ORG)
     async def on_control(ev):
         p = ev.payload
         if ev.type == "fake.script":      # L6: phát kịch bản tin (nhóm/DM/voice/ảnh/rớt phiên/kick)
-            await play_script(bus, p.get("events", []), org=ORG, pace=bool(p.get("pace", True)))
+            handle_script(bus, p, ORG)
             return
         if ev.type != "session.login": return
         sid, ch = p["session_id"], p["channel"]
@@ -181,7 +202,7 @@ async def main():
     script_file = os.environ.get("FAKE_SCRIPT")
     if script_file:
         with open(script_file) as f:
-            asyncio.create_task(play_script(bus, json.load(f), org=ORG))
+            spawn(play_script(bus, json.load(f), org=ORG), "FAKE_SCRIPT")
     stop = asyncio.Event()
     await asyncio.gather(bus.run(BRIDGE_CONTROL, "fakebridge", "fb-1", on_control, stop),
                          bus.run(BRIDGE_OUTBOUND, "fakebridge-out", "fb-out-1", on_outbound, stop))

@@ -34,7 +34,7 @@ PLANTED = {
 
 
 def synth_dataset(n_g1: int = 140, n_g2: int = 70) -> common.Dataset:
-    """Hai nhóm: G1 sôi nổi (n_g1 tin, đủ để có ca dư tin), G2 thưa; tin cấy `PLANTED` ở vị trí cố định. id dạng m0001…; có voice/ảnh/reply."""
+    """Hai nhóm: G1 sôi nổi (n_g1 tin, đủ để có ca dư tin), G2 thưa; tin cấy `PLANTED` ở vị trí cố định. id dạng t0001…; có voice/ảnh/reply."""
     msgs: list[common.Msg] = []
     t0 = datetime(2026, 10, 1, 8, 0, tzinfo=VN)
     seq = 0
@@ -46,7 +46,7 @@ def synth_dataset(n_g1: int = 140, n_g2: int = 70) -> common.Dataset:
     last_id = {"G1": None, "G2": None}
     for g, i in plan:
         seq += 1
-        mid = f"m{seq:04d}"
+        mid = f"t{seq:04d}"
         pos[g] += 1
         kind = "text"
         text = f"tin thường số {i} của nhóm {g}: báo cáo ca làm việc hôm nay ổn, không có gì mới để ghi"

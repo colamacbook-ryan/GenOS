@@ -163,10 +163,40 @@ def test_sender_ids_and_map() -> None:
     assert ih.sender_id("zalo", "Nguyễn Thị Lan") == ih.sender_id("zalo", "nguyen thi lan")
 
 
-def test_dm_has_no_group_and_since_until_filter() -> None:
-    envs = env(ps.parse_whatsapp(WA_ANDROID), group_id=None, since=datetime.fromisoformat("2026-10-13T00:00:00+07:00"))
-    assert envs and all(e["external_group_id"] is None and e["group_name"] is None for e in envs)
-    assert all(e["occurred_at"] >= "2026-10-13" for e in envs)
+def test_since_filter() -> None:
+    envs = env(ps.parse_whatsapp(WA_ANDROID), since=datetime.fromisoformat("2026-10-13T00:00:00+07:00"))
+    assert envs and all(e["occurred_at"] >= "2026-10-13" for e in envs)
+
+
+def test_dm_import_refused_until_ingest_skips_import_source(tmp_path: Path) -> None:
+    """Review L6 🟠2: ingest (L5) chưa bỏ qua payload.source='import' ⇒ tin 1-1 nhập vào đi đường nhanh + direct_new. Bộ nhập từ chối chat 1-1."""
+    with pytest.raises(ValueError, match="từ chối nhập chat 1-1"):
+        env(ps.parse_whatsapp(WA_ANDROID), group_id=None)
+    f = tmp_path / "dm.txt"
+    f.write_text(WA_ANDROID, encoding="utf-8")
+    with pytest.raises(SystemExit, match="từ chối nhập chat 1-1"):
+        ih.main([str(f)])
+
+
+def test_parser_scales_linearly_and_enforces_caps(tmp_path: Path) -> None:
+    import time
+
+    big = "".join(f"12/10/2026, 14:{i % 60:02d} - A: tin {i}\n" for i in range(60_000))
+    t0 = time.monotonic()
+    r = ps.parse_whatsapp(big)
+    assert len(r.messages) == 60_000 and time.monotonic() - t0 < 10        # trước đây O(n²): 60k dòng tính bằng phút
+    long_line = "12/10/2026, 14:00 - A: " + "x" * (ps.MAX_LINE_CHARS * 3) + "\n"
+    r2 = ps.parse_whatsapp(long_line)
+    assert r2.truncated_lines == 1 and len(r2.messages[0].text) <= ps.MAX_LINE_CHARS
+    f = tmp_path / "huge.txt"
+    f.write_text("12/10/2026, 14:00 - A: x\n")
+    old = ps.MAX_FILE_BYTES
+    ih.MAX_FILE_BYTES = 5
+    try:
+        with pytest.raises(ps.ParseError, match="vượt trần"):
+            ih.parse_file(f)
+    finally:
+        ih.MAX_FILE_BYTES = old
 
 
 def test_stream_constant_matches_bus() -> None:
@@ -187,7 +217,7 @@ def test_cli_dry_run_and_jsonl(tmp_path: Path, capsys: pytest.CaptureFixture[str
     assert len(rows) == 6 and rows[0]["stream"] == "gh.bridge.inbound" and rows[0]["type"] == "message"
     assert rows[0]["payload"]["sender_external_id"] == "u-lan"
     with pytest.raises(SystemExit):
-        ih.main([str(f), "--emit", "bus"])           # thiếu ORG/GH_REDIS_URL ⇒ từ chối, không đoán
+        ih.main([str(f), "--group-id", "G-1", "--emit", "bus"])           # thiếu ORG/GH_REDIS_URL ⇒ từ chối, không đoán
 
 
 def _map(tmp: Path) -> Path:

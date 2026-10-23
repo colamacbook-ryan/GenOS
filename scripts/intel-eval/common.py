@@ -215,3 +215,10 @@ def quantiles(xs: list[float]) -> dict[str, float | None]:
 def write_json(path: str | Path, obj: Any) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     Path(path).write_text(json.dumps(obj, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")
+
+
+def refuse_inside_repo(path: str | os.PathLike[str]) -> None:
+    """Kết quả chấm (gate*.json, phiếu rà tay…) có thể chứa dấu vết đáp án ⇒ KHÔNG được ghi vào trong repo (spec §2.1)."""
+    p = Path(path).resolve()
+    if REPO == p or REPO in p.parents:
+        raise SystemExit(f"từ chối ghi {p}: nằm TRONG repo (kết quả chấm/đáp án phải ở ngoài repo)")

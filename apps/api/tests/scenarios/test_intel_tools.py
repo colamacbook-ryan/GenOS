@@ -143,6 +143,49 @@ async def test_media_text_reaches_analyzer_via_fake_engine(tmp_path: Path) -> No
     assert s["media_coverage"]["failed"] == 0 and s["media_coverage"]["processed"] >= 1
 
 
+async def test_bus_sink_requires_gh_env_key_in_target_redis(redis, monkeypatch: pytest.MonkeyPatch) -> None:  # type: ignore[no-untyped-def]
+    """Review L6 🟡7: kiểm PHÍA ĐÍCH — Redis phải có gh:env = eval, không chỉ tin biến môi trường của người chạy."""
+    from tests.conftest import REDIS_URL
+
+    monkeypatch.setenv("GH_ENV", "eval")
+    await redis.delete("gh:env", "gh.bridge.inbound")
+    sink = replay.BusSink(REDIS_URL, "org-x")
+    with pytest.raises(SystemExit, match="gh:env"):
+        await sink.emit("gh.bridge.inbound", "message", {"x": 1})
+    assert await redis.xlen("gh.bridge.inbound") == 0
+    await redis.set("gh:env", "production")
+    with pytest.raises(SystemExit):
+        await sink.emit("gh.bridge.inbound", "message", {"x": 1})
+    await redis.set("gh:env", "eval")
+    await sink.emit("gh.bridge.inbound", "message", {"x": 1})
+    assert await redis.xlen("gh.bridge.inbound") == 1
+    await redis.delete("gh:env", "gh.bridge.inbound")
+    await sink.close()
+
+
+async def test_seeder_logs_in_with_csrf_header_like_e2e() -> None:
+    """Review L6 🟡9: Seeder đăng nhập thật (cookie phiên + gh_csrf → X-CSRF-Token), không dùng client trần."""
+    seen: list[httpx.Request] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(req)
+        if req.url.path == "/auth/login":
+            return httpx.Response(200, json={"ok": True}, headers={"set-cookie": "gh_csrf=tok123; Path=/"})
+        return httpx.Response(200, json=[])
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://api.test")
+    s = replay.Seeder(client)
+    await s.login("sep@example.com", "mat-khau")
+    await s.group_ids_by_name()
+    assert json.loads(seen[0].content) == {"email": "sep@example.com", "password": "mat-khau"}
+    assert seen[1].headers["x-csrf-token"] == "tok123"
+    bad = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(401)), base_url="http://api.test")
+    with pytest.raises(SystemExit, match="đăng nhập thất bại"):
+        await replay.Seeder(bad).login("a@b.c", "x")
+    await client.aclose()
+    await bad.aclose()
+
+
 def test_gh_env_eval_is_mandatory_for_bus_and_api(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GH_ENV", "development")
     with pytest.raises(SystemExit, match="GH_ENV"):

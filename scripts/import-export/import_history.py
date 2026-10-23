@@ -33,10 +33,22 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from parsers import ParseError, ParseResult, fold_name, parse_whatsapp, parse_zalo, sniff_format  # noqa: E402
+from parsers import (  # noqa: E402
+    MAX_FILE_BYTES,
+    ParseError,
+    ParseResult,
+    fold_name,
+    parse_whatsapp,
+    parse_zalo,
+    sniff_format,
+)
 
 BRIDGE_INBOUND = "gh.bridge.inbound"        # khớp gh.chassis.bus (test đối chiếu)
 DEFAULT_TZ = "Asia/Ho_Chi_Minh"
+#: ĐIỂM CHỜ (L5 sở hữu `gh/data/ingest.py`): `ingest_message` chưa bỏ qua `payload.source == 'import'` nên tin 1-1 nhập vào vẫn đi đường nhanh
+#: (`direct_fast`) và sinh `direct_new`. Tới khi ingest xử lý, bộ nhập TỪ CHỐI chat 1-1.
+DM_REFUSAL = ("từ chối nhập chat 1-1 (thiếu --group-id): ingest chưa bỏ qua payload.source='import' nên tin 1-1 sẽ đi đường nhanh và sinh sự kiện direct_new. "
+              "Chỉ nhập nhóm cho tới khi ingest.py (L5) hỗ trợ — xem điểm chờ trong báo cáo L6")
 KIND_FOR = {"text": "text", "image": "image", "voice": "voice", "file": "file", "sticker": "sticker"}
 
 
@@ -59,8 +71,10 @@ def build_envelopes(res: ParseResult, *, channel: str, group_id: str | None, gro
                     sender_map: dict[str, str] | None = None, tz: str = DEFAULT_TZ, batch: str = "", since: datetime | None = None,
                     until: datetime | None = None) -> list[dict[str, Any]]:
     """Dòng đã đọc → payload `message` của `gh.bridge.inbound`, sắp theo giờ gửi (ổn định theo thứ tự trong tệp)."""
+    if not group_id:
+        raise ValueError(DM_REFUSAL)
     zone = ZoneInfo(tz)
-    group_key = group_id or "dm"
+    group_key = group_id
     seen: Counter[tuple[str, str, str]] = Counter()
     out: list[dict[str, Any]] = []
     for ln in res.messages:
@@ -92,12 +106,14 @@ def build_envelopes(res: ParseResult, *, channel: str, group_id: str | None, gro
 def summarize(res: ParseResult, envs: list[dict[str, Any]]) -> dict[str, Any]:
     kinds = Counter(e["kind"] for e in envs)
     return {"format": res.format, "messages": len(envs), "kinds": dict(kinds), "system_skipped": res.system_skipped, "deleted_skipped": res.deleted_skipped,
-            "unparsed_lines": res.unparsed_lines, "date_order": res.date_order, "date_order_ambiguous": res.date_order_ambiguous, "notes": res.notes,
+            "unparsed_lines": res.unparsed_lines, "truncated_lines": res.truncated_lines, "date_order": res.date_order, "date_order_ambiguous": res.date_order_ambiguous, "notes": res.notes,
             "first": envs[0]["occurred_at"] if envs else None, "last": envs[-1]["occurred_at"] if envs else None,
             "senders": sorted({e["sender_name"] for e in envs}), "media_missing": sum(1 for e in envs if e["payload"].get("media_missing"))}
 
 
 def parse_file(path: Path, fmt: str = "auto", date_order: str | None = None, custom_pattern: str | None = None) -> ParseResult:
+    if path.stat().st_size > MAX_FILE_BYTES:
+        raise ParseError(f"tệp {path.stat().st_size} byte vượt trần {MAX_FILE_BYTES} byte")
     text = path.read_text(encoding="utf-8-sig", errors="replace")
     if fmt == "auto":
         fmt = sniff_format(text)
@@ -133,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("file")
     ap.add_argument("--format", choices=("auto", "whatsapp", "zalo"), default="auto")
     ap.add_argument("--channel", choices=("zalo", "whatsapp"), help="kênh đích (mặc định: theo --format)")
-    ap.add_argument("--group-id", help="external_group_id của nhóm (bỏ trống = chat 1-1)")
+    ap.add_argument("--group-id", help="external_group_id của nhóm (BẮT BUỘC: chat 1-1 bị từ chối, xem DM_REFUSAL)")
     ap.add_argument("--group-name")
     ap.add_argument("--owner-name", help="tên của Sếp trong tệp: tin của người này đi direction=outbound")
     ap.add_argument("--sender-map", help="JSON {tên hiển thị: id thật của người gửi}")
@@ -147,6 +163,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--redis-url", default=os.environ.get("GH_REDIS_URL", ""))
     a = ap.parse_args(argv)
     path = Path(a.file)
+    if not a.group_id:
+        raise SystemExit(DM_REFUSAL)
     res = parse_file(path, a.format, a.date_order, a.custom_pattern)
     channel = a.channel or ("whatsapp" if res.format == "whatsapp" else "zalo")
     smap = json.loads(Path(a.sender_map).read_text(encoding="utf-8")) if a.sender_map else None

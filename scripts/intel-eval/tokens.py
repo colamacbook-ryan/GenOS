@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import quantiles, write_json  # noqa: E402
+from common import quantiles, refuse_inside_repo, write_json  # noqa: E402
 
 #: Giả định ƯỚC TÍNH của spec §4D.5 để đối chiếu (token/lượt).
 SPEC_ASSUMPTION = {"input": 8_900, "cache_read": 5_000, "output": 1_200}
@@ -76,6 +76,8 @@ def main() -> None:
     ap.add_argument("--prices")
     ap.add_argument("--out")
     a = ap.parse_args()
+    if a.out:
+        refuse_inside_repo(a.out)
     prices = json.loads(Path(a.prices).read_text()) if a.prices else None
     rep = report(a.runs, prices)
     if a.out:

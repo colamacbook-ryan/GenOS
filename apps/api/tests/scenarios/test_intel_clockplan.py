@@ -13,7 +13,7 @@ from tests.scenarios import intel_helpers as h
 
 def mk(i: int, group: str = "G1", *, secs: int = 0, sender: str = "u1", text: str | None = None, reply_to: str | None = None) -> common.Msg:
     t0 = h.datetime(2026, 10, 1, 8, 0, tzinfo=h.VN)
-    return common.Msg(id=f"m{i:04d}", group=group, group_name=group, ts=t0 + timedelta(seconds=secs), sender_id=sender, sender_name=sender,
+    return common.Msg(id=f"t{i:04d}", group=group, group_name=group, ts=t0 + timedelta(seconds=secs), sender_id=sender, sender_name=sender,
                       text=text if text is not None else f"nội dung số {i} có độ dài vừa phải để tính ký tự", reply_to=reply_to)
 
 
@@ -73,7 +73,7 @@ def test_cut_never_splits_a_reply_chain_or_same_sender_burst() -> None:
     cfg = cp.PlanConfig(max_msgs=5)
     # 7 tin: tin 5→6 là trả lời trực tiếp ⇒ không được cắt ở 5; phải lùi về 4
     msgs = [mk(i, secs=i * 1000, sender=f"u{i}") for i in range(1, 8)]
-    msgs[5] = mk(6, secs=6000, sender="u6", reply_to="m0005")
+    msgs[5] = mk(6, secs=6000, sender="u6", reply_to="t0005")
     k, hard = cp.cut_turn(msgs, cfg)
     assert (k, hard) == (4, False)
     # cùng người gửi trong 2 phút cũng là một chuỗi
@@ -89,7 +89,7 @@ def test_no_model_messages_not_in_turn_but_counted() -> None:
     msgs = [mk(1, secs=0, text="dạ"), mk(2, secs=1, text="ok"), mk(3, secs=2, text="Hàng về chưa anh?"), mk(4, secs=3, text="cảm ơn")]
     stats: dict[str, int] = {}
     turns = cp.plan_turns(msgs, cp.realtime_times(msgs), stats=stats)
-    assert [m.id for t in turns for m in t.new] == ["m0003"]
+    assert [m.id for t in turns for m in t.new] == ["t0003"]
     d = cp.distribution(turns, set(), skipped_flushed=stats["skipped_flushed"])
     assert d["skipped_total"] == 3
 

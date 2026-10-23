@@ -31,6 +31,11 @@ class ParseError(ValueError):
     pass
 
 
+#: Trần chống tệp/dòng khổng lồ làm treo hoặc ăn hết RAM máy Sếp.
+MAX_FILE_BYTES = 200 * 1024 * 1024
+MAX_LINE_CHARS = 20_000
+
+
 @dataclass
 class Line:
     ts: datetime                # giờ địa phương, naive
@@ -47,6 +52,7 @@ class ParseResult:
     system_skipped: int = 0
     deleted_skipped: int = 0
     unparsed_lines: int = 0
+    truncated_lines: int = 0
     date_order: str = "dmy"
     date_order_ambiguous: bool = False
     notes: list[str] = field(default_factory=list)
@@ -54,6 +60,18 @@ class ParseResult:
 
 def _clean(line: str) -> str:
     return line.translate(INVISIBLE).translate(SPACES).rstrip("\r\n")
+
+
+def _lines(text: str, res_truncated: list[int]) -> list[str]:
+    """Tách dòng + chuẩn hoá; dòng dài quá `MAX_LINE_CHARS` bị cắt (đếm vào `truncated_lines`) thay vì ăn bộ nhớ/regex."""
+    out = []
+    for x in text.split("\n"):
+        c = _clean(x)
+        if len(c) > MAX_LINE_CHARS:
+            c = c[:MAX_LINE_CHARS]
+            res_truncated[0] += 1
+        out.append(c)
+    return out
 
 
 # ─── Ngày giờ ────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -138,7 +156,8 @@ def _split_sender(rest: str) -> tuple[str, str] | None:
 
 
 def parse_whatsapp(text: str, date_order: str | None = None) -> ParseResult:
-    lines = [_clean(x) for x in text.split("\n")]
+    trunc = [0]
+    lines = _lines(text, trunc)
     heads: list[tuple[int, re.Match[str]]] = []
     for i, ln in enumerate(lines):
         m = WA_IOS.match(ln) or WA_ANDROID.match(ln)
@@ -147,14 +166,14 @@ def parse_whatsapp(text: str, date_order: str | None = None) -> ParseResult:
     if not heads:
         raise ParseError("whatsapp: không nhận ra dòng nào theo khuôn Android/iOS")
     order, amb = (date_order, False) if date_order else detect_date_order([m.group("date") for _, m in heads])
-    res = ParseResult(format="whatsapp", date_order=order, date_order_ambiguous=amb)
+    res = ParseResult(format="whatsapp", date_order=order, date_order_ambiguous=amb, truncated_lines=trunc[0])
     if amb:
         res.notes.append("thứ tự ngày/tháng mơ hồ (mọi ngày đều ≤ 12): đã giả định ngày/tháng — ép bằng --date-order mdy nếu sai")
     cur: Line | None = None
-    head_idx = {i for i, _ in heads}
+    head_by_line = dict(heads)        # O(n): trước đây tìm tuyến tính cho mỗi dòng ⇒ O(n²) trên tệp lớn
     for i, ln in enumerate(lines):
-        if i in head_idx:
-            m = next(mm for ii, mm in heads if ii == i)
+        if i in head_by_line:
+            m = head_by_line[i]
             if cur is not None:
                 _finish(res, cur)
                 cur = None
@@ -202,7 +221,8 @@ ZALO_TIME_LINE = re.compile(rf"^(?P<time>{T})\s+(?P<sender>[^:]{{1,80}}?):\s?(?P
 
 
 def parse_zalo(text: str, date_order: str | None = None, custom_pattern: str | None = None) -> ParseResult:
-    lines = [_clean(x) for x in text.split("\n")]
+    trunc = [0]
+    lines = _lines(text, trunc)
     patterns: tuple[re.Pattern[str], ...] = (re.compile(custom_pattern),) if custom_pattern else ZALO_PATTERNS
     if custom_pattern:
         missing = {"date", "time", "sender", "text"} - set(patterns[0].groupindex)
@@ -234,7 +254,7 @@ def parse_zalo(text: str, date_order: str | None = None, custom_pattern: str | N
     if not entries:
         raise ParseError("zalo: không nhận ra dòng nào (khuôn xuất chưa được hỗ trợ — dùng custom_pattern)")
     order, amb = (date_order, False) if date_order else detect_date_order([e[1] for e in entries])
-    res = ParseResult(format="zalo", date_order=order, date_order_ambiguous=amb)
+    res = ParseResult(format="zalo", date_order=order, date_order_ambiguous=amb, truncated_lines=trunc[0])
     if amb:
         res.notes.append("thứ tự ngày/tháng mơ hồ: đã giả định ngày/tháng")
     res.notes.append("khuôn Zalo PC CHƯA verify với tệp xuất thật")

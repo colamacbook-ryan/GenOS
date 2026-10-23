@@ -53,6 +53,7 @@ from common import (  # noqa: E402
     fake_bridge,
     load_dataset,
     parse_context,
+    refuse_inside_repo,
     to_script_event,
     write_json,
 )
@@ -210,8 +211,19 @@ class BusSink:
         self.r = Redis.from_url(redis_url)
         self.bus = EventBus(self.r, 10000)
         self.org = org
+        self.checked = False
+
+    async def check_target(self) -> None:
+        """Kiểm PHÍA ĐÍCH (không tin biến môi trường của người chạy): Redis đích phải có khoá `gh:env` = `eval`, do bước dựng stack đo đặt
+        (`redis-cli SET gh:env eval`). Thiếu ⇒ từ chối đổ — chống đổ tin giả vào stack thật chỉ vì lỡ đặt GH_ENV=eval ở máy chạy."""
+        v = await self.r.get("gh:env")
+        if (v.decode() if isinstance(v, bytes) else v) != "eval":
+            raise SystemExit("replay: Redis đích KHÔNG có khoá gh:env = 'eval' — từ chối đổ tin (đây có thể là stack thật)")
+        self.checked = True
 
     async def emit(self, stream: str, type: str, payload: dict[str, Any]) -> None:
+        if not self.checked:
+            await self.check_target()
         await self.bus.publish(stream, type, payload, actor="bridge:eval", org_id=self.org)
 
     async def close(self) -> None:
@@ -232,6 +244,17 @@ class Seeder:
         self.c = client
         self.channel = channel
         self.log: list[dict[str, Any]] = []
+
+    async def login(self, email: str, password: str) -> None:
+        """Đăng nhập thật (`POST /auth/login`), lấy cookie phiên + CSRF (`gh_csrf` → header `X-CSRF-Token`) như e2e-live. Mật khẩu không vào log.
+        ĐIỂM CHỜ: ghi Hồ sơ cần PIN còn hiệu lực (423 nếu chưa) — cách nhập PIN cho phiên đo do T-pack/stack đo quyết định."""
+        r = await self.c.post("/auth/login", json={"email": email, "password": password})
+        if r.status_code >= 400:
+            raise SystemExit(f"seed: đăng nhập thất bại (HTTP {r.status_code})")
+        csrf = self.c.cookies.get("gh_csrf")
+        if not csrf:
+            raise SystemExit("seed: đăng nhập xong nhưng không có cookie gh_csrf")
+        self.c.headers["X-CSRF-Token"] = csrf
 
     async def group_ids_by_name(self) -> dict[str, str]:
         r = await self.c.get(f"/channels/{self.channel}/groups")
@@ -317,8 +340,8 @@ async def run_replay(ds: Dataset, out_dir: str | Path, *, mode: str = "compresse
     for m in msgs:
         idmap[m.id] = m.id
         idmap[f"m_{m.id}"] = m.id
-    if seeder is not None:
-        await sink.emit("seed", "begin", {})
+    if seeder is not None and os.environ.get("GH_EVAL_EMAIL") and os.environ.get("GH_EVAL_PASSWORD"):
+        await seeder.login(os.environ["GH_EVAL_EMAIL"], os.environ["GH_EVAL_PASSWORD"])
     seeded = {"contexts": 0, "profile": 0}
     emitted = 0
     cursor = 0
@@ -421,6 +444,7 @@ def _cli() -> None:
     ap.add_argument("--redis-url", default=os.environ.get("GH_REDIS_URL", ""))
     ap.add_argument("--org", default=os.environ.get("ORG", ""))
     a = ap.parse_args()
+    refuse_inside_repo(a.out)
     ds = load_dataset(a.data)
     contexts = json.loads(Path(a.contexts).read_text()) if a.contexts else None
     if a.sink == "bus" or a.seed_url:
@@ -438,6 +462,8 @@ def _cli() -> None:
             return None
         import httpx  # noqa: PLC0415
 
+        if not os.environ.get("GH_EVAL_EMAIL") or not os.environ.get("GH_EVAL_PASSWORD"):
+            raise SystemExit("--seed-url cần GH_EVAL_EMAIL và GH_EVAL_PASSWORD")
         c = httpx.AsyncClient(base_url=a.seed_url.rstrip("/"), timeout=30)
         return Seeder(c)
 
