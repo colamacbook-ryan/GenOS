@@ -63,16 +63,18 @@ async def _second_session(app: object) -> tuple[httpx.AsyncClient, Api]:
 # ─── Không cần Postgres / Redis ─────────────────────────────────────────────────────────────────
 
 
-def test_device_token_gan_voi_email_va_co_han(monkeypatch: pytest.MonkeyPatch) -> None:
-    tok = login_guard.device_token("Owner@Example.vn ")
-    assert login_guard.device_ok(tok, "owner@example.vn")
-    assert not login_guard.device_ok(tok, "khac@example.vn")
-    assert not login_guard.device_ok(None, "owner@example.vn")
-    assert not login_guard.device_ok("rac", "owner@example.vn")
+def test_device_token_gan_voi_user_phien_ban_mat_khau_va_co_han(monkeypatch: pytest.MonkeyPatch) -> None:
+    uid, other = uuid4(), uuid4()
+    tok = login_guard.device_token(uid, "hash-cu")
+    assert login_guard.device_ok(tok, uid, "hash-cu")
+    assert not login_guard.device_ok(tok, other, "hash-cu")  # user khác
+    assert not login_guard.device_ok(tok, uid, "hash-moi")  # đổi/đặt lại mật khẩu → cookie cũ vô hiệu
+    assert not login_guard.device_ok(None, uid, "hash-cu")
+    assert not login_guard.device_ok("rac", uid, "hash-cu")
     exp, _, sig = tok.partition(".")
-    assert not login_guard.device_ok(f"{int(exp) + 1}.{sig}", "owner@example.vn")  # sửa hạn → sai chữ ký
+    assert not login_guard.device_ok(f"{int(exp) + 1}.{sig}", uid, "hash-cu")  # sửa hạn → sai chữ ký
     monkeypatch.setattr(time, "time", lambda: float(int(exp) + 1))
-    assert not login_guard.device_ok(tok, "owner@example.vn")  # hết hạn
+    assert not login_guard.device_ok(tok, uid, "hash-cu")  # hết hạn
 
 
 def test_pin_lock_minutes_tang_dan() -> None:
@@ -97,14 +99,14 @@ async def test_redis_loi_dem_sai_theo_user_trong_bo_nho() -> None:
     n = get_settings().account_pw_fail_limit
     for i in range(n):
         assert await login_guard.user_blocked(broken, uid) is None
-        assert await login_guard.record_user_failure(broken, uid) == i + 1
+        assert await login_guard.reserve_user_attempt(broken, uid) == i + 1
     assert await login_guard.user_blocked(broken, uid) is not None
 
 
 async def test_dem_sai_theo_user_tren_redis_that(redis: Redis) -> None:
     uid = uuid4()
     for _ in range(get_settings().account_pw_fail_limit):
-        await login_guard.record_user_failure(redis, uid)
+        await login_guard.reserve_user_attempt(redis, uid)
     assert await login_guard.user_blocked(redis, uid) is not None
     assert 0 < await redis.ttl(login_guard.user_key(uid)) <= get_settings().login_fail_window_seconds
     await login_guard.clear_user(redis, uid)
@@ -271,3 +273,62 @@ async def test_redis_loi_van_gioi_han_dang_nhap_sai(owner_api: Api, app: object)
         assert (await _login(app, OWNER["email"], OWNER["password"], IP_A)).status_code == 429
     finally:
         app.state.redis = real  # type: ignore[attr-defined]
+
+
+async def test_thiet_bi_tin_cay_van_chiu_nguong_email_nho(owner_api: Api, app: object) -> None:
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as mine:  # type: ignore[arg-type]
+        assert (await _login(app, OWNER["email"], OWNER["password"], IP_A, client=mine)).status_code == 200
+        for _ in range(get_settings().login_trusted_email_fail_limit):  # cookie bị lộ dùng để dò mật khẩu
+            assert (await _login(app, OWNER["email"], "sai-mat-khau", IP_A, client=mine)).status_code == 401
+        r = await _login(app, OWNER["email"], OWNER["password"], IP_A, client=mine)
+        assert r.status_code == 429 and r.json()["scope"] == "email"
+
+
+async def test_cookie_thiet_bi_cu_vo_hieu_sau_doi_mat_khau_va_reset(owner_api: Api, app: object) -> None:
+    from gh.auth.reset_owner import reset_owner_password
+
+    async def _locked_out_but_cookie_works(client: httpx.AsyncClient, password: str) -> bool:
+        """Khoá email (10 lần sai) rồi thử đăng nhập đúng bằng cookie: 200 ⇔ cookie còn được tin."""
+        for _ in range(get_settings().login_fail_limit):
+            await _login(app, OWNER["email"], "sai-mat-khau", IP_B)
+        r = await _login(app, OWNER["email"], password, IP_A, client=client)
+        await login_guard.clear_email(app.state.redis, OWNER["email"])  # type: ignore[attr-defined]
+        return r.status_code == 200
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as mine:  # type: ignore[arg-type]
+        assert (await _login(app, OWNER["email"], OWNER["password"], IP_A, client=mine)).status_code == 200
+        assert await _locked_out_but_cookie_works(mine, OWNER["password"])  # đối chứng: cookie còn hiệu lực
+        # 1) đổi mật khẩu qua /account
+        r = await owner_api.send(
+            "POST", "/account/password", {"current_password": OWNER["password"], "new_password": NEW_PW}
+        )
+        assert r.status_code == 200, r.text
+        assert not await _locked_out_but_cookie_works(mine, NEW_PW)
+        # đăng nhập lại có cookie mới → hiệu lực; rồi reset (genh reset-password) → vô hiệu
+        assert (await _login(app, OWNER["email"], NEW_PW, IP_A, client=mine)).status_code == 200
+        assert await _locked_out_but_cookie_works(mine, NEW_PW)
+        async with admin_sessionmaker()() as db:
+            result = await reset_owner_password(db)
+            await db.commit()
+        assert not await _locked_out_but_cookie_works(mine, result.temp_password)
+
+
+async def test_song_song_khong_vuot_nguong_account(owner_api: Api, monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    from gh.auth import account
+
+    calls = 0
+    real = account.verify_secret
+
+    def counting(h: str, p: str) -> bool:
+        nonlocal calls
+        calls += 1
+        return real(h, p)
+
+    monkeypatch.setattr(account, "verify_secret", counting)
+    body = {"current_password": "sai-roi-nhe-12", "new_password": NEW_PW}
+    rs = await asyncio.gather(*[owner_api.send("POST", "/account/password", body) for _ in range(20)])
+    assert calls <= get_settings().account_pw_fail_limit, calls
+    assert all(r.status_code in (422, 429, 401) for r in rs)
+    assert any(r.status_code == 429 for r in rs)

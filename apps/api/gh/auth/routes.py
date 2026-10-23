@@ -90,7 +90,11 @@ async def login(body: LoginIn, request: Request, response: Response,
     redis = request.app.state.redis
     # v0.1.75: trình duyệt từng đăng nhập đúng (cookie thiết bị ký HMAC, gắn với email) không bị ngưỡng EMAIL chặn —
     # người lạ biết email Owner không khoá được Owner ra ngoài; ngưỡng IP vẫn áp, mật khẩu vẫn phải đúng.
-    trusted = login_guard.device_ok(request.cookies.get(login_guard.DEVICE_COOKIE), body.email)
+    cred = (await db.execute(text("SELECT id, password_hash FROM core.users WHERE lower(email) = lower(:e) "
+                                  "AND is_active AND deleted_at IS NULL"),
+                             {"e": body.email.strip().lower()})).one_or_none()
+    trusted = cred is not None and login_guard.device_ok(request.cookies.get(login_guard.DEVICE_COOKIE),
+                                                         cred.id, cred.password_hash)
     hit = await login_guard.blocked(redis, ip, body.email, trusted_device=trusted)
     if hit is not None:
         retry, scope = hit
@@ -131,7 +135,7 @@ async def login(body: LoginIn, request: Request, response: Response,
     await actionlog.record(db, org_id=user.org_id, actor_type="user", actor_id=user.actor_id,
                            action="auth.login", ip=ip)
     set_session_cookies(response, new)
-    response.set_cookie(login_guard.DEVICE_COOKIE, login_guard.device_token(body.email),
+    response.set_cookie(login_guard.DEVICE_COOKIE, login_guard.device_token(found["id"], found["password_hash"]),
                         max_age=login_guard.DEVICE_TTL_S, httponly=True, secure=get_settings().cookie_secure,
                         samesite="strict", path="/")
     return await me_payload(db, user)
