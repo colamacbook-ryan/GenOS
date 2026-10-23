@@ -453,3 +453,26 @@ async def test_migration_0043_pg_dump_restore_rebuilds_generated_column_and_fold
             assert c.execute("SELECT count(*) FROM pg_trigger WHERE tgname = 'mem_facts_need_evidence'").fetchone() == (1,)
     finally:
         _admin(f"DROP DATABASE IF EXISTS {target} WITH (FORCE)")
+
+
+async def test_migration_0043_rerun_upgrades_old_resolved_by_check(fresh_db: str) -> None:
+    """DB đã có bản 0043 CŨ (CHECK resolved_by chưa có 'unmerge'): chạy lại migration đổi constraint, chạy tiếp lần nữa vẫn yên."""
+    sql = SQL_0043.read_text(encoding="utf-8")
+    with _conn(fresh_db) as c:
+        org = _org(c)
+        e = _entity(c, org)
+        for name in [r[0] for r in c.execute("SELECT conname FROM pg_constraint WHERE conrelid = 'mem.disputes'::regclass "
+                                             "AND contype = 'c' AND pg_get_constraintdef(oid) LIKE '%expiry%'").fetchall()]:
+            c.execute(f'ALTER TABLE mem.disputes DROP CONSTRAINT "{name}"')  # type: ignore[call-overload]
+        c.execute("ALTER TABLE mem.disputes ADD CONSTRAINT disputes_resolved_by_check "
+                  "CHECK (resolved_by IS NULL OR resolved_by IN ('owner', 'consolidator', 'expiry'))")
+        ins = ("INSERT INTO mem.disputes (org_id, subject_id, predicate, resolved_at, resolved_by) "
+               "VALUES (%s, %s, 'contact_phone', now(), 'unmerge')")
+        with pytest.raises(pgerr.CheckViolation):
+            c.execute(ins, (org, e))
+        c.execute(sql)  # type: ignore[call-overload]
+        c.execute(ins, (org, e))                                                  # nay được
+        c.execute(sql)  # type: ignore[call-overload]
+        n = c.execute("SELECT count(*) FROM pg_constraint WHERE conrelid = 'mem.disputes'::regclass AND contype = 'c' "
+                      "AND pg_get_constraintdef(oid) LIKE '%expiry%'").fetchone()
+        assert n == (1,)

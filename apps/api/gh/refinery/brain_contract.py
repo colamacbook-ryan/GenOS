@@ -36,7 +36,7 @@ MAX_QUOTE_CHARS = 120
 MAX_OWNER_QUESTION_CHARS = 400
 
 ThreadRef = Annotated[str, StringConstraints(pattern=r"^(g:[^:\s]+|dm:[^:\s]+:[^:\s]+)$")]
-MessageId = Annotated[str, StringConstraints(pattern=r"^m_\S+$")]
+MessageId = Annotated[str, StringConstraints(pattern=r"^m_\S+$", max_length=128)]
 PersonRef = Annotated[str, StringConstraints(pattern=r"^u_\S+$")]
 FactRef = Annotated[str, StringConstraints(pattern=r"^f_\S+$")]
 ShortKey = Annotated[str, StringConstraints(min_length=1, max_length=64)]
@@ -180,6 +180,7 @@ class Unit(_Strict):
         `sent_at ≥ now − 48h`, trích dẫn `verified`, `text` ⊂ tin anchor là của L3/`verify.py`.)"""
         quoted = {q.message_id for q in self.quotes}
         notes: list[str] = []
+        self.normalization_notes = []         # ghi chú chỉ do CODE ghi: giá trị model gửi bị bỏ
         stray = [i for i in self.ongoing_message_ids if i not in quoted]
         if stray:
             self.ongoing_message_ids = [i for i in self.ongoing_message_ids if i in quoted]
@@ -194,7 +195,7 @@ class Unit(_Strict):
             notes.append("ongoing_forced_false")
             self.flags = self.flags.model_copy(update={"ongoing": False})
         if notes:
-            self.normalization_notes = [*self.normalization_notes, *notes]
+            self.normalization_notes = [n[:200] for n in notes]
         return self
 
 

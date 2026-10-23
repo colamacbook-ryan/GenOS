@@ -50,6 +50,10 @@ erDiagram
   và mọi sự thật có người đó làm chủ thể/đối tượng; thực thể giữ lại nhưng ẩn danh. `raw.events` không đụng.
 - **Chính sách bối cảnh** (`mem.context_types.policy`, `contexts.policy/render_for_prompt`): nhóm chưa xác nhận dùng hàng "chưa xác nhận"
   (đủ 6 cổng, không chấm điểm người, không cơ hội ngoài cổng). Chính sách chỉ hạ hoặc tắt, không bao giờ nâng.
+- **Quên người xoá theo bí danh.** Mention chưa nối (`candidate`/`unresolved`) có cách gọi trùng bí danh của người bị quên bị xoá; có thể xoá
+  cả mention trùng tên của một người KHÁC — chấp nhận, nghiêng về riêng tư.
+- **Khoá master và digest STK.** `payment_account.digest` = HMAC bằng khoá con của `GH_MASTER_KEY` (`facts.payment_digest`). Mất hoặc đổi
+  `GH_MASTER_KEY` làm mọi digest STK cũ lệch ⇒ STK cũ gặp lại sinh tranh chấp `stk_moi` hàng loạt; ghi vào quy trình backup/xoay khoá.
 - **Backup/restore.** `mem.fold` ghi đủ schema (`public.unaccent` + từ điển `'public.unaccent'::regdictionary`) để cột sinh
   `mem.aliases.alias_folded` và chỉ mục biểu thức dựng lại được khi `pg_restore` đặt `search_path` rỗng (có test vòng backup → restore).
 

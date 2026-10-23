@@ -172,8 +172,6 @@ async def test_review_r5_replay_does_not_undo_owner_correction(fresh_db, db) -> 
     assert again.id == fixed.id and again.outcome == "duplicate"
     assert (await facts.get(db, org, orig.id)).status == "superseded"  # type: ignore[union-attr]
     assert (await facts.get(db, org, fixed.id)).status == "owner_confirmed"  # type: ignore[union-attr]
-    other = await facts.assert_fact(db, mkfact(org, lan, "bạn", T(1), predicate="prefers", raw=raw, ver="v3"))        # replay đổi nội dung
-    assert other.id == fixed.id and other.outcome == "duplicate"
     assert (await db.execute(text("SELECT count(*) FROM mem.facts WHERE status = 'asserted'"))).scalar_one() == 0
     assert await rows(db, lan, "prefers", ("owner_confirmed",)) == [(1, None, "owner_confirmed", "em họ")]
 
@@ -299,3 +297,141 @@ async def test_review_erase_races_with_concurrent_writer_never_leaves_facts(fres
     await asyncio.gather(writer(), eraser())
     left = (await db.execute(text("SELECT count(*) FROM mem.facts WHERE subject_id = :s"), {"s": hung})).scalar_one()
     assert left == 0                                                       # ghi sau khi quên bị từ chối; ghi trước đã bị xoá
+
+
+# ─── vòng review 2 ─────────────────────────────────────────────────────────
+
+async def test_review2_b_replay_keeps_sibling_multi_facts_of_same_message(fresh_db, db) -> None:  # type: ignore[no-untyped-def]
+    """Vị từ đa trị: Sếp sửa 'gạo' ⇒ replay sinh 'muối' phải trả CHÍNH 'muối', không bị 'đường' của Sếp thế chỗ rồi bị rút mất."""
+    org = await mk_org(db)
+    lan = await mk_entity(db, org)
+    user = await _user(db, org)
+    raw = uuid.uuid4()
+    g = await facts.assert_fact(db, mkfact(org, lan, "gạo", T(1), raw=raw, ver="v1", predicate="needs"))
+    m = await facts.assert_fact(db, mkfact(org, lan, "muối", T(1), raw=raw, ver="v1", predicate="needs"))
+    d = await facts.correct(db, org, g.id, actor_user_id=user, new_value="đường")
+    r1 = await facts.assert_fact(db, mkfact(org, lan, "gạo", T(1), raw=raw, ver="v2", predicate="needs"))
+    r2 = await facts.assert_fact(db, mkfact(org, lan, "muối", T(1), raw=raw, ver="v2", predicate="needs"))
+    assert r1.id == d.id and r1.object_value == "đường"                       # bản Sếp sửa được giữ
+    assert r2.id == m.id and r2.object_value == "muối" and r2.outcome == "duplicate"
+    retired = await facts.retire_stale_replay(db, org, [raw], extractor_version="v2", keep_fact_ids=[r1.id, r2.id])
+    assert retired == 0
+    assert await rows(db, lan, "needs", ("asserted", "owner_confirmed")) == [(1, None, "asserted", "muối"), (1, None, "owner_confirmed", "đường")]
+
+
+async def test_review2_a_unmerge_rehomes_fact_that_joined_dispute_after_merge(fresh_db, db) -> None:  # type: ignore[no-untyped-def]
+    org = await mk_org(db)
+    a, b = await mk_entity(db, org, "An"), await mk_entity(db, org, "Bình")
+    f1 = await facts.assert_fact(db, mkfact(org, a, "0901", T(1)))
+    f2 = await facts.assert_fact(db, mkfact(org, b, "0902", T(2)))
+    res = await entities.merge(db, org, b, a)
+    f3 = await facts.assert_fact(db, mkfact(org, a, "0903", T(5)))                 # gia nhập tranh chấp SAU khi gộp
+    assert f3.status == "disputed"
+    await entities.unmerge(db, org, b, res.repointed, res.reconciled)
+    assert (await facts.get(db, org, f2.id)).status == "asserted"  # type: ignore[union-attr]       # người b về lại bình thường
+    # 0901 và 0903 đều là của An và chồng khoảng ⇒ tranh chấp ĐÚNG chủ thể An, không kẹt ở tranh chấp cũ
+    assert (await facts.get(db, org, f1.id)).status == "disputed" and (await facts.get(db, org, f3.id)).status == "disputed"  # type: ignore[union-attr]
+    open_d = [d for d in await disputes.list(db, org) if d.resolved_at is None]
+    assert len(open_d) == 1 and open_d[0].subject_id == a and set(open_d[0].fact_ids) == {f1.id, f3.id}
+    assert b not in {open_d[0].subject_id}
+    stuck = (await db.execute(text("""SELECT count(*) FROM mem.facts f JOIN mem.disputes d ON d.id = f.dispute_id
+                                      WHERE f.status = 'disputed' AND d.resolved_at IS NOT NULL"""))).scalar_one()
+    assert stuck == 0
+
+
+async def test_review2_a_unmerge_rehomes_joined_fact_into_plain_asserted_when_no_overlap(fresh_db, db) -> None:  # type: ignore[no-untyped-def]
+    org = await mk_org(db)
+    a, b = await mk_entity(db, org, "An"), await mk_entity(db, org, "Bình")
+    await facts.assert_fact(db, mkfact(org, a, "0901", T(1), speaker=a))
+    await facts.assert_fact(db, mkfact(org, b, "0902", T(2), speaker=b))
+    res = await entities.merge(db, org, b, a)
+    other = await facts.assert_fact(db, mkfact(org, a, "Hà Nội", T(3), predicate="lives_in", speaker=a))   # khác vị từ: không dính tranh chấp
+    assert other.status == "asserted"
+    await entities.unmerge(db, org, b, res.repointed, res.reconciled)
+    assert {r[2] for r in await rows(db, a)} == {"asserted"} and {r[2] for r in await rows(db, b)} == {"asserted"}
+    assert [d for d in await disputes.list(db, org) if d.resolved_at is None] == []
+
+
+class _FakeOrig(Exception):
+    sqlstate = "40P01"
+
+
+def _deadlock() -> Exception:
+    from sqlalchemy.exc import DBAPIError
+
+    return DBAPIError("stmt", {}, _FakeOrig("deadlock detected"))
+
+
+async def test_review2_deadlock_retried_once_then_409_for_erase_and_merge(fresh_db, db, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from gh.errors import ApiError
+
+    org = await mk_org(db)
+    pid = await mk_person_row(db, org, "Hùng")
+    await entities.ensure_person(db, org, pid)
+    calls = {"n": 0}
+    real = forget._erase
+
+    async def flaky(*a, **kw):  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise _deadlock()
+        return await real(*a, **kw)
+
+    monkeypatch.setattr(forget, "_erase", flaky)
+    out = await forget.erase_entity(db, org, pid)                      # lần 1 deadlock, lần 2 qua
+    assert calls["n"] == 2 and out["entities"] == 1
+
+    async def always(*a, **kw):  # type: ignore[no-untyped-def]
+        raise _deadlock()
+
+    monkeypatch.setattr(forget, "_erase", always)
+    with pytest.raises(ApiError) as ei:
+        await forget.erase_entity(db, org, pid)
+    assert ei.value.status == 409 and ei.value.code == "MEM_BUSY" and "40P01" in str(ei.value.detail)
+    # gộp người: cùng cơ chế
+    pa, pb = await mk_person_row(db, org, "A1"), await mk_person_row(db, org, "B1")
+    await entities.ensure_person(db, org, pa)
+    await entities.ensure_person(db, org, pb)
+    monkeypatch.setattr(entities, "merge", always)
+    with pytest.raises(ApiError) as e2:
+        await entities.merge_persons(db, org, pb, pa)
+    assert e2.value.status == 409
+    other = await entities.retry_deadlock(db, lambda: asyncio.sleep(0, "ok"))
+    assert other == "ok"
+    with pytest.raises(ValueError):                                    # lỗi khác không bị nuốt
+        async def boom() -> None:
+            raise ValueError("x")
+
+        await entities.retry_deadlock(db, boom)
+
+
+def test_review2_normalization_notes_are_code_only_and_capped() -> None:
+    from gh.refinery import brain_contract as bc
+    from tests.test_brain_contract_v0176 import FULL
+
+    d = json.loads(json.dumps(FULL))
+    d["units"][0]["normalization_notes"] = ["model tự khai"]
+    d["units"][0]["status_message_id"] = "m_" + "x" * 120                       # id dài hợp lệ (≤ 128) nhưng ngoài quotes
+    out = bc.BrainOut.model_validate(d).units[0]
+    assert out.normalization_notes == [("status_message_id_dropped:m_" + "x" * 120)[:200]]   # lời model bỏ; note cắt ≤ 200
+    assert all(len(n) <= 200 for n in out.normalization_notes)
+    d["units"][0]["status_message_id"] = "m_" + "x" * 200
+    with pytest.raises(Exception, match="at most 128|string_too_long"):
+        bc.BrainOut.model_validate(d)
+    d["units"][0]["status_message_id"] = None
+    assert bc.BrainOut.model_validate(d).units[0].normalization_notes == []     # sạch ⇒ không còn lời model
+
+
+async def test_review2_mentions_link_takes_share_lock_on_entity(fresh_db, db) -> None:  # type: ignore[no-untyped-def]
+    import psycopg
+
+    from tests.conftest import PG
+
+    org = await mk_org(db)
+    e = await mk_entity(db, org, "Chị Tư")
+    await mentions.link(db, org, meaning_unit_id=uuid.uuid4(), meaning_observed_at=T(1), surface="x", sender_entity_id=e)
+    with psycopg.connect(f"{PG}/{fresh_db}", autocommit=True) as c:             # giao dịch của db còn mở ⇒ FOR UPDATE phải bị chặn
+        with pytest.raises(psycopg.errors.LockNotAvailable):
+            c.execute("SELECT id FROM mem.entities WHERE id = %s FOR NO KEY UPDATE NOWAIT", (e,))   # FK chỉ giữ KEY SHARE; FOR SHARE mới chặn được
+        c.execute("SELECT id FROM mem.entities WHERE id = %s FOR SHARE NOWAIT", (e,))   # share với share thì được
+    await db.rollback()

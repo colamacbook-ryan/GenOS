@@ -7,14 +7,41 @@ gộp B → C thì mọi entity đang trỏ B đổi sang trỏ C trong cùng gi
 """
 
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeVar
 
 import orjson
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from gh.errors import ApiError
+
+T = TypeVar("T")
+
 ENTITY_TYPES = ("person", "group", "org", "place", "item")
+
+
+def _sqlstate(e: BaseException) -> str | None:
+    orig = getattr(e, "orig", None)
+    return getattr(orig, "sqlstate", None) or getattr(getattr(orig, "__cause__", None), "sqlstate", None)
+
+
+async def retry_deadlock(db: AsyncSession, op: Callable[[], Awaitable[T]]) -> T:
+    """Chạy `op` trong SAVEPOINT; deadlock (40P01) ⇒ thử lại MỘT lần; vẫn lỗi ⇒ 409 MEM_BUSY thân thiện + "Chi tiết kỹ thuật"
+    (không để 500). Dùng cho gộp/quên người từ Console, nơi tranh khoá với worker ghi sự thật."""
+    last: DBAPIError | None = None
+    for _ in range(2):
+        try:
+            async with db.begin_nested():
+                return await op()
+        except DBAPIError as e:
+            if _sqlstate(e) != "40P01":
+                raise
+            last = e
+    raise ApiError(409, "MEM_BUSY", "Trí nhớ đang bận ghi dữ liệu khác — thử lại sau ít giây",
+                   detail="deadlock_detected (40P01) sau 2 lần thử") from last
 
 
 class EntityError(ValueError):
@@ -269,7 +296,7 @@ async def merge_persons(db: AsyncSession, org_id: uuid.UUID, drop_person: uuid.U
     assert src is not None and tgt is not None
     if src.is_owner and not tgt.is_owner:           # thực thể của Sếp luôn là bên được giữ
         src_id, tgt_id = tgt_id, src_id
-    res = await merge(db, org_id, src_id, tgt_id)
+    res = await retry_deadlock(db, lambda: merge(db, org_id, src_id, tgt_id))
     return {**res.snapshot(), "disputes": res.disputes}
 
 

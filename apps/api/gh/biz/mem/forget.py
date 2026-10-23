@@ -21,7 +21,12 @@ ERASED_NAME = "Người dùng đã xoá"
 
 
 async def erase_entity(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID) -> dict[str, int]:
-    """Xoá thật dữ liệu trí nhớ của một hồ sơ người. Trả số dòng đã xoá theo bảng (chạy lại ⇒ toàn 0)."""
+    """Xoá thật dữ liệu trí nhớ của một hồ sơ người. Trả số dòng đã xoá theo bảng (chạy lại ⇒ toàn 0). Deadlock với worker ghi
+    sự thật: thử lại một lần, vẫn lỗi ⇒ 409 thân thiện (`entities.retry_deadlock`)."""
+    return await entities.retry_deadlock(db, lambda: _erase(db, org_id, person_id))
+
+
+async def _erase(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID) -> dict[str, int]:
     ent = (await db.execute(text("SELECT id FROM mem.entities WHERE org_id = :o AND person_id = :p"),
                             {"o": org_id, "p": person_id})).scalar_one_or_none()
     counts: dict[str, int] = {k: 0 for k in ("entities", "aliases", "mentions", "summaries", "heat", "evidence",

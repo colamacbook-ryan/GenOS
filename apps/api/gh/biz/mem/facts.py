@@ -418,13 +418,14 @@ async def _assert(db: AsyncSession, fin: FactIn, pred: predicates.Predicate) -> 
     # 3) idempotent theo tin nguồn + thay thế khi replay bằng extractor_version mới
     new_id: uuid.UUID | None = None
     if fin.source_raw_event_id is not None:
-        # Sếp đã sửa nội dung sự thật của tin này ⇒ replay KHÔNG được đảo ngược (kể cả sinh lại bản cũ hay đổi nội dung).
+        # Sếp đã sửa ĐÚNG sự thật này (cùng giá trị gốc) của tin này ⇒ replay sinh lại nó KHÔNG được đảo ngược; sự thật anh em
+        # cùng tin (vd 'muối' khi Sếp sửa 'gạo') không bị ảnh hưởng.
         fixed = (await db.execute(text(f"""
             SELECT {', '.join('n.' + c.strip() for c in _COLS.split(','))} FROM mem.facts o JOIN mem.facts n ON n.id = o.superseded_by
             WHERE o.org_id = :o AND o.subject_id = ANY(:m) AND o.predicate = :p AND o.source_raw_event_id = :r
-              AND o.status = 'superseded' AND n.created_by = 'owner' AND n.status IN ('owner_confirmed', 'asserted', 'disputed')
+              AND o.object_key = :k AND o.status = 'superseded' AND n.created_by = 'owner' AND n.status IN ('owner_confirmed', 'asserted', 'disputed')
             ORDER BY n.recorded_at DESC LIMIT 1"""),  # noqa: S608
-            {"o": org, "m": members, "p": fin.predicate, "r": fin.source_raw_event_id})).one_or_none()
+            {"o": org, "m": members, "p": fin.predicate, "r": fin.source_raw_event_id, "k": key})).one_or_none()
         if fixed is not None:
             return _fact(fixed, "duplicate")
         dup = (await db.execute(text(f"""
@@ -733,6 +734,14 @@ async def reverse_reconcile(db: AsyncSession, org_id: uuid.UUID, recon: dict[str
                 restored += int(r.rowcount)  # type: ignore[attr-defined]
         except DBAPIError:                           # trả lại sẽ chồng khoảng với sự thật mới hơn ⇒ để nguyên disputed
             continue
+    # Sự thật gia nhập tranh chấp SAU khi gộp (vd số thứ ba): không kẹt ở `disputed` trong tranh chấp sắp đóng — tách khỏi tranh
+    # chấp cũ rồi đưa về `asserted`; nếu chồng khoảng với sự thật đang hiệu lực của CHÍNH chủ thể đó (23P01) thì mở/gia nhập tranh
+    # chấp đúng chủ thể.
+    leftovers = (await db.execute(text("""SELECT id FROM mem.facts WHERE org_id = :o AND status = 'disputed' AND dispute_id = ANY(:d)
+                                          ORDER BY valid_from, recorded_at"""), {"o": org_id, "d": dispute_ids})).scalars().all()
+    for fid in leftovers:
+        await _rehome(db, org_id, fid)
+        restored += 1
     for did in dispute_ids:
         await db.execute(text("""
             UPDATE mem.disputes SET fact_ids = (SELECT coalesce(array_agg(f.id), '{}') FROM mem.facts f
@@ -742,6 +751,37 @@ async def reverse_reconcile(db: AsyncSession, org_id: uuid.UUID, recon: dict[str
             UPDATE mem.disputes SET resolved_at = now(), resolved_by = 'unmerge', note = 'unmerge'
             WHERE id = :d AND org_id = :o AND resolved_at IS NULL AND cardinality(fact_ids) < 2"""), {"d": did, "o": org_id})
     return restored
+
+
+async def _rehome(db: AsyncSession, org_id: uuid.UUID, fact_id: uuid.UUID) -> None:
+    """Đưa một sự thật `disputed` (của tranh chấp sắp đóng) về luồng chuẩn: `asserted`/`owner_confirmed` nếu không chồng khoảng;
+    chồng khoảng với sự thật đang hiệu lực cùng chủ thể ⇒ bên kia + nó vào tranh chấp của chủ thể đó. Không để kẹt."""
+    row = (await db.execute(text("""SELECT id, subject_id, predicate, confirmed_by, source_class FROM mem.facts
+                                    WHERE id = :i AND org_id = :o AND status = 'disputed'"""), {"i": fact_id, "o": org_id})).one_or_none()
+    if row is None:
+        return
+    new_status = "owner_confirmed" if row.confirmed_by is not None and row.source_class not in EXTERNAL_CLASSES else "asserted"
+    try:
+        async with db.begin_nested():
+            await db.execute(text("UPDATE mem.facts SET status = :s, dispute_id = NULL, closed_recorded_at = now() WHERE id = :i"),
+                             {"s": new_status, "i": fact_id})
+        return
+    except DBAPIError as e:
+        if getattr(e.orig, "sqlstate", None) != "23P01" and getattr(getattr(e.orig, "__cause__", None), "sqlstate", None) != "23P01":
+            raise
+    members = await entities.members(db, row.subject_id)
+    subject = await entities.canonical(db, row.subject_id)
+    conflicts = (await db.execute(text("""
+        SELECT o.id FROM mem.facts f JOIN mem.facts o ON o.org_id = f.org_id AND o.predicate = f.predicate AND o.id <> f.id
+          AND o.subject_id = ANY(:m) AND o.status IN ('asserted', 'owner_confirmed')
+          AND tstzrange(o.valid_from, coalesce(o.valid_to, 'infinity'::timestamptz))
+           && tstzrange(f.valid_from, coalesce(f.valid_to, 'infinity'::timestamptz))
+        WHERE f.id = :i"""), {"i": fact_id, "m": members})).scalars().all()
+    pred = await predicates.get(db, row.predicate)
+    await db.execute(text("""UPDATE mem.facts SET status = 'disputed', dispute_id = NULL, closed_recorded_at = now()
+                             WHERE id = ANY(:c) AND status IN ('asserted', 'owner_confirmed')"""), {"c": list(conflicts)})
+    await disputes.open(db, org_id, subject, row.predicate, [fact_id, *conflicts], signal_kind=pred.dispute_signal_kind,
+                        note="sau_tach_nguoi")
 
 
 # ─── đọc & sửa ──────────────────────────────────────────────────────────────

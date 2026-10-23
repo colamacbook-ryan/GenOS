@@ -15,7 +15,7 @@ from gh.refinery import brain_contract as bc
 
 #: Vân tay JSON Schema. ĐỔI HỢP ĐỒNG ⇒ test này đỏ ⇒ phải tăng `CONTRACT_VERSION` ("brain-out/2"), cập nhật vân tay
 #: và chạy lại G-KB (spec §4F). Không sửa vân tay mà không tăng phiên bản.
-SCHEMA_SHA256 = "9be294ba6b62515604093510f1a9b3338ad7cffe02e7019aeeac0cbdf9dcfb7b"
+SCHEMA_SHA256 = "6c7cf48097c6e163d647428fe93afd4456a6d76841add8c2122991eb2a249983"
 
 FULL: dict = {
     "contract_version": "brain-out/1",

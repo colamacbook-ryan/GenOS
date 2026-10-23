@@ -45,7 +45,7 @@ async def link(db: AsyncSession, org_id: uuid.UUID, *, meaning_unit_id: uuid.UUI
     surface = " ".join((surface or "").split())
     for ref in (sender_entity_id, entity_id):                       # cùng tổ chức, chưa bị quên
         if ref is not None:
-            await entities.require(db, org_id, await entities.canonical(db, ref), allow_forgotten=False)
+            await entities.require(db, org_id, await entities.canonical(db, ref), lock="share", allow_forgotten=False)
     if sender_entity_id is not None:
         return await _insert(db, org_id, meaning_unit_id, meaning_observed_at, raw_event_id, surface,
                              await entities.canonical(db, sender_entity_id), "sender_id", 1.0, "linked")

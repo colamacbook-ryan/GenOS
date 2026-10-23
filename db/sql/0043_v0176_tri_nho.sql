@@ -354,6 +354,20 @@ CREATE TABLE IF NOT EXISTS mem.disputes (
   note                 text,            -- vd 'stk_quay_lai_cu' / 'stk_moi' (so với toàn bộ lịch sử STK)
   CHECK ((resolved_at IS NULL) = (resolved_by IS NULL))
 );
+-- Chạy lại trên DB đã có bản 0043 cũ (resolved_by chưa có 'unmerge'): đổi constraint, an toàn khi chạy nhiều lần.
+DO $$
+DECLARE c record;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'mem.disputes'::regclass AND contype = 'c'
+                   AND pg_get_constraintdef(oid) LIKE '%expiry%' AND pg_get_constraintdef(oid) LIKE '%unmerge%') THEN
+    FOR c IN SELECT conname FROM pg_constraint WHERE conrelid = 'mem.disputes'::regclass AND contype = 'c'
+                AND pg_get_constraintdef(oid) LIKE '%expiry%' LOOP
+      EXECUTE format('ALTER TABLE mem.disputes DROP CONSTRAINT %I', c.conname);
+    END LOOP;
+    ALTER TABLE mem.disputes ADD CONSTRAINT disputes_resolved_by_chk
+      CHECK (resolved_by IS NULL OR resolved_by IN ('owner', 'consolidator', 'expiry', 'unmerge'));
+  END IF;
+END $$;
 CREATE INDEX IF NOT EXISTS disputes_open_idx ON mem.disputes (org_id, subject_id, predicate) WHERE resolved_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS mem.facts (
