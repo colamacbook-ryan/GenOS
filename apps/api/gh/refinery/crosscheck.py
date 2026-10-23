@@ -257,8 +257,8 @@ def apply_d2(d2: Mapping[str, Any] | None, *, model_flags: Mapping[str, bool], r
     for h in hard_rule_hit:
         if h in HARD_RULE_FLAGS:
             flags[HARD_RULE_FLAGS[h]] = True
-    verdict = (d2 or {}).get("verdict", "error")
-    errored = d2 is None or verdict == "error" or bool((d2 or {}).get("error"))
+    verdict = (d2 or {}).get("verdict")
+    errored = verdict not in ("agree", "disagree") or bool((d2 or {}).get("error"))      # verdict lạ/None/rỗng ⇒ lỗi ⇒ fail-high
     reasons: list[str] = []
     if not errored:
         for f in (d2 or {}).get("flags_confirmed") or []:

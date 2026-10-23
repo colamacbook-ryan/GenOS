@@ -25,11 +25,12 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from gh.biz.mem import vi_time
-from gh.chassis import masking as _masking
 from gh.refinery.brain_contract import BrainOut, FactProposed, MemoryUpdate, Unit
+from gh.textnorm import strip_accents
 
 DEFAULT_TZ = vi_time.DEFAULT_TZ
 ONGOING_WINDOW = timedelta(hours=48)
+SECRET_LABEL = "[đã che]"
 TXN_JUST_DONE = timedelta(hours=24)
 #: `quotes[].field` → loại `clean.media_texts` (body/caption nằm ở thân tin).
 FIELD_TO_MEDIA_KIND = {"transcript": "transcript", "ocr": "ocr"}
@@ -200,13 +201,29 @@ def parse_money_vnd(text: str | None) -> int | None:
 
 
 # ─── NGOẠI LỆ Q9 duy nhất: thông tin ĐĂNG NHẬP không tới model (Gen duyệt, review bảo mật 23/10) ─────────────────────────────
-# Q9 = gửi model chat ĐẦY ĐỦ (tên, SĐT, số tiền, STK nguyên văn vì code cần STK để so lịch sử). Riêng mã OTP, mật khẩu, số thẻ đầy đủ
-# (13–19 số, qua Luhn) và API key/token bị thay bằng NHÃN giữ được nghĩa ("[OTP 6 số]", "[mật khẩu]", "[thẻ …1234]", "[token]") để model
-# vẫn biết "đã gửi OTP" mà không thấy giá trị. THỨ TỰ BẮT BUỘC: luật (a) (`credentials_entered`, `hard_rule_hit`) chạy trên bản GỐC của tin
-# TRƯỚC khi che; che chỉ xảy ra lúc dựng prompt (không sửa tin gốc). Trích dẫn của model có thể chứa nhãn ⇒ `_quote_status` thử thêm
-# bản đã che của tin (cùng hàm này) và ánh xạ span về chữ gốc.
-_CARD_RE = re.compile(r"(?<![\d-])\d(?:[ -]?\d){12,18}(?!\d)")
-_STK_CTX_RE = re.compile(r"(?:stk|so tk|tai khoan|chuyen khoan|\bck\b|ngan hang|so tai khoan)\s*[:\-]?\s*$")
+# Q9 = gửi model chat ĐẦY ĐỦ (tên, SĐT, số tiền, STK nguyên văn vì code cần STK để so lịch sử). Riêng mã OTP, mật khẩu, CVV, số thẻ đầy đủ
+# (13–19 số, qua Luhn) và API key/token bị thay bằng NHÃN giữ được nghĩa ("[OTP 6 số]", "[mật khẩu]", "[CVV]", "[thẻ …1234]", "[token]";
+# bí mật hệ thống: "[đã che]") để model vẫn biết "đã gửi OTP" mà không thấy giá trị. THỨ TỰ BẮT BUỘC: luật (a) (`credentials_entered`,
+# `hard_rule_hit`) chạy trên bản GỐC của tin TRƯỚC khi che; che chỉ xảy ra lúc dựng prompt (không sửa tin gốc).
+# MỘT hàm che duy nhất, `mask_credentials(text, secrets)`, chạy trên bản đã CHUẨN HOÁ (`norm`: NFC + gộp khoảng trắng) — prompt (`extract`) và
+# bước kiểm trích dẫn (`_quote_status`) gọi đúng hàm này nên model trích đúng chữ nó thấy thì verify luôn tìm lại được và ánh xạ span về chữ gốc.
+_CARD_RE = re.compile(r"(?<![\d-])\d(?:[\s.\-]?\d){12,18}(?!\d)")
+_STK_KW_RE = re.compile(r"(?<![a-z0-9])(?:stk|so tk|tk|tai khoan|so tai khoan|chuyen khoan|ck|ngan hang|nhan tien|ben thu huong)(?![a-z0-9])")
+_CARD_KW_RE = re.compile(r"(?<![a-z0-9])(?:the|card|visa|master|mastercard|jcb|atm|cvv|cvc|credit|debit)(?![a-z0-9])")
+STK_WINDOW = 40          # số ký tự trước chuỗi số được tìm từ khoá STK/thẻ
+ZW_RE = "[​-‏⁠-⁤­﻿᠎‪-‮⁦-⁩]"
+
+# Các luật bổ sung chạy trên bản đã BỎ DẤU (ánh xạ chỉ số về chữ có dấu bằng `_fold_map`).
+_OTP_KW = (r"(?:otp|ma xac (?:minh|thuc|nhan)|ma bao mat|ma dang nhap|ma kich hoat|ma truy cap|ma (?:dung )?mot lan|ma 2fa|2fa|"
+           r"verification code|security code|auth(?:entication)? code|passcode|pin)")
+_DIGITS = r"\d(?:[ \-]?\d){3,7}"
+_OTP_NEAR_RE = re.compile(rf"(?<![a-z0-9-]){_OTP_KW}(?![a-z0-9])[^\d\n]{{0,40}}?(?P<c>{_DIGITS})(?!\d)")
+_OTP_BARE_RE = re.compile(rf"(?<![a-z0-9])(?:ma(?: so)?|code)\s*[:=]?\s*(?:la\s+)?(?P<c>{_DIGITS})(?!\d)")
+_OTP_CTX_RE = re.compile(r"(?<![a-z0-9])(?:otp|xac (?:minh|thuc|nhan)|dang nhap|verification|2fa|ma bao mat|ma xac)(?![a-z0-9])")
+_CVV_RE = re.compile(r"(?<![a-z0-9])(?:cvv2?|cvc2?|ma bao mat the)(?![a-z0-9])\D{0,10}?(?P<c>\d{3,4})(?!\d)")
+_PW_KW = r"(?:mat khau|mk|pass(?:word|wd|code)?|pw|pwd)"
+_PW_SEP_RE = re.compile(rf"(?<![a-z0-9-]){_PW_KW}(?![a-z0-9])(?:\s+[a-z]{{1,12}}){{0,3}}?\s*(?P<sep>[:=]|\bla\b|\bis\b)\s*(?P<v>[^\s\"'<>]{{4,128}})")
+_PW_BARE_RE = re.compile(rf"(?<![a-z0-9-]){_PW_KW}(?![a-z0-9])\s+(?P<v>(?=\S*\d)\S{{6,128}})")
 
 
 def _luhn_ok(digits: str) -> bool:
@@ -220,8 +237,29 @@ def _luhn_ok(digits: str) -> bool:
     return total % 10 == 0
 
 
-def _credential_spans(text_: str) -> list[tuple[int, int, str]]:
-    m_ = _masking
+def _fold_map(t: str) -> tuple[str, list[int]]:
+    """Chữ bỏ dấu + chữ thường, kèm chỉ số gốc của từng ký tự (độ dài có thể đổi vì NFKD)."""
+    out: list[str] = []
+    idx: list[int] = []
+    for i, ch in enumerate(t):
+        f = strip_accents(ch).lower()
+        out.append(f)
+        idx.extend([i] * len(f))
+    return "".join(out), idx
+
+
+def _is_stk_context(text_: str, start: int) -> bool:
+    """Số tài khoản ngân hàng (không phải thẻ) nếu trong ~40 ký tự trước số có từ khoá STK và từ khoá THẺ không đứng sau nó."""
+    win = strip_accents(text_[max(0, start - STK_WINDOW):start]).lower()
+    stk = [m.start() for m in _STK_KW_RE.finditer(win)]
+    if not stk:
+        return False
+    card = [m.start() for m in _CARD_KW_RE.finditer(win)]
+    return not card or max(stk) > max(card)
+
+
+def _credential_spans(text_: str, secrets: Sequence[str] = ()) -> list[tuple[int, int, str]]:
+    from gh.chassis import masking as m_
     spans: list[tuple[int, int, str]] = []
 
     def add(m: re.Match[str], grp: int, label: str) -> None:
@@ -232,14 +270,17 @@ def _credential_spans(text_: str) -> list[tuple[int, int, str]]:
         n = len(re.sub(r"\D", "", code))
         return f"[OTP {n} số]"
 
+    for sec in secrets:                    # bí mật HỆ THỐNG: mọi chỗ xuất hiện
+        if sec:
+            for m in re.finditer(re.escape(sec), text_):
+                spans.append((m.start(), m.end(), "[đã che]"))
     for rx in (m_._RE_OTP_AFTER, m_._RE_OTP_GAP, m_._RE_OTP_BEFORE, m_._RE_OTP_BEFORE_CODE):
         for m in rx.finditer(text_):
             add(m, 2, otp_label(m.group(2)))
     for m in m_._RE_OTP_BARE.finditer(text_):
         tail = re.search(r"\d{3}[ -]\d{3}$|\d+$", m.group(0))
         if tail:
-            a, b = m.start() + tail.start(), m.start() + tail.end()
-            spans.append((a, b, otp_label(m.group(0)[tail.start():tail.end()])))
+            spans.append((m.start() + tail.start(), m.start() + tail.end(), otp_label(m.group(0)[tail.start():tail.end()])))
     for rx, need_mark in ((m_._RE_PW_EXPLICIT, False), (m_._RE_PW_IS, True)):
         for m in rx.finditer(text_):
             val = m.group(2)
@@ -251,11 +292,33 @@ def _credential_spans(text_: str) -> list[tuple[int, int, str]]:
             add(m, 2, "[token]")
     for m in m_._RE_SECRET.finditer(text_):
         spans.append((m.start(), m.end(), "[token]"))
+    # luật bổ sung trên bản bỏ dấu: pass|pw|mk, OTP có dấu cách/gạch, "mã: 6 số" khi có ngữ cảnh OTP, CVV
+    folded, idx = _fold_map(text_)
+
+    def fspan(m: re.Match[str], grp: str, label: str, trim: str = "") -> None:
+        a, b = m.start(grp), m.end(grp)
+        if trim:
+            while b > a and folded[b - 1] in trim:
+                b -= 1
+        if b > a:
+            spans.append((idx[a], idx[b - 1] + 1, label))
+
+    for m in _OTP_NEAR_RE.finditer(folded):
+        fspan(m, "c", otp_label(m.group("c")))
+    if _OTP_CTX_RE.search(folded):
+        for m in _OTP_BARE_RE.finditer(folded):
+            fspan(m, "c", otp_label(m.group("c")))
+    for m in _CVV_RE.finditer(folded):
+        fspan(m, "c", "[CVV]")
+    for m in _PW_SEP_RE.finditer(folded):
+        v = m.group("v").rstrip(".,;!?)")
+        if len(v) >= 4 and (m.group("sep") in (":", "=") or any(not c.isalpha() for c in v)):
+            fspan(m, "v", "[mật khẩu]", trim=".,;!?)")
+    for m in _PW_BARE_RE.finditer(folded):
+        fspan(m, "v", "[mật khẩu]", trim=".,;!?)")
     for m in _CARD_RE.finditer(text_):
         digits = re.sub(r"\D", "", m.group(0))
-        if 13 <= len(digits) <= 19 and _luhn_ok(digits):
-            if _STK_CTX_RE.search(_fold(text_[max(0, m.start() - 24):m.start()])):
-                continue                      # "STK 1234 …": số tài khoản ngân hàng, Q9 giữ nguyên để so lịch sử
+        if 13 <= len(digits) <= 19 and _luhn_ok(digits) and not _is_stk_context(text_, m.start()):
             spans.append((m.start(), m.end(), f"[thẻ …{digits[-4:]}]"))
     spans.sort(key=lambda t: (t[0], -(t[1] - t[0])))
     out: list[tuple[int, int, str]] = []
@@ -266,12 +329,12 @@ def _credential_spans(text_: str) -> list[tuple[int, int, str]]:
     return out
 
 
-def scrub_credentials_map(text_: str) -> tuple[str, list[tuple[int, int, int, int]]]:
-    """(chữ đã che, [(đầu_mới, cuối_mới, đầu_cũ, cuối_cũ)]) — để ánh xạ span về chữ gốc."""
+def scrub_credentials_map(text_: str, secrets: Sequence[str] = ()) -> tuple[str, list[tuple[int, int, int, int]]]:
+    """(chữ đã che, [(đầu_mới, cuối_mới, đầu_cũ, cuối_cũ)]) trên CHÍNH chuỗi truyền vào (đã chuẩn hoá); để ánh xạ span về chữ gốc."""
     pieces: list[str] = []
     segs: list[tuple[int, int, int, int]] = []
     pos_old, new_len = 0, 0
-    for a, b, lab in _credential_spans(text_):
+    for a, b, lab in _credential_spans(text_, secrets):
         pieces.append(text_[pos_old:a])
         new_len += a - pos_old
         segs.append((new_len, new_len + len(lab), a, b))
@@ -282,9 +345,13 @@ def scrub_credentials_map(text_: str) -> tuple[str, list[tuple[int, int, int, in
     return "".join(pieces), segs
 
 
-def scrub_credentials(text_: str | None) -> str | None:
-    """Thay OTP / mật khẩu / số thẻ / token bằng nhãn giữ nghĩa; mọi thứ khác (tên, SĐT, tiền, STK) giữ NGUYÊN (Q9)."""
-    return None if text_ is None else scrub_credentials_map(text_)[0]
+def mask_credentials(text_: str | None, secrets: Sequence[str] = ()) -> str | None:
+    """HÀM CHE DUY NHẤT (prompt và verify dùng chung): chuẩn hoá `norm` trước, rồi thay OTP / mật khẩu / CVV / số thẻ / token bằng nhãn giữ
+    nghĩa; `secrets` (bí mật hệ thống) ⇒ `[đã che]`. Mọi thứ khác (tên, SĐT, tiền, STK) giữ NGUYÊN (Q9)."""
+    return None if text_ is None else scrub_credentials_map(norm(text_), secrets)[0]
+
+
+scrub_credentials = mask_credentials
 
 
 def _map_back(segs: list[tuple[int, int, int, int]], new_pos: int, *, end: bool) -> int:
@@ -305,7 +372,7 @@ def _map_back(segs: list[tuple[int, int, int, int]], new_pos: int, *, end: bool)
 
 
 # ─── kiểm trích dẫn ─────────────────────────────────────────────────────────────────────────────────────────────────────────
-def _quote_status(q: Any, ev_by_id: Mapping[str, Any], media: Mapping[str, list[Any]]) -> VerifiedQuote:
+def _quote_status(q: Any, ev_by_id: Mapping[str, Any], media: Mapping[str, list[Any]], secrets: Sequence[str] = ()) -> VerifiedQuote:
     mid, fld, text = q.message_id, q.field, norm(q.text)
     ev = ev_by_id.get(mid)
     base = VerifiedQuote(mid, fld, q.text, "absent")
@@ -315,13 +382,14 @@ def _quote_status(q: Any, ev_by_id: Mapping[str, Any], media: Mapping[str, list[
     base.sent_at = _g(ev, "sent_at")
     base.raw_event_id = _g(ev, "raw_event_id")
     base.sender_person_id = _g(ev, "sender_person_id")
-    if fld in ("body", "caption"):
+    descs = [str(_g(m, "text") or "") for m in media.get(mid, []) if _g(m, "kind") == "description" and _g(m, "status", "ok") == "ok"]
+    if fld == "body":
         haystacks = [_event_body(ev)]
+    elif fld == "caption":      # `caption` = chữ chú thích người gửi (thân tin) HOẶC mô tả ảnh do máy tạo (`clean.media_texts` kind description)
+        haystacks = [_event_body(ev), *descs]
     else:
         kind = FIELD_TO_MEDIA_KIND.get(fld, fld)
         haystacks = [str(_g(m, "text") or "") for m in media.get(mid, []) if _g(m, "kind") == kind and _g(m, "status", "ok") == "ok"]
-        if fld == "caption":
-            haystacks += [str(_g(m, "text") or "") for m in media.get(mid, []) if _g(m, "kind") == "description"]
     if not haystacks or not any(h.strip() for h in haystacks):
         base.reason = "field_missing"
         return base
@@ -334,13 +402,21 @@ def _quote_status(q: Any, ev_by_id: Mapping[str, Any], media: Mapping[str, list[
         if i >= 0:
             base.status, base.span_start, base.span_end = "verified", i, i + len(text)
             return base
-    for h in haystacks:                     # trích dẫn có thể chứa nhãn che đăng nhập ("[OTP 6 số]"): so với bản đã che, span ánh xạ về chữ gốc
+    for h in haystacks:                     # trích dẫn có thể chứa nhãn che ("[OTP 6 số]", "[đã che]"): so với bản đã che bằng ĐÚNG hàm của prompt
         hn = norm(h)
-        sn, segs = scrub_credentials_map(hn)
+        sn, segs = scrub_credentials_map(hn, secrets)
         if segs and (i := sn.find(text)) >= 0:
             base.status, base.span_start, base.span_end = "verified", _map_back(segs, i, end=False), _map_back(segs, i + len(text), end=True)
             base.via_scrub = True
             return base
+    if SECRET_LABEL in text:                # không biết bí mật hệ thống nào: nhãn `[đã che]` khớp MỘT token liền, chữ quanh nhãn vẫn phải khớp
+        rx = re.compile(r"\S{4,256}".join(re.escape(p) for p in text.split(SECRET_LABEL)))
+        for h in haystacks:
+            hn = norm(h)
+            if (m := rx.search(hn)) is not None:
+                base.status, base.span_start, base.span_end = "verified", m.start(), m.end()
+                base.via_scrub = True
+                return base
     base.reason = "not_substring"
     return base
 
@@ -363,10 +439,10 @@ def _as_ref(x: str) -> str:
 def check(out: BrainOut, events: Sequence[Any], media_texts: Mapping[str, Sequence[Any]] | Iterable[Any] | None = None, *,
           now: datetime | None = None, tz: str = DEFAULT_TZ, thread_ref: str | None = None,
           profile_fact_ids: Collection[Any] | None = None, known_person_refs: Collection[str] | None = None,
-          known_predicates: Collection[str] | None = None) -> Verified:
+          known_predicates: Collection[str] | None = None, secrets: Sequence[str] = ()) -> Verified:
     """Kiểm một `BrainOut` với tin của lượt (gồm cả cửa sổ gần). `profile_fact_ids` = id sự thật có trong khối Hồ sơ đã gửi cho model
     (`ProfileSnapshot.fact_ids()` hoặc chuỗi `f_…`); `None` ⇒ không có Hồ sơ nào được gửi ⇒ mọi `owner_relevance` bị bỏ. `known_person_refs`
-    / `known_predicates` `None` ⇒ không lọc. `now` mặc định giờ máy (L2 truyền `clock.now()` để đồng hồ giả chạy được)."""
+    / `known_predicates` `None` ⇒ không lọc. `secrets` = bí mật hệ thống đã thay `[đã che]` trong prompt. `now` mặc định giờ máy (L2 truyền `clock.now()` để đồng hồ giả chạy được)."""
     now = (now or datetime.now(UTC))
     zone = _tzinfo(tz)
     res = Verified(out=out)
@@ -387,7 +463,7 @@ def check(out: BrainOut, events: Sequence[Any], media_texts: Mapping[str, Sequen
             res.bump("duplicate_unit_ref")
             continue
         seen_refs.add(u.unit_ref)
-        vq = [_quote_status(q, ev_by_id, media) for q in u.quotes]
+        vq = [_quote_status(q, ev_by_id, media, secrets) for q in u.quotes]
         vu = VerifiedUnit(unit=u, quotes=vq, status="ok", notes=notes, projects_signal=u.kind is not None)
         if any(q.status == "absent" for q in vq):
             vu.status = "absent"
