@@ -190,6 +190,10 @@ GATE_BY_FLAG: dict[str, str] = {"credentials_entered": "lua_dao_dang_dien_ra", "
 #: Cổng thuộc lớp "an toàn" (trần lượt an toàn riêng, không bao giờ bị cắt — §4D.5) và lớp "cổng" (4 cổng còn lại).
 SAFETY_GATES = frozenset({"lua_dao_dang_dien_ra", "an_toan"})
 STRANGER_DAYS = 7.0
+TEMPLATE_MIN_N = 3
+#: Cờ rủi ro: tin có bất kỳ cờ nào dưới đây KHÔNG BAO GIỜ bị bỏ vì "không cần model"/"mẫu lặp" (chỉ hạ ưu tiên).
+RISK_FLAGS = frozenset({"scam_keyword", "link", "money_request", "account_number", "phone", "credentials_entered",
+                        "account_takeover", "emergency"})
 BIG_DEAL_VND = 100_000_000
 MAX_SCAN_CHARS = 20_000
 

@@ -966,14 +966,22 @@ class GroupTurns:
                     cands = prefilter.enrich(cands, prefilter.SenderCtx(sender_ref=f"u_{person}" if person else None))
             gclass = prefilter.gate_class(cands)
             template_n = 0
-            if len(triage.normalize(body)) >= triage.BROADCAST_MIN_LEN:
+            risky = any(c.flag in prefilter.RISK_FLAGS for c in cands)
+            if len(triage.normalize(body)) >= triage.BROADCAST_MIN_LEN and r.sender_identity_id is not None:
+                # Chỉ đếm trong CÙNG luồng và CÙNG người gửi (kẻ gian không "làm nóng" câu lừa đảo ở nhóm khác để tin ở nhóm Sếp bị bỏ).
                 template_n = 1 + int((await db.execute(text("""
                     SELECT count(*) FROM raw.events WHERE org_id = :o AND body_text = :b AND received_at < :r
-                      AND received_at >= CAST(:r AS timestamptz) - interval '7 days'"""),
-                                                         {"o": org_id, "b": body, "r": r.event_received_at})).scalar_one())
-            skip = None if gclass else prefilter.no_model_reason(r.kind, body, template_n=template_n)
+                      AND received_at >= CAST(:r AS timestamptz) - interval '7 days'
+                      AND sender_identity_id = :s AND group_id IS NOT DISTINCT FROM CAST(:g AS uuid)
+                      AND (CAST(:g AS uuid) IS NOT NULL OR channel_id = :c)"""),
+                                                         {"o": org_id, "b": body, "r": r.event_received_at, "s": r.sender_identity_id,
+                                                          "g": r.group_id, "c": r.channel_id})).scalar_one())
+            # KHÔNG BAO GIỜ bỏ tin có ứng viên rủi ro (từ khoá lừa đảo, link, yêu cầu chuyển tiền, STK, SĐT, đã nhập OTP, cấp cứu…).
+            skip = None if (gclass or risky) else prefilter.no_model_reason(r.kind, body, template_n=template_n)
             detail: dict[str, Any] = {"scanned": True, "thread_key": tk, "gate_class": gclass,
                                       "cands": [c.to_json() for c in cands]}
+            if risky and not gclass and template_n >= prefilter.TEMPLATE_MIN_N:
+                detail["low_priority"] = True               # mẫu lặp có ứng viên rủi ro: chỉ hạ ưu tiên, vẫn phân tích
             if skip is not None:
                 detail |= {"discarded_by": "no_model", "reason": skip}
             await db.execute(text("""
@@ -1138,12 +1146,40 @@ class GroupTurns:
 
     # ─── một lượt ──────────────────────────────────────────────────────────────────────────────────────────────────
 
+    async def _safety_sender_over(self, db: AsyncSession, org_id: uuid.UUID, tk: str) -> bool:
+        """Đếm lượt an toàn ĐÃ CHẠY theo NGƯỜI GỬI trong giờ qua (số `analysis_id` khác nhau của các tin ứng viên an toàn của người đó, đọc
+        từ `event_state`). Đủ `SAFETY_PER_SENDER_HOUR` cho MỌI người gửi tin ứng viên đang chờ ⇒ True (một nạn nhân thật cùng luồng có bộ
+        đếm riêng nên vẫn được chạy)."""
+        rows = (await db.execute(text("""
+            SELECT DISTINCT COALESCE(pi.person_id::text, e.sender_identity_id::text, 'x') AS who
+            FROM refinery.event_state s JOIN raw.events e ON e.id = s.event_id AND e.received_at = s.event_received_at
+            LEFT JOIN core.person_identities pi ON pi.id = e.sender_identity_id
+            WHERE s.org_id = :o AND s.state = 'pending' AND s.detail ->> 'thread_key' = :t AND s.detail ->> 'gate_class' = 'safety'"""),
+                                  {"o": org_id, "t": tk})).scalars().all()
+        if not rows:
+            return False
+        since = clock.now() - timedelta(hours=1)
+        over = True
+        for who in rows:
+            n = (await db.execute(text("""
+                SELECT count(DISTINCT s.detail ->> 'analysis_id')
+                FROM refinery.event_state s JOIN raw.events e ON e.id = s.event_id AND e.received_at = s.event_received_at
+                LEFT JOIN core.person_identities pi ON pi.id = e.sender_identity_id
+                WHERE s.org_id = :o AND s.state IN ('clean', 'discarded') AND s.detail ->> 'analysis_id' IS NOT NULL
+                  AND s.detail ->> 'gate_class' IN ('safety', 'hard') AND s.updated_at >= :since
+                  AND COALESCE(pi.person_id::text, e.sender_identity_id::text, 'x') = :w"""),
+                                     {"o": org_id, "since": since, "w": who})).scalar_one()
+            over = over and int(n) >= budget.SAFETY_PER_SENDER_HOUR
+        return over
+
     async def alert_once(self, org_id: uuid.UUID, key: str, *, alert_type: str, priority: str, title: str, summary: str,
                          suggested: str) -> None:
-        day = ai_cost.today_vn(clock.now()).isoformat()
-        if not await self.r.redis.set(f"gh:refinery:alert:{key}:{org_id}:{day}", "1", nx=True, ex=2 * 86400):
-            return
+        start, end = budget.day_start()
         async with self.r.sm() as db:
+            # Một lần/ngày VN: nguồn sự thật là chính `biz.alerts` (không phụ thuộc Redis dùng chung).
+            if (await db.execute(text("""SELECT 1 FROM biz.alerts WHERE org_id = :o AND alert_type = :t AND created_at >= :s
+                                         AND created_at < :e LIMIT 1"""), {"o": org_id, "t": alert_type, "s": start, "e": end})).first():
+                return
             await raise_alert(db, org_id, alert_type=alert_type, priority=priority, title=title, summary=summary,
                               suggested=suggested, redis=self.r.redis)
             await db.commit()
@@ -1152,9 +1188,21 @@ class GroupTurns:
         tk = ts.thread_key
         async with self.r.sm() as db:
             caps, usage = await budget.load_caps(db, org_id), await budget.load_usage(db, org_id)
-            dec = budget.decide(budget.kind_for(reason), tk, caps, usage)
+            kind0 = budget.kind_for(reason)
+            sender_over = await self._safety_sender_over(db, org_id, tk) if kind0 == budget.KIND_SAFETY else False
+            dec = budget.decide(kind0, tk, caps, usage, sender_over=sender_over)
             await budget.sync_thread_state(db, org_id, tk, dec, group_id=ts.group_id)
+            if dec.mode == budget.MODE_HARD_ONLY:
+                # Chỉ đường luật cứng: ứng viên vẫn nằm ở event_state.detail.cands (T1 báo theo luật); tin bỏ lớp "chạy ngay" để không lặp lại.
+                await db.execute(text("""UPDATE refinery.event_state SET fast = false, detail = detail || '{"gate_class": "hard"}'::jsonb
+                                         WHERE org_id = :o AND state = 'pending' AND detail ->> 'thread_key' = :t
+                                           AND detail ->> 'gate_class' = 'safety'"""), {"o": org_id, "t": tk})
             await db.commit()
+        if dec.mode == budget.MODE_HARD_ONLY:
+            await self.alert_once(org_id, "safety_hard_cap", alert_type="intel_safety_abuse", priority="P1",
+                                  title="Lượt an toàn vượt trần chống lạm dụng",
+                                  summary=f"Một luồng/người gửi dồn tin an toàn/lừa đảo ({', '.join(dec.reasons)}); chỉ chạy luật cứng, không gọi model.",
+                                  suggested="Xem luồng đó trong Hộp thư; có thể là kẻ spam từ khoá để đốt lượt.")
         if dec.over_safety_cap:
             await self.alert_once(org_id, "safety_cap", alert_type="intel_safety_cap", priority="P1",
                                   title="Vượt trần lượt an toàn trong ngày",

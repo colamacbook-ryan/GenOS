@@ -280,8 +280,8 @@ async def test_repeated_template_message_is_not_a_new_event(app, db, redis) -> N
     sm = sessionmaker()
     org, _ = await setup(db, sm)
     tpl = "Kính gửi quý khách, bảng giá thép cuộn tháng 10 đã cập nhật, vui lòng xem file đính kèm nhé"
-    for i in range(3):
-        await put(sm, org, msg(tpl, sender=f"u{i}", name=f"Người {i}"))
+    for _ in range(3):
+        await put(sm, org, msg(tpl, sender="u1", name="Người 1"))                    # mẫu lặp tính theo CÙNG luồng + CÙNG người gửi
     an = Analyzer()
     r = refinery(sm, redis, an)
     await r.groups.ensure_scanned(org)
@@ -466,3 +466,30 @@ async def test_failed_turn_still_tags_its_model_calls_to_the_thread(app, db, red
     row = (await db.execute(text("SELECT thread_key, analysis_id FROM agent.model_calls"))).one()
     aid = (await db.execute(text("SELECT id FROM refinery.analyses WHERE status = 'contract_error'"))).scalar_one()
     assert (row.thread_key, row.analysis_id) == (f"g:{g1}", aid)                              # lượt lỗi vẫn tính vào trần của luồng
+
+
+async def test_template_count_is_per_thread_and_sender_and_risky_messages_are_never_dropped(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    sm = sessionmaker()
+    org, _ = await setup(db, sm, groups=("g1", "g2"))
+    scam = "Anh chị bấm vào https://vcb-xacthuc.top/login để xác minh tài khoản ngân hàng ngay nhé"
+    for _ in range(4):                                                         # kẻ gian làm nóng câu lừa đảo ở nhóm g2
+        await put(sm, org, msg(scam, group="g2", sender="bad", name="Kẻ gian"))
+    await put(sm, org, msg(scam, group="g1", sender="bad", name="Kẻ gian"))     # cùng câu ở nhóm của Sếp
+    an = Analyzer()
+    r = refinery(sm, redis, an)
+    await r.groups.ensure_scanned(org)
+    rows = (await db.execute(text("""SELECT e.group_id, s.state, s.detail ->> 'discarded_by' AS by, s.detail ->> 'low_priority' AS lp
+                                     FROM refinery.event_state s JOIN raw.events e ON e.id = s.event_id AND e.received_at = s.event_received_at"""))).all()
+    assert all(x.state == "pending" and x.by is None for x in rows)           # tin có ứng viên rủi ro (link, scam_keyword) KHÔNG bao giờ bị bỏ
+    assert sum(1 for x in rows if x.lp) >= 1                                  # mẫu lặp chỉ bị hạ ưu tiên
+    await r.run(org, "manual")
+    assert sum(len(w.new_events) for w in an.windows) == 5
+    # mẫu lặp thường (không rủi ro) vẫn đếm riêng theo luồng + người gửi: cùng câu ở nhóm khác không làm tin này thành "mẫu lặp"
+    tpl = "Kính gửi quý khách, bảng giá thép cuộn tháng 10 đã cập nhật, vui lòng xem file đính kèm nhé"
+    for _ in range(4):
+        await put(sm, org, msg(tpl, group="g2", sender="shop", name="Shop"))
+    await put(sm, org, msg(tpl, group="g1", sender="shop", name="Shop"))
+    await r.groups.ensure_scanned(org)
+    g1 = (await db.execute(text("""SELECT s.state FROM refinery.event_state s JOIN raw.events e ON e.id = s.event_id AND e.received_at = s.event_received_at
+                                   JOIN core.groups g ON g.id = e.group_id WHERE g.external_id = 'g1' AND e.body_text = :b"""), {"b": tpl})).scalar_one()
+    assert g1 == "pending"

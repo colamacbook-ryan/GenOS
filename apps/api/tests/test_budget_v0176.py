@@ -76,12 +76,24 @@ def test_gate_runs_now_until_gate_cap_even_when_org_is_capped() -> None:
     assert room.allow and room.kind == KIND_NORMAL and room.reasons == ("gate_cap_reached",)          # còn lượt chung ⇒ xếp như lượt thường
 
 
-def test_safety_is_never_cut_over_cap_only_flags_the_alert() -> None:
+def test_safety_over_soft_cap_still_runs_and_only_flags_the_alert() -> None:
     d = decide(KIND_SAFETY, TK, CAPS, usage(normal=400, safety=59))
     assert d.allow and not d.over_safety_cap
-    over = decide(KIND_SAFETY, TK, CAPS, usage(normal=400, safety=500, thread=99))
+    over = decide(KIND_SAFETY, TK, CAPS, usage(normal=400, safety=100, thread=5))     # 100 > 60 nhưng < 3 × 60: fail-high, vẫn chạy
     assert over.allow and over.over_safety_cap and over.reasons == ("safety_cap_exceeded",)
-    assert decide(KIND_SAFETY, TK, Caps(0, 0, 0, 0, 0, 0), usage()).allow                     # trần = 0 vẫn không cắt an toàn (chỉ báo)
+
+
+def test_safety_abuse_caps_fall_back_to_hard_rules_only() -> None:
+    u = usage(safety=10, thread=5)
+    u.thread_safety[TK] = budget.SAFETY_PER_THREAD_DAY
+    d = decide(KIND_SAFETY, TK, CAPS, u)
+    assert not d.allow and d.mode == budget.MODE_HARD_ONLY and d.reasons == ("thread_safety_cap",)
+    assert not decide(KIND_SAFETY, TK, CAPS, usage(safety=10), sender_over=True).allow                  # ≤ 6 lượt/giờ/người gửi
+    assert decide(KIND_SAFETY, TK, CAPS, usage(safety=179)).allow
+    hard = decide(KIND_SAFETY, TK, CAPS, usage(safety=180))                                             # trần cứng 3 × 60
+    assert not hard.allow and hard.reasons == ("safety_hard_cap",) and hard.over_safety_cap
+    assert not decide(KIND_SAFETY, TK, CAPS, usage(thread=40)).allow                                    # không bỏ qua thread_ratio
+    assert not decide(KIND_SAFETY, TK, Caps(0, 60, 40, 0, 0, 0), usage()).allow                         # trần luồng = 0 ⇒ chỉ luật
 
 
 def test_free_mode_blocks_every_class_when_paid_calls_appear_with_zero_vnd_budget() -> None:
@@ -224,9 +236,10 @@ async def test_safety_candidate_runs_over_every_cap_and_alerts_ryan_once(app, db
     org = await org_id(db)
     await listen(db, org, "g1")
     await enable_groups(db, org)
-    await set_ai_cost(db, org, intel_daily_call_cap=1, intel_safety_call_cap=1)
+    await set_ai_cost(db, org, intel_daily_call_cap=30, intel_safety_call_cap=1)
     m = await mk_model(db, org)
-    await add_call(db, org, m, "refinery.group")                               # tổ chức 100%
+    for _ in range(30):
+        await add_call(db, org, m, "refinery.group")                           # tổ chức 100%
     await add_call(db, org, m, "refinery.safety")                              # trần an toàn 100%
     await put(sm, org, msg("Em lỡ nhập mã OTP vào link đó rồi chị ơi", sender="u1"))
     an = Analyzer()
@@ -277,3 +290,26 @@ async def test_free_mode_blocks_all_model_calls_and_alerts(app, db, redis) -> No
     await set_ai_cost(db, org, intel_daily_budget_vnd=1_000_000)
     await refinery(sm, redis, an).run(org, "manual")
     assert len(an.windows) >= 1 and await states(db, org) != {"pending": 2}
+
+
+async def test_spam_of_safety_keywords_burns_at_most_six_model_calls_per_sender_hour(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    sm = sessionmaker()
+    org = await org_id(db)
+    await listen(db, org, "g1")
+    await enable_groups(db, org)
+    m = await mk_model(db, org)
+    an = Analyzer()
+    router = LoggingRouter(sm, m)
+    r = refinery(sm, redis, an, router)
+    for i in range(30):                                                       # cùng một kẻ gửi, mỗi tin một lượt chạy ngay
+        await put(sm, org, msg(f"Em lỡ nhập mã OTP vào link đó rồi {i}", sender="spam", name="Kẻ spam"))
+        await r.run(org, "schedule")
+    assert router.purposes.count("refinery.safety") == budget.SAFETY_PER_SENDER_HOUR
+    cands = (await db.execute(text("""SELECT count(*) FROM refinery.event_state
+                                      WHERE detail -> 'cands' @> '[{"flag": "credentials_entered"}]'"""))).scalar_one()
+    assert cands == 30                                                        # luật cứng vẫn bắt đủ 30/30
+    assert [a.alert_type for a in (await db.execute(text("SELECT alert_type FROM biz.alerts"))).all()].count("intel_safety_abuse") == 1
+    # nạn nhân thật (người gửi khác) cùng luồng vẫn được chạy
+    await put(sm, org, msg("Em cũng lỡ nhập OTP vào link đó rồi", sender="real", name="Nạn nhân"))
+    await r.run(org, "schedule")
+    assert router.purposes.count("refinery.safety") == budget.SAFETY_PER_SENDER_HOUR + 1

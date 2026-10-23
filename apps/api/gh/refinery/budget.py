@@ -46,6 +46,12 @@ THREAD_FLOOR_VND = 15_000
 
 # Chế độ (`Decision.mode`)
 MODE_NORMAL, MODE_STRETCHED, MODE_RULES_ONLY, MODE_FREE = "normal", "stretched", "rules_only", "free_rules_only"
+#: Lượt an toàn vượt trần chống lạm dụng: KHÔNG gọi model, chỉ đường LUẬT CỨNG (ứng viên vẫn được tạo và báo theo luật).
+MODE_HARD_ONLY = "hard_rules_only"
+#: Chống kẻ ngoài đốt lượt model bằng tin chứa từ khoá an toàn/lừa đảo (fail-high cho ca thật, có trần cho ca spam).
+SAFETY_PER_SENDER_HOUR = 6
+SAFETY_PER_THREAD_DAY = 20
+SAFETY_HARD_FACTOR = 3
 
 
 @dataclass(frozen=True)
@@ -80,6 +86,7 @@ class Usage:
     calls: dict[str, int] = field(default_factory=dict)             # kind → số lượt
     vnd: dict[str, float] = field(default_factory=dict)             # kind → VND
     thread_calls: dict[str, int] = field(default_factory=dict)      # thread_key → số lượt (mọi lớp)
+    thread_safety: dict[str, int] = field(default_factory=dict)     # thread_key → số lượt lớp an toàn
     thread_vnd: dict[str, float] = field(default_factory=dict)
 
     @property
@@ -140,7 +147,7 @@ def cadence_minutes(base: int, stretched: bool) -> int:
     return max(base, STRETCHED_CADENCE_MIN) if stretched else base
 
 
-def decide(kind: str, thread_key: str, caps: Caps, usage: Usage) -> Decision:
+def decide(kind: str, thread_key: str, caps: Caps, usage: Usage, *, sender_over: bool = False) -> Decision:
     """Quyết định cho MỘT lượt sắp chạy của `thread_key` thuộc lớp `kind` (hàm thuần)."""
     if kind not in PURPOSE:
         raise ValueError(f"lớp lượt không hợp lệ: {kind!r}")
@@ -153,7 +160,17 @@ def decide(kind: str, thread_key: str, caps: Caps, usage: Usage) -> Decision:
         over = caps.safety_call_cap <= 0 or usage.calls.get(KIND_SAFETY, 0) >= caps.safety_call_cap
         if caps.safety_budget_vnd > 0 and usage.vnd.get(KIND_SAFETY, 0.0) >= caps.safety_budget_vnd:
             over = True
-        # KHÔNG bao giờ cắt lừa đảo/an toàn vì trần: vượt ⇒ báo Ryan (bên gọi), vẫn chạy.
+        # Vượt trần an toàn "mềm" ⇒ báo Ryan, vẫn chạy (fail-high). NHƯNG có trần chống lạm dụng: theo luồng (cả tỉ lệ trần luồng và
+        # ≤ 20 lượt/ngày), theo người gửi (≤ 6 lượt/giờ, bên gọi đếm) và trần cứng tổng 3 × `intel_safety_call_cap`. Vượt ⇒ chỉ luật cứng.
+        abuse: tuple[str, ...] = ("sender_cap",) if sender_over else ()
+        if usage.thread_safety.get(thread_key, 0) >= SAFETY_PER_THREAD_DAY:
+            abuse += ("thread_safety_cap",)
+        if thread_ratio(thread_key, caps, usage) >= 1.0:
+            abuse += ("thread_cap",)
+        if usage.calls.get(KIND_SAFETY, 0) >= SAFETY_HARD_FACTOR * max(caps.safety_call_cap, 1):
+            abuse += ("safety_hard_cap",)
+        if abuse:
+            return Decision(False, MODE_HARD_ONLY, kind, over_safety_cap=True, reasons=abuse, **common)
         return Decision(True, MODE_STRETCHED if (stretch_thread or stretch_org) else MODE_NORMAL, kind,
                         over_safety_cap=over, reasons=("safety_cap_exceeded",) if over else (), **common)
     if kind == KIND_GATE:
@@ -198,6 +215,8 @@ async def load_usage(db: AsyncSession, org_id: uuid.UUID, now: datetime | None =
         u.vnd[kind] = u.vnd.get(kind, 0.0) + float(Decimal(str(r.cost)))
         if r.thread_key:
             u.thread_calls[r.thread_key] = u.thread_calls.get(r.thread_key, 0) + int(r.calls)
+            if kind == KIND_SAFETY:
+                u.thread_safety[r.thread_key] = u.thread_safety.get(r.thread_key, 0) + int(r.calls)
             u.thread_vnd[r.thread_key] = u.thread_vnd.get(r.thread_key, 0.0) + float(Decimal(str(r.cost)))
     return u
 
