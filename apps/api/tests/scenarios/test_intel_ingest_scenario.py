@@ -66,7 +66,7 @@ async def test_replay_into_raw_events_keeps_original_time_order_reply_and_media(
     image = next(m for m in ds.msgs if m.kind == "image_caption")
     assert by[voice.id].body_text is None and by[voice.id].payload["media_ref"].startswith("fake://voice/")
     assert by[voice.id].payload["fake_media_text"] == voice.text
-    assert by[voice.id].kind == "other"        # ĐIỂM CHỜ L5: `ingest.KINDS` chưa có 'voice' ⇒ 'other'; media_ref + chữ giả đã đủ để `media.process` chạy khi L5 vào
+    assert by[voice.id].kind == "voice"        # L5 (PR #2) đã thêm kind "voice" vào ingest_message
     # ảnh: chữ trong bộ dữ liệu là MÔ TẢ do máy sinh (không phải caption người gửi) ⇒ đi qua engine media giả, body_text rỗng
     assert by[image.id].kind == "image" and by[image.id].body_text is None
     assert by[image.id].payload["fake_media_text"] == h.common.strip_media_prefix(image.text)
