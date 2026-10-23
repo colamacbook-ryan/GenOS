@@ -130,7 +130,7 @@ async def test_anh_ocr_va_mo_ta_va_luat_a_tren_chu_ocr(app, db, redis: Redis, tm
     assert await jobs.process_event(d, ev) == "ok"
     got = {r.kind: r for r in await rows(db)}
     assert got["ocr"].text == "UNC 1.500.000đ STK 0123456789" and got["description"].text == "Ảnh chụp màn hình chuyển khoản"
-    assert [s[1] for s in scanned] == ["media_texts.text", "media_texts.text"]      # luật (a) chạy trên OCR và mô tả
+    assert [s[1] for s in scanned] == ["ocr", "caption"]      # luật (a) chạy trên OCR và mô tả
     assert (await db.execute(text("SELECT fast FROM refinery.event_state WHERE event_id = :e"), {"e": eid})).scalar() is True
 
 
@@ -342,3 +342,13 @@ async def test_will_retry_sai_khi_qua_cua_so_quet(app, db, monkeypatch) -> None:
     assert (await status.event_status(db, org, [eid]))[eid].will_retry is True
     monkeypatch.setattr(mf, "RETRY_WINDOW_H", 0)           # tin coi như đã quá cửa sổ quét
     assert (await status.event_status(db, org, [eid]))[eid].will_retry is False
+
+
+def test_moi_loai_chu_media_map_dung_truong_nguon_luat_a() -> None:
+    # Hợp đồng L5 ↔ L2: mọi trường nguồn L5 truyền phải nằm trong `prefilter.SOURCE_FIELDS` (CI PR #5 đỏ vì 'media_texts.text').
+    from gh.biz.media import prefilter_port
+    from gh.refinery import prefilter
+    for kind in ("transcript", "ocr", "description", "loai_la"):
+        assert prefilter_port.source_field_for(kind) in prefilter.SOURCE_FIELDS
+    assert prefilter_port.SOURCE_FIELD in prefilter.SOURCE_FIELDS
+    assert prefilter.scan_text("em đã nhập mã OTP rồi", prefilter_port.source_field_for("transcript"))

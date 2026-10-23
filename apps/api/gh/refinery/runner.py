@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """Một lượt sàng lọc: Kho thô → Kho sạch (ARCHITECTURE §4.3).
 
 1. Nhận lô: `FOR UPDATE SKIP LOCKED` trên refinery.event_state (nhiều worker song song không trùng, không sót).
@@ -10,14 +11,23 @@ v0.1.55 (G4, J2): giữa bước 2 và 3, nếu `triage.prefilter` bật (mặc 
 và tin rác chắc chắn (quy tắc + Jev, hoặc quy tắc khi chưa có Jev) — KHÔNG gửi model; tin vẫn nằm trong Kho thô với
 trạng thái `discarded` (`detail.discarded_by = 'prefilter'`) để xem lại ở "Tin đã bỏ qua". Mọi lỗi của bước này ⇒ chạy
 như cũ (không mất tin).
+
+v0.1.76 (L2, spec Bước 1 r6.6.1 §4D): thêm đường THEO LUỒNG (`GroupTurns`, cuối tệp) — một lượt = MỘT luồng (`g:<nhóm>` hoặc `dm:…`):
+tin mới (≤ 60 tin / 12.000 ký tự, không cắt giữa chuỗi trả lời) + cửa sổ gần (30 tin / 24 giờ) + `retrieve.pack` + Hồ sơ Sếp + chính
+sách bối cảnh → `analyze_group` (L3, hiện là stub `_l3_stub`) → `verify.check` → MỘT giao dịch ngắn ghi `refinery.analyses`,
+`clean.meaning_units` + bằng chứng đã kiểm, mention, `facts.assert_fact`, sổ tay (chỉ câu "theo lời <người>" kèm tham chiếu). Nhịp, trần
+và giãn nhịp ở `gh.refinery.budget`; bộ kích hoạt ở `gh.refinery.scheduler`. Đường cũ (lô 40 tin) giữ nguyên khi tổ chức chưa bật đường theo
+luồng (`settings.intel.group_pipeline = 'on'`, hoặc mặc định bật khi L3 thật đã cắm).
 """
 
 import asyncio
 import logging
+import re
 import time
 import uuid
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -26,14 +36,19 @@ from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from gh import realtime
+from gh import ai_cost, realtime
+from gh.biz.mem import facts as facts_mod
 from gh.chassis import actionlog
 from gh.chassis.bus import CLEAN_READY, EventBus
 from gh.data.common import iso, live_person, outbound_to_sql, raw_code
 from gh.gen import decider as decmod
 from gh.memory import notebook
+from gh.providers.clients import Message
 from gh.providers.router import AGY_BACKGROUND_TIMEOUT_S, ModelRouter, ModelUnavailable, raise_alert
-from gh.refinery import extract, prefilter, scoring, triage
+from gh.refinery import (
+    _l3_stub as l3,  # L3-PLUG: ĐIỂM CẮM L3 duy nhất (xem docstring `_l3_stub`); sau khi L3 merge đổi nguồn ở đây
+)
+from gh.refinery import budget, clock, extract, prefilter, scoring, triage
 from gh.refinery.rules import EventCtx, Outcome, RuleDef, RuleHit, apply_outputs, evaluate
 
 log = logging.getLogger("gh.refinery")
@@ -129,6 +144,7 @@ class RunStats:
     noise: int = 0
     errors: int = 0
     held: int = 0
+    facts_written: int = 0         # v0.1.76 (L2): sự thật `mem.facts` ghi trong lượt theo luồng
     prefilter_skipped: int = 0     # v0.1.55 (J2): tin bỏ qua trước khi trích xuất (đã tính cả vào noise/processed)
     deferred: int = 0              # hết ngân sách thời gian lượt: tin trả về pending cho lượt sau (không phải lỗi)
     status: str = "running"
@@ -194,13 +210,52 @@ async def unanswered(db: AsyncSession, ev: Ev, sender_identity: uuid.UUID | None
     return n
 
 
+def attributed(speaker: str | None, conclusion: str) -> str:
+    """"theo lời <người>: <kết luận>" — nhãn nguồn BẮT BUỘC của mọi câu vào sổ tay (§4D.6). `speaker` là MÃ người do hệ thống cấp
+    (`PER-…`), không phải tên hiển thị (chữ của người ngoài — sổ tay có thể vào prompt về sau); dù vậy vẫn làm phẳng một dòng, cắt gọn,
+    bỏ ký tự điều khiển."""
+    who = " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", speaker or "").split())[:60] or "một thành viên"
+    return f"theo lời {who}: {conclusion}"
+
+
+async def notebook_note(db: AsyncSession, org_id: uuid.UUID, section: str, unit_id: uuid.UUID, conclusion: str, first: Ev,
+                        person_id: uuid.UUID | None, group_id: uuid.UUID | None) -> None:
+    body = attributed(first.person_code, conclusion)
+    refs = [{"type": "meaning_unit", "id": str(unit_id)}, {"type": "raw", "id": str(first.event_id), "code": raw_code(first.seq)}]
+    if person_id:
+        await notebook.append(db, org_id, "person", person_id, section, body, refs + (
+            [{"type": "group", "id": str(group_id), "code": first.group_code}] if group_id else []), "agent:core.refinery")
+    if group_id:
+        await notebook.append(db, org_id, "group", group_id, section, body, refs + (
+            [{"type": "person", "id": str(person_id), "code": first.person_code}] if person_id else []), "agent:core.refinery")
+
+
 class Refinery:
     def __init__(self, sm: async_sessionmaker[AsyncSession], redis: Redis, router: ModelRouter,
                  bus: EventBus | None = None, *, jev_transport: httpx.AsyncBaseTransport | None = None,
-                 time_budget_s: float = RUN_TIME_BUDGET_S, part_worst_s: float = PART_WORST_S):
+                 time_budget_s: float = RUN_TIME_BUDGET_S, part_worst_s: float = PART_WORST_S,
+                 analyzer: Callable[..., Awaitable[Any]] | None = None, verifier: Callable[..., Any] | None = None):
         self.sm, self.redis, self.router, self.bus = sm, redis, router, bus
         self.time_budget_s, self.part_worst_s = time_budget_s, part_worst_s   # chỉ test chỉnh
         self.jev_transport = jev_transport      # chỉ test tiêm (Jev giả); production = None
+        #: Đường theo luồng gọi `l3.analyze_group_detailed` / `l3.check`; test (hoặc L6) tiêm bản giả/khác ở đây.
+        self.groups = GroupTurns(self, analyzer or l3.analyze_group_detailed, verifier or l3.check)
+        self._injected = analyzer is not None
+
+    async def group_mode(self, org_id: uuid.UUID) -> bool:
+        """Tổ chức này chạy đường THEO LUỒNG không? `settings.intel.group_pipeline` = 'on'/'off' thắng; không đặt ⇒ bật khi L3 thật
+        đã cắm (`l3.IS_STUB` False), tắt khi còn stub (stub không trích gì — bật sẽ làm mất việc trích xuất của đường cũ)."""
+        async with self.sm() as db:
+            v = (await db.execute(text("SELECT settings->'intel'->>'group_pipeline' FROM core.organizations WHERE id = :o"),
+                                  {"o": org_id})).scalar_one_or_none()
+        if v == "on":
+            if l3.IS_STUB and not self._injected:
+                log.warning("settings.intel.group_pipeline='on' bị bỏ qua: L3 vẫn là stub (không trích gì) — giữ đường cũ")
+                return False
+            return True
+        if v == "off":
+            return False
+        return not l3.IS_STUB
 
     async def _progress(self, org_id: uuid.UUID, st: RunStats, final: bool = False) -> None:
         await realtime.publish(self.redis, "refinery.progress", st.progress(), org_id=org_id)
@@ -261,7 +316,7 @@ class Refinery:
             senders[r.id] = r.sender_identity_id
         return evs, senders
 
-    async def _set_state(self, db: AsyncSession, ev: Ev, state: str, run_id: uuid.UUID, *, label: str | None,
+    async def _set_state(self, db: AsyncSession, ev: Any, state: str, run_id: uuid.UUID, *, label: str | None,
                          confidence: float | None, detail: dict[str, Any]) -> None:
         await db.execute(text("""
             UPDATE refinery.event_state SET state = :s, run_id = :run, label = :l, confidence = :c,
@@ -282,7 +337,8 @@ class Refinery:
         return run_id  # type: ignore[no-any-return]
 
     async def run(self, org_id: uuid.UUID, trigger: str, *, run_id: uuid.UUID | None = None,
-                  event_ids: list[uuid.UUID] | None = None, limit: int | None = None) -> RunStats:
+                  event_ids: list[uuid.UUID] | None = None, limit: int | None = None,
+                  threads: list[str] | None = None, legacy: bool = False) -> RunStats:
         if run_id is None:
             run_id = await self.start_run(org_id, trigger)
         else:
@@ -292,7 +348,10 @@ class Refinery:
                 await db.commit()
         st = RunStats(run_id, trigger)
         try:
-            await self._run(org_id, st, event_ids, limit)
+            if not legacy and await self.group_mode(org_id):
+                await self.groups.run(org_id, st, trigger=trigger, threads=threads)
+            else:
+                await self._run(org_id, st, event_ids, limit)
         except Exception as exc:  # noqa: BLE001 — lượt lỗi không làm chết worker; tin đang xử lý trả về pending
             log.exception("Lượt sàng lọc %s lỗi", run_id)
             st.status, st.error = "failed", str(exc)[:500]
@@ -495,7 +554,7 @@ class Refinery:
                     await self._raw_state(None, ev, "error", None, None)
             await db.commit()
 
-    async def _raw_state(self, org_id: uuid.UUID | None, ev: Ev, state: str, label: str | None,
+    async def _raw_state(self, org_id: uuid.UUID | None, ev: Any, state: str, label: str | None,
                          confidence: float | None) -> None:
         await realtime.publish(self.redis, "raw.state", {"id": str(ev.event_id), "code": raw_code(ev.seq),
                                                          "state": state, "label": label, "confidence": confidence},
@@ -677,19 +736,11 @@ class Refinery:
 
     async def _notebooks(self, db: AsyncSession, org_id: uuid.UUID, unit_id: uuid.UUID, event_type: str,
                          conclusion: str, first: Ev, person_id: uuid.UUID | None, group_id: uuid.UUID | None) -> None:
+        """Sổ tay KHÔNG phải nguồn sự thật (spec §4D.6, red team 5.1): chỉ ghi câu có NGUỒN — mở đầu "theo lời <người>" — kèm `refs`
+        trỏ `meaning_unit` (và tin gốc). Câu kết luận của model không bao giờ vào sổ như một sự thật trần; Gen đọc sự thật ở `mem.facts`."""
         section = "attention_now" if event_type in ATTENTION_TYPES else (
             "open_threads" if event_type in OPEN_THREAD_TYPES else "rolling_context")
-        refs = [{"type": "meaning_unit", "id": str(unit_id)}, {"type": "raw", "id": str(first.event_id),
-                                                                "code": raw_code(first.seq)}]
-        if person_id:
-            await notebook.append(db, org_id, "person", person_id, section, conclusion, refs + (
-                [{"type": "group", "id": str(group_id), "code": first.group_code}] if group_id else []),
-                "agent:core.refinery")
-        if group_id:
-            who = f"{first.person_code}: " if first.person_code else ""
-            await notebook.append(db, org_id, "group", group_id, section, f"{who}{conclusion}", refs + (
-                [{"type": "person", "id": str(person_id), "code": first.person_code}] if person_id else []),
-                "agent:core.refinery")
+        await notebook_note(db, org_id, section, unit_id, conclusion, first, person_id, group_id)
 
     async def _embed(self, org_id: uuid.UUID, units: list[tuple[uuid.UUID, datetime, str]]) -> None:
         if not units:
@@ -707,3 +758,989 @@ class Refinery:
                                          WHERE id = :i AND observed_at = :o"""),
                                  {"v": "[" + ",".join(f"{x:.6f}" for x in v) + "]", "i": uid, "o": obs})
             await db.commit()
+
+
+# ═══ Đường THEO LUỒNG (v0.1.76, L2) — spec §4D.1, §4D.5, §4D.6 ═══════════════════════════════════════════════════════════
+MAX_NEW_EVENTS = 60
+MAX_NEW_CHARS = 12_000
+CHAIN_SECONDS = 120                      # cùng người gửi trong 2 phút = một chuỗi (không cắt giữa chuỗi)
+BURST_MESSAGES = 30                      # một người > 30 tin / 10 phút ⇒ gộp thành một khối
+BURST_WINDOW = timedelta(minutes=10)
+CONTEXT_EVENTS = 30
+CONTEXT_WINDOW = timedelta(hours=24)
+RETRY_BACKOFF = timedelta(minutes=5)
+FREE_MODE_RETRY = timedelta(minutes=15)
+TEMPLATE_WINDOW = timedelta(days=7)
+UNVERIFIED_CONFIDENCE = 0.8              # §4D.4: đơn vị model có trích dẫn verified, chưa qua (d) — T1 tính lại độ chắc
+SCAN_BATCH = 500
+GROUP_LOCK_S = 290
+MAX_PASSES = 4
+FACT_CONTENT_FACTOR = 0.85
+REPLY_KEYS = ("reply_to_msg_id", "reply_to", "quoted_msg_id", "replyTo")
+FORWARD_KEYS = ("forwarded", "is_forwarded", "forward")
+
+
+@dataclass
+class GEv:
+    """Một tin của lượt theo luồng. `members` = các tin đi theo tin đầu trong MỘT khối gộp xả tin (§4D.5)."""
+
+    event_id: uuid.UUID
+    received_at: datetime
+    occurred_at: datetime
+    seq: int
+    kind: str
+    body: str
+    direction: str
+    group_id: uuid.UUID | None
+    channel_id: uuid.UUID | None
+    sender_identity_id: uuid.UUID | None
+    person_id: uuid.UUID | None
+    person_name: str | None
+    person_code: str | None = None
+    ext_id: str = ""
+    reply_ext: str | None = None
+    forwarded: bool = False
+    attempts: int = 0
+    gate_class: str | None = None                   # 'safety' | 'gate' | 'hard' | None (luật (a), từ event_state.detail)
+    members: list["GEv"] = field(default_factory=list)
+
+    @property
+    def message_id(self) -> str:
+        return f"m_{self.event_id}"
+
+    @property
+    def sender_key(self) -> Any:
+        return self.person_id or self.sender_identity_id
+
+    @property
+    def all_events(self) -> list["GEv"]:
+        return [self, *self.members]
+
+
+def _chained(prev: GEv, e: GEv) -> bool:
+    """`e` nối tiếp `prev` thành một chuỗi: trả lời đúng tin trước, hoặc cùng người gửi trong `CHAIN_SECONDS`."""
+    if e.reply_ext and e.reply_ext == prev.ext_id:
+        return True
+    return (e.sender_key is not None and e.sender_key == prev.sender_key
+            and 0 <= (e.occurred_at - prev.occurred_at).total_seconds() <= CHAIN_SECONDS)
+
+
+def take_window(evs: list[GEv], *, max_n: int = MAX_NEW_EVENTS, max_chars: int = MAX_NEW_CHARS) -> list[GEv]:
+    """Phần tin mới của MỘT lượt: tối đa `max_n` tin / `max_chars` ký tự, nhưng KHÔNG cắt giữa một chuỗi trả lời — nếu giới hạn rơi
+    giữa chuỗi thì lùi tới ranh giới chuỗi gần nhất (phần còn lại chạy lượt kế, nối tiếp cùng luồng). Luôn lấy ít nhất một tin."""
+    out: list[GEv] = []
+    chars = 0
+    cut: int | None = None
+    for i, e in enumerate(evs):
+        c = len(e.body)
+        if out and (len(out) >= max_n or chars + c > max_chars):
+            cut = i
+            break
+        out.append(e)
+        chars += c
+    if cut is not None:
+        trial, c = list(out), cut
+        while len(trial) > 1 and _chained(trial[-1], evs[c]):
+            c -= 1
+            trial.pop()
+        if len(trial) >= 2:                          # lùi về rỗng/1 tin (một người độc thoại liên tục) ⇒ cắt đúng ở giới hạn
+            out = trial
+    return out
+
+
+def burst_flags(items: list[tuple[Any, datetime]]) -> list[bool]:
+    """Với danh sách (người gửi, giờ) theo thứ tự thời gian: tin nào nằm trong một cửa sổ 10 phút mà người đó gửi > 30 tin."""
+    flags = [False] * len(items)
+    by: dict[Any, list[int]] = {}
+    for i, (who, _t) in enumerate(items):
+        if who is not None:
+            by.setdefault(who, []).append(i)
+    for idxs in by.values():
+        lo = 0
+        for hi, i in enumerate(idxs):
+            while items[i][1] - items[idxs[lo]][1] > BURST_WINDOW:
+                lo += 1
+            if hi - lo + 1 > BURST_MESSAGES:
+                for j in idxs[lo:hi + 1]:
+                    flags[j] = True
+    return flags
+
+
+def effective_count(items: list[tuple[Any, datetime]]) -> int:
+    """Số tin MỚI tính cho ngưỡng 40 tin: mỗi người xả tin tính MỘT khối, không làm tăng số lượt (§4D.5)."""
+    flags = burst_flags(items)
+    flooders = {who for (who, _t), f in zip(items, flags, strict=True) if f}
+    return sum(1 for f in flags if not f) + len(flooders)
+
+
+def merge_bursts(evs: list[GEv]) -> list[GEv]:
+    """Gộp tin của người xả tin thành MỘT khối (tại vị trí tin đầu của người đó): `body` nối bằng xuống dòng, `members` giữ các tin
+    còn lại để mọi tin đều được đánh dấu đã xử lý. Mã tin của khối = mã tin đầu; trích dẫn được kiểm với thân đã nối."""
+    flags = burst_flags([(e.sender_key, e.occurred_at) for e in evs])
+    blocks: dict[Any, GEv] = {}
+    out: list[GEv] = []
+    for e, f in zip(evs, flags, strict=True):
+        if not f:
+            out.append(e)
+        elif e.sender_key not in blocks:
+            blocks[e.sender_key] = e
+            out.append(e)
+        else:
+            head = blocks[e.sender_key]
+            head.members.append(e)
+            head.body = f"{head.body}\n{e.body}" if e.body else head.body
+    return out
+
+
+def thread_group(thread_key: str) -> uuid.UUID | None:
+    if thread_key.startswith("g:"):
+        try:
+            return uuid.UUID(thread_key[2:])
+        except ValueError:
+            return None
+    return None
+
+
+def thread_dm(thread_key: str) -> tuple[uuid.UUID | None, uuid.UUID | None]:
+    """`dm:<người>:<kênh>` ⇒ (person_id | None, channel_id | None)."""
+    parts = thread_key.split(":")
+    if len(parts) != 3 or parts[0] != "dm":
+        return None, None
+
+    def u(x: str) -> uuid.UUID | None:
+        try:
+            return uuid.UUID(x)
+        except ValueError:
+            return None
+
+    return u(parts[1]), u(parts[2])
+
+
+def _bare(v: Any) -> str | None:
+    s = str(v).split("@", 1)[0] if v else ""
+    return s or None
+
+
+def _payload_get(payload: Any, *keys: str) -> Any:
+    if not isinstance(payload, dict):
+        return None
+    for k in keys:
+        if payload.get(k) not in (None, "", False):
+            return payload[k]
+    return None
+
+
+async def system_secrets(db: AsyncSession, org_id: uuid.UUID) -> tuple[str, ...]:
+    """Bí mật HỆ THỐNG cần thay `[đã che]` trong prompt (Q9: chữ chat đi nguyên văn, chỉ bí mật hệ thống bị che): khoá/token của GenOS
+    (cấu hình) và khoá API nhà cung cấp AI của tổ chức (giải mã tại chỗ, không ghi ra đâu). Chỉ lấy chuỗi ≥ 8 ký tự."""
+    from gh import crypto
+    from gh.config import get_settings
+    from gh.providers.router import KEY_AAD
+
+    st = get_settings()
+    out = {getattr(st, n, "") for n in ("master_key", "setup_token", "bridge_key", "browser_key", "backup_key")}
+    for r in (await db.execute(text("""SELECT k.secret_enc FROM agent.provider_keys k JOIN agent.providers p ON p.id = k.provider_id
+                                       WHERE p.org_id = :o"""), {"o": org_id})).all():
+        try:
+            out.add(crypto.decrypt(bytes(r.secret_enc), KEY_AAD).decode())
+        except Exception:  # noqa: BLE001 — khoá hỏng/khoá master đổi: bỏ khoá đó
+            continue
+    return tuple(sorted(x for x in out if isinstance(x, str) and len(x) >= 8))
+
+
+_UNLOCK_LUA = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end"
+_RENEW_LUA = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('expire', KEYS[1], ARGV[2]) else return 0 end"
+
+
+class GroupTurns:
+    """Lượt phân tích theo luồng. Một lượt = MỘT luồng; các lượt của một tổ chức chạy TUẦN TỰ (khoá Redis) nên cửa sổ thời gian +
+    `purpose` riêng đủ để gắn thẻ `thread_key`/`analysis_id` cho `agent.model_calls` (`ai_cost.tag_calls`)."""
+
+    def __init__(self, refinery: "Refinery", analyzer: Callable[..., Awaitable[Any]], verifier: Callable[..., Any]):
+        self.r = refinery
+        self.analyze, self.verify = analyzer, verifier
+
+    # ─── quét luật (a) lúc tin chờ: thread_key + ứng viên + tin không cần model ────────────────────────────────────
+
+    async def ensure_scanned(self, org_id: uuid.UUID, limit: int = SCAN_BATCH) -> int:
+        """Với tin `pending` chưa quét: tính `thread_key`, chạy luật (a) (`prefilter.scan_text` + `enrich`), lưu vào
+        `event_state.detail` ({scanned, thread_key, gate_class, cands}). Tin của Sếp/nhân viên (gửi đi) không quét ứng viên. Ứng viên
+        của 6 cổng ⇒ bật `fast`. Tin KHÔNG cần model (sticker/reaction/"dạ ok"/tin mẫu lặp) ⇒ `discarded` ngay (vẫn đếm ở độ phủ).
+        Trả số tin đã quét. Lỗi từng tin ⇒ bỏ qua tin đó (lượt sau thử lại), không làm hỏng cả lô."""
+        async with self.r.sm() as db:
+            rows = (await db.execute(text("""
+                SELECT s.event_id, s.event_received_at, e.occurred_at, e.kind, e.body_text, e.direction, e.group_id,
+                       e.channel_id, e.payload, e.sender_identity_id, pi.person_id, p.display_name
+                FROM refinery.event_state s JOIN raw.events e ON e.id = s.event_id AND e.received_at = s.event_received_at
+                LEFT JOIN core.person_identities pi ON pi.id = e.sender_identity_id
+                LEFT JOIN core.persons p ON p.id = pi.person_id
+                WHERE s.org_id = :o AND s.state = 'pending' AND s.detail ->> 'scanned' IS NULL
+                ORDER BY s.event_received_at LIMIT :n"""), {"o": org_id, "n": limit})).all()
+        done = 0
+        for r in rows:
+            try:
+                await self._scan_one(org_id, r)
+                done += 1
+            except Exception:  # noqa: BLE001 — một tin lỗi không được chặn các tin khác
+                log.warning("Quét luật (a) lỗi cho một tin — bỏ qua, lượt sau thử lại", exc_info=True)
+        return done
+
+    async def _scan_one(self, org_id: uuid.UUID, r: Any) -> None:
+        async with self.r.sm() as db:
+            person = await live_person(db, r.person_id) if r.person_id else None
+            tk = await self._thread_key(db, r, person)
+            body = r.body_text or ""
+            cands: list[prefilter.Candidate] = []
+            if r.direction == "inbound" and body and r.kind not in prefilter.NO_MODEL_KINDS:
+                cands = prefilter.scan_text(body, "body")
+                if any(c.flag == "money_request" or c.kind for c in cands):
+                    cands = prefilter.enrich(cands, await self._sender_ctx(db, org_id, r, person, tk))
+                else:
+                    cands = prefilter.enrich(cands, prefilter.SenderCtx(sender_ref=f"u_{person}" if person else None))
+            gclass = prefilter.gate_class(cands)
+            template_n = 0
+            risky = any(c.flag in prefilter.RISK_FLAGS for c in cands)
+            if len(triage.normalize(body)) >= triage.BROADCAST_MIN_LEN and r.sender_identity_id is not None:
+                # Chỉ đếm trong CÙNG luồng và CÙNG người gửi (kẻ gian không "làm nóng" câu lừa đảo ở nhóm khác để tin ở nhóm Sếp bị bỏ).
+                template_n = 1 + int((await db.execute(text("""
+                    SELECT count(*) FROM raw.events WHERE org_id = :o AND body_text = :b AND received_at < :r
+                      AND received_at >= CAST(:r AS timestamptz) - interval '7 days'
+                      AND sender_identity_id = :s AND group_id IS NOT DISTINCT FROM CAST(:g AS uuid)
+                      AND (CAST(:g AS uuid) IS NOT NULL OR channel_id = :c)"""),
+                                                         {"o": org_id, "b": body, "r": r.event_received_at, "s": r.sender_identity_id,
+                                                          "g": r.group_id, "c": r.channel_id})).scalar_one())
+            # KHÔNG BAO GIỜ bỏ tin có ứng viên rủi ro (từ khoá lừa đảo, link, yêu cầu chuyển tiền, STK, SĐT, đã nhập OTP, cấp cứu…).
+            skip = None if (gclass or risky) else prefilter.no_model_reason(r.kind, body, template_n=template_n)
+            detail: dict[str, Any] = {"scanned": True, "thread_key": tk, "gate_class": gclass,
+                                      "cands": [c.to_json() for c in cands]}
+            if risky and not gclass and template_n >= prefilter.TEMPLATE_MIN_N:
+                detail["low_priority"] = True               # mẫu lặp có ứng viên rủi ro: chỉ hạ ưu tiên, vẫn phân tích
+            if skip is not None:
+                detail |= {"discarded_by": "no_model", "reason": skip}
+            await db.execute(text("""
+                UPDATE refinery.event_state SET detail = detail || CAST(:d AS jsonb), fast = fast OR :f,
+                       state = CASE WHEN :skip THEN 'discarded' ELSE state END, label = CASE WHEN :skip THEN 'Noise' ELSE label END,
+                       updated_at = now()
+                WHERE event_id = :e AND event_received_at = :r AND state = 'pending'"""),
+                             {"d": orjson.dumps(detail).decode(), "f": gclass is not None, "skip": skip is not None,
+                              "e": r.event_id, "r": r.event_received_at})
+            await db.commit()
+        if skip is not None:
+            await self.r._raw_state(org_id, GEv(r.event_id, r.event_received_at, r.occurred_at, 0, r.kind, body, r.direction,
+                                                r.group_id, r.channel_id, r.sender_identity_id, person, r.display_name),
+                                    "discarded", "Noise", None)
+
+    async def _thread_key(self, db: AsyncSession, r: Any, person: uuid.UUID | None) -> str:
+        if r.group_id is not None:
+            return f"g:{r.group_id}"
+        who: Any = person
+        if r.direction == "outbound":
+            who = await self._outbound_dm_person(db, r)
+        if who is None:
+            who = f"i{r.sender_identity_id.hex}" if r.sender_identity_id else "unknown"
+        return f"dm:{who}:{r.channel_id}"
+
+    async def _outbound_dm_person(self, db: AsyncSession, r: Any) -> uuid.UUID | None:
+        """Tin ĐI 1-1: người nhận theo payload (Zalo `threadId`; WhatsApp `key.remoteJid`/`remoteJidAlt`; `recipient`), không có thì tin
+        ĐẾN 1-1 gần nhất trước nó trên cùng kênh (cùng luật `outbound_to_sql`)."""
+        p = r.payload if isinstance(r.payload, dict) else {}
+        raw_key = p.get("key")
+        key: dict[str, Any] = raw_key if isinstance(raw_key, dict) else {}
+        keys = [k for k in (_bare(p.get("threadId")), _bare(key.get("remoteJid")), _bare(key.get("remoteJidAlt")),
+                            _bare(p.get("recipient"))) if k]
+        if keys:
+            pid = (await db.execute(text("""
+                SELECT person_id FROM core.person_identities
+                WHERE channel_id = :c AND NULLIF(split_part(external_id, '@', 1), '') = ANY(:k) LIMIT 1"""),
+                                    {"c": r.channel_id, "k": keys})).scalar_one_or_none()
+            if pid is not None:
+                return await live_person(db, pid)
+        pid = (await db.execute(text("""
+            SELECT pi.person_id FROM raw.events i JOIN core.person_identities pi ON pi.id = i.sender_identity_id
+            WHERE i.channel_id = :c AND i.group_id IS NULL AND i.direction = 'inbound' AND i.occurred_at <= :t
+              AND i.occurred_at > CAST(:t AS timestamptz) - interval '7 days'
+            ORDER BY i.occurred_at DESC LIMIT 1"""), {"c": r.channel_id, "t": r.occurred_at})).scalar_one_or_none()
+        return await live_person(db, pid) if pid is not None else None
+
+    async def _sender_ctx(self, db: AsyncSession, org_id: uuid.UUID, r: Any, person: uuid.UUID | None,
+                          tk: str) -> prefilter.SenderCtx:
+        """Dữ kiện THÔ cho `prefilter.enrich` (chỉ tra cứu, không phán đoán): ngày vào nhóm (`core.group_members.joined_at`), người khác
+        trùng tên hiển thị trong nhóm, STK đã biết của người này (digest có khoá trong `mem.facts`)."""
+        if person is None:
+            return prefilter.SenderCtx()
+        joined_days: float | None = None
+        collide: str | None = None
+        if r.group_id is not None:
+            jr = (await db.execute(text("""SELECT gm.joined_at, g.created_at FROM core.group_members gm JOIN core.groups g ON g.id = gm.group_id
+                                           WHERE gm.group_id = :g AND gm.person_id = :p"""), {"g": r.group_id, "p": person})).one_or_none()
+            # `joined_at` chỉ đáng tin khi người đó vào SAU lúc hệ thống bắt đầu nghe nhóm (+1 ngày dung sai): thành viên có sẵn lúc
+            # phát hiện nhóm có `joined_at` = lúc thấy lần đầu, không phải ngày vào thật ⇒ coi là "chưa biết" (None), không phải "mới vào".
+            if jr is not None and jr.joined_at is not None and jr.created_at is not None and jr.joined_at > jr.created_at + timedelta(days=1):
+                joined_days = max(0.0, (clock.now() - jr.joined_at).total_seconds() / 86400)
+            other = (await db.execute(text("""
+                SELECT p2.id FROM core.group_members gm JOIN core.persons p2 ON p2.id = gm.person_id
+                WHERE gm.group_id = :g AND p2.id <> :p AND p2.deleted_at IS NULL AND p2.merged_into_id IS NULL
+                  AND mem.fold(p2.display_name) = mem.fold(:n) LIMIT 1"""),
+                                       {"g": r.group_id, "p": person, "n": r.display_name or ""})).scalar_one_or_none() \
+                if r.display_name else None
+            collide = f"u_{other}" if other is not None else None
+        known: frozenset[str] = frozenset()
+        try:
+            rows = (await db.execute(text("""
+                SELECT f.object_value ->> 'digest' FROM mem.facts f JOIN mem.entities e ON e.id = f.subject_id
+                WHERE e.org_id = :o AND e.person_id = :p AND f.predicate = 'payment_account'
+                  AND f.status IN ('asserted', 'owner_confirmed', 'disputed')"""), {"o": org_id, "p": person})).scalars().all()
+            known = frozenset(x for x in rows if x)
+        except Exception:  # noqa: BLE001 — thiếu bảng/khoá không được chặn quét luật
+            known = frozenset()
+        first = (await db.execute(text("""
+            SELECT min(e.occurred_at) FROM raw.events e JOIN core.person_identities pi ON pi.id = e.sender_identity_id
+            WHERE e.org_id = :o AND pi.person_id = :p"""), {"o": org_id, "p": person})).scalar_one_or_none()
+        known_entity = first is not None and first <= r.occurred_at - timedelta(days=7)      # có lịch sử tin ≥ 7 ngày trước tin này
+        return prefilter.SenderCtx(sender_ref=f"u_{person}", name_collision_with=collide, joined_days=joined_days,
+                                   known_stk_digests=known, known_entity=known_entity)
+
+    # ─── lập kế hoạch: luồng nào đến hạn ───────────────────────────────────────────────────────────────────────────
+
+    async def pending_threads(self, db: AsyncSession, org_id: uuid.UUID) -> list[budget.ThreadState]:
+        rows = (await db.execute(text("""
+            SELECT s.detail ->> 'thread_key' AS tk, s.detail ->> 'gate_class' AS gc, s.fast, s.event_received_at,
+                   s.detail ->> 'next_try_at' AS nt, s.detail ->> 'hold_until' AS hu, e.sender_identity_id, e.occurred_at, e.group_id, pi.person_id
+            FROM refinery.event_state s JOIN raw.events e ON e.id = s.event_id AND e.received_at = s.event_received_at
+            LEFT JOIN core.person_identities pi ON pi.id = e.sender_identity_id
+            WHERE s.org_id = :o AND s.state = 'pending' AND s.detail ->> 'scanned' = 'true'
+              AND s.detail ->> 'thread_key' IS NOT NULL
+            ORDER BY e.occurred_at"""), {"o": org_id})).all()
+        by: dict[str, list[Any]] = {}
+        for r in rows:
+            by.setdefault(r.tk, []).append(r)
+        last = {x.thread_key: x.last_analysis_at for x in (await db.execute(text("""
+            SELECT thread_key, last_analysis_at FROM refinery.group_watermarks WHERE org_id = :o"""), {"o": org_id})).all()}
+        out: list[budget.ThreadState] = []
+        for tk, rs in by.items():
+            n = effective_count([(x.person_id or x.sender_identity_id, x.occurred_at) for x in rs])
+            gc = "safety" if any(x.gc == "safety" for x in rs) else ("gate" if any(x.gc == "gate" for x in rs) else None)
+            eff = [max((datetime.fromisoformat(v) for v in (x.nt, x.hu) if v), default=None) for x in rs]
+            held = [t for t in eff if t is not None]
+            out.append(budget.ThreadState(
+                tk, n, min(x.event_received_at for x in rs), next((x.group_id for x in rs if x.group_id), None),
+                any(x.fast for x in rs), gc, max(held) if held and len(held) == len(rs) else None, last.get(tk)))
+        return out
+
+    async def cadence_min(self, db: AsyncSession, org_id: uuid.UUID) -> int:
+        v = (await db.execute(text("SELECT settings->'intel'->>'cadence_min' FROM core.organizations WHERE id = :o"),
+                              {"o": org_id})).scalar_one_or_none()
+        try:
+            n = int(v) if v is not None else budget.DEFAULT_CADENCE_MIN
+        except ValueError:
+            n = budget.DEFAULT_CADENCE_MIN
+        return n if 1 <= n <= 24 * 60 else budget.DEFAULT_CADENCE_MIN
+
+    async def plan(self, org_id: uuid.UUID, *, manual: bool = False, only: list[str] | None = None,
+                   now: datetime | None = None) -> list[tuple[budget.ThreadState, str]]:
+        """Các luồng đến hạn (đã xếp round-robin). Cũng ghi trạng thái giãn nhịp/trần của từng luồng đang chờ (`group_watermarks`).
+        `manual` (Sếp bấm chạy) bỏ qua nhịp: mọi luồng có tin chờ đều đến hạn, vẫn qua trần."""
+        now = now or clock.now()
+        async with self.r.sm() as db:
+            states = await self.pending_threads(db, org_id)
+            cadence = await self.cadence_min(db, org_id)
+            caps, usage = await budget.load_caps(db, org_id), await budget.load_usage(db, org_id, now)
+            paid = caps.budget_vnd <= 0 and await budget.paid_route_possible(db, org_id)
+            due: list[tuple[budget.ThreadState, str]] = []
+            notes: list[budget.Decision] = []
+            for ts in states:
+                if only is not None and ts.thread_key not in only:
+                    continue
+                d = budget.decide(budget.KIND_NORMAL, ts.thread_key, caps, usage, paid_route=paid)
+                await budget.sync_thread_state(db, org_id, ts.thread_key, d, group_id=ts.group_id, now=now)
+                reason = budget.due_reason(ts, now, cadence_min=cadence, stretched=d.stretched)
+                if reason is None and (manual or only is not None) and ts.n > 0:
+                    reason = ts.gate_class or "manual"
+                if reason is None:
+                    continue
+                dd = budget.decide(budget.kind_for(reason), ts.thread_key, caps, usage, paid_route=paid)
+                if not dd.allow and dd.mode in (budget.MODE_RULES_ONLY, budget.MODE_FREE):
+                    # Không có lượt nào được phép ⇒ KHÔNG tạo run rỗng: giữ tin tới 00:00 giờ VN (hết trần) / 15 phút (chế độ miễn phí).
+                    await self._hold(db, org_id, ts.thread_key, dd, now=now)
+                    notes.append(dd)
+                    continue
+                due.append((ts, reason))
+            await db.commit()
+        for dd in notes[:1]:
+            await self.notify(org_id, dd, caps)
+        return budget.order_threads(due)
+
+    async def _hold(self, db: AsyncSession, org_id: uuid.UUID, tk: str, dec: budget.Decision, *, now: datetime | None = None) -> None:
+        """Giữ tin chờ của luồng vì trần/chế độ miễn phí: `detail.hold_until` (khác `next_try_at`: Sếp bấm chạy tay vẫn xét lại)."""
+        now = now or clock.now()
+        until = budget.next_vn_midnight(now) if dec.mode == budget.MODE_RULES_ONLY else now + FREE_MODE_RETRY
+        await db.execute(text("""UPDATE refinery.event_state SET detail = detail || jsonb_build_object('hold_until', CAST(:u AS text))
+                                 WHERE org_id = :o AND state = 'pending' AND detail ->> 'thread_key' = :t"""),
+                         {"o": org_id, "t": tk, "u": until.isoformat()})
+
+    async def run(self, org_id: uuid.UUID, st: RunStats, *, trigger: str, threads: list[str] | None = None) -> None:
+        """Một lượt chạy: quét luật (a) cho tin mới, rồi mỗi luồng đến hạn MỘT lượt phân tích (tuần tự, round-robin)."""
+        deadline = time.monotonic() + self.r.time_budget_s
+        lock = f"gh:refinery:groups:{org_id}"
+        token = uuid.uuid4().hex                     # khoá có chủ: chỉ chủ mới gia hạn/xoá (lượt chạy quá TTL không xoá nhầm khoá của lượt khác)
+        if not await self.r.redis.set(lock, token, nx=True, ex=GROUP_LOCK_S):
+            return                                   # đang có lượt theo luồng chạy cho tổ chức này
+        try:
+            await self.ensure_scanned(org_id)
+            plan = await self.plan(org_id, manual=trigger == "manual", only=threads)
+            for _pass in range(MAX_PASSES):
+                for ts, reason in plan:
+                    if deadline - time.monotonic() < self.r.part_worst_s:
+                        return
+                    await self._renew(lock, token)
+                    await self.turn(org_id, st, ts, reason)
+                    await self.r._progress(org_id, st)
+                # Ứng viên cổng/an toàn/đường nhanh đến TRONG lúc đang chạy không phải đợi lượt sau (đường nhanh ≤ 5 phút).
+                await self.ensure_scanned(org_id)
+                plan = [(ts, r) for ts, r in await self.plan(org_id) if r in ("safety", "gate", "fast")]
+                if not plan:
+                    break
+        finally:
+            await self.r.redis.eval(_UNLOCK_LUA, 1, lock, token)  # type: ignore[misc]
+
+    async def _renew(self, lock: str, token: str) -> None:
+        await self.r.redis.eval(_RENEW_LUA, 1, lock, token, str(GROUP_LOCK_S))  # type: ignore[misc]
+
+    # ─── một lượt ──────────────────────────────────────────────────────────────────────────────────────────────────
+
+    async def alert_once(self, org_id: uuid.UUID, key: str, *, alert_type: str, priority: str, title: str, summary: str,
+                         suggested: str) -> None:
+        start, end = budget.day_start()
+        async with self.r.sm() as db:
+            # Một lần/ngày VN: nguồn sự thật là chính `biz.alerts` (không phụ thuộc Redis dùng chung).
+            if (await db.execute(text("""SELECT 1 FROM biz.alerts WHERE org_id = :o AND alert_type = :t AND created_at >= :s
+                                         AND created_at < :e LIMIT 1"""), {"o": org_id, "t": alert_type, "s": start, "e": end})).first():
+                return
+            await raise_alert(db, org_id, alert_type=alert_type, priority=priority, title=title, summary=summary,
+                              suggested=suggested, redis=self.r.redis)
+            await db.commit()
+
+    async def notify(self, org_id: uuid.UUID, dec: budget.Decision, caps: budget.Caps) -> None:
+        """Báo Ryan (một lần/ngày mỗi loại) khi trần chạm: chế độ miễn phí (P2), lượt an toàn vượt trần/chống lạm dụng (P1)."""
+        if dec.mode == budget.MODE_FREE:
+            await self.alert_once(org_id, "free_mode", alert_type="intel_free_mode", priority="P2",
+                                  title="Tình báo đang ở chế độ miễn phí",
+                                  summary="Có thể rơi vào nguồn AI tính tiền theo token trong khi trần VND = 0; chỉ quét luật.",
+                                  suggested="Kiểm tra nguồn AI của core.refinery: chỉ dùng gói thuê bao (CLI).")
+        abuse = [r for r in dec.reasons if r in ("sender_cap", "thread_safety_cap", "safety_hard_cap", "safety_absolute_cap")]
+        if dec.kind == budget.KIND_SAFETY and abuse:
+            await self.alert_once(org_id, "safety_hard_cap", alert_type="intel_safety_abuse", priority="P1",
+                                  title="Lượt an toàn vượt trần chống lạm dụng",
+                                  summary=f"Dồn tin an toàn/lừa đảo ({', '.join(abuse)}); người gửi vượt trần chỉ chạy luật cứng.",
+                                  suggested="Xem luồng đó trong Hộp thư; có thể là kẻ spam từ khoá để đốt lượt.")
+        elif dec.over_safety_cap:
+            await self.alert_once(org_id, "safety_cap", alert_type="intel_safety_cap", priority="P1",
+                                  title="Vượt trần lượt an toàn trong ngày",
+                                  summary=f"Lượt lừa đảo/an toàn hôm nay đã vượt {caps.safety_call_cap}. Vẫn chạy, không cắt.",
+                                  suggested="Xem Hệ thống › Chi phí AI; chỉnh intel_safety_call_cap nếu cần.")
+
+    async def _safety_gate_senders(self, db: AsyncSession, org_id: uuid.UUID, tk: str, usage_hard: bool) -> tuple[list[str], list[str]]:
+        """(được phép, bị chặn) trong số NGƯỜI GỬI tin ứng viên an toàn đang chờ của luồng [Gen chọn, chống lạm dụng]. Bị chặn khi: (a) đã
+        có ≥ `SAFETY_PER_SENDER_HOUR` lượt an toàn trong giờ qua (đếm từ dấu `safety_turns` đóng lúc nhận tin, KỂ CẢ lượt lỗi); hoặc
+        (b) đã chạm trần cứng 3 × `intel_safety_call_cap` (`usage_hard`) VÀ là người lạ (chưa có lịch sử tin ≥ 7 ngày)."""
+        rows = (await db.execute(text("""
+            SELECT DISTINCT COALESCE(pi.person_id::text, e.sender_identity_id::text, 'x') AS who
+            FROM refinery.event_state s JOIN raw.events e ON e.id = s.event_id AND e.received_at = s.event_received_at
+            LEFT JOIN core.person_identities pi ON pi.id = e.sender_identity_id
+            WHERE s.org_id = :o AND s.state = 'pending' AND s.detail ->> 'thread_key' = :t AND s.detail ->> 'gate_class' = 'safety'"""),
+                                  {"o": org_id, "t": tk})).scalars().all()
+        since = clock.now() - timedelta(hours=1)
+        ok: list[str] = []
+        blocked: list[str] = []
+        for who in rows:
+            n = (await db.execute(text("""
+                SELECT count(DISTINCT elem ->> 'a')
+                FROM refinery.event_state s JOIN raw.events e ON e.id = s.event_id AND e.received_at = s.event_received_at
+                LEFT JOIN core.person_identities pi ON pi.id = e.sender_identity_id
+                CROSS JOIN LATERAL jsonb_array_elements(COALESCE(s.detail -> 'safety_turns', '[]'::jsonb)) elem
+                WHERE s.org_id = :o AND COALESCE(pi.person_id::text, e.sender_identity_id::text, 'x') = :w
+                  AND CAST(elem ->> 't' AS timestamptz) >= :since"""), {"o": org_id, "w": who, "since": since})).scalar_one()
+            over = int(n) >= budget.SAFETY_PER_SENDER_HOUR
+            if usage_hard and not over:
+                first = (await db.execute(text("""
+                    SELECT min(e.occurred_at) FROM raw.events e LEFT JOIN core.person_identities pi ON pi.id = e.sender_identity_id
+                    WHERE e.org_id = :o AND COALESCE(pi.person_id::text, e.sender_identity_id::text, 'x') = :w"""),
+                                        {"o": org_id, "w": who})).scalar_one()
+                over = first is None or first > clock.now() - timedelta(days=7)
+            (blocked if over else ok).append(who)
+        return ok, blocked
+
+    async def turn(self, org_id: uuid.UUID, st: RunStats, ts: budget.ThreadState, reason: str) -> None:
+        tk = ts.thread_key
+        async with self.r.sm() as db:
+            caps, usage = await budget.load_caps(db, org_id), await budget.load_usage(db, org_id)
+            paid = caps.budget_vnd <= 0 and await budget.paid_route_possible(db, org_id)
+            kind0 = budget.kind_for(reason)
+            blocked: list[str] = []
+            sender_over = False
+            if kind0 == budget.KIND_SAFETY:
+                hard = usage.calls.get(budget.KIND_SAFETY, 0) >= budget.SAFETY_HARD_FACTOR * max(caps.safety_call_cap, 1)
+                ok, blocked = await self._safety_gate_senders(db, org_id, tk, hard)
+                sender_over = bool(blocked) and not ok
+                if usage.calls.get(budget.KIND_SAFETY, 0) >= budget.SAFETY_ABSOLUTE_FACTOR * max(caps.safety_call_cap, 1):
+                    ok, blocked = [], ok + blocked                       # chốt chặn tuyệt đối: hạ MỌI người gửi (luật cứng vẫn tạo ứng viên)
+            dec = budget.decide(kind0, tk, caps, usage, sender_over=sender_over, paid_route=paid)
+            await budget.sync_thread_state(db, org_id, tk, dec, group_id=ts.group_id)
+            if blocked:
+                # Hạ CHỈ tin của những người gửi đã vượt trần (đường luật cứng: ứng viên vẫn ở event_state.detail.cands, T1 báo theo luật).
+                await db.execute(text("""UPDATE refinery.event_state s SET fast = false, detail = s.detail || '{"gate_class": "hard"}'::jsonb
+                                         FROM raw.events e LEFT JOIN core.person_identities pi ON pi.id = e.sender_identity_id
+                                         WHERE s.org_id = :o AND s.state = 'pending' AND s.detail ->> 'thread_key' = :t
+                                           AND s.detail ->> 'gate_class' = 'safety' AND e.id = s.event_id AND e.received_at = s.event_received_at
+                                           AND COALESCE(pi.person_id::text, e.sender_identity_id::text, 'x') = ANY(:w)"""),
+                                 {"o": org_id, "t": tk, "w": blocked})
+            if not dec.allow and dec.mode in (budget.MODE_RULES_ONLY, budget.MODE_FREE):
+                await self._hold(db, org_id, tk, dec)
+            await db.commit()
+        await self.notify(org_id, replace(dec, reasons=(*dec.reasons, "sender_cap")) if blocked and dec.allow else dec, caps)
+        if not dec.allow:
+            return                                   # chỉ luật (a); tin nằm chờ (hết trần ⇒ đợi tới 00:00 giờ VN)
+        kind = dec.kind
+        aid = uuid.uuid4()
+        claimed = await self._claim(org_id, st.run_id, tk, kind, aid)
+        if not claimed:
+            return
+        evs = [m for b in claimed for m in b.all_events]
+        st.total += len(evs)
+        try:
+            async with self.r.sm() as db:
+                window, pack, profile = await self._window(db, org_id, tk, claimed)
+        except Exception as exc:  # noqa: BLE001 — dựng ngữ cảnh lỗi: trả tin về pending, không mất tin
+            log.exception("Dựng cửa sổ luồng %s lỗi", tk)
+            await self._release(evs, st, f"dựng ngữ cảnh lỗi: {type(exc).__name__}", backoff=True)
+            return
+        since = datetime.now(UTC) - timedelta(seconds=2)
+        async with self.r.sm() as db:
+            secrets = await system_secrets(db, org_id)
+        try:
+            analysis = await asyncio.wait_for(
+                self.analyze(window, pack, profile, pack.policy, call=self._call(org_id, kind), secrets=secrets),
+                timeout=max(30.0, 2 * AGY_BACKGROUND_TIMEOUT_S + 30))
+        except (ModelUnavailable, TimeoutError) as exc:
+            # Lừa đảo/an toàn: nếu gói thuê bao từ chối thì ứng viên luật cứng đã nằm ở event_state.detail.cands (T1 đọc); tin giữ chờ, lùi nhịp.
+            await self._release(evs, st, f"model không khả dụng: {exc}"[:300], backoff=True)
+            await self._record_failed(org_id, tk, aid, window, "model_unavailable", st, kind=kind, since=since)
+            st.status, st.error = "failed", f"Model không khả dụng — {len(evs)} bản ghi giữ chờ"
+            return
+        except l3.ContractError as exc:
+            await self._release(evs, st, "contract_error: " + "; ".join(exc.errors[:3]), count_error=True, backoff=True)
+            await self._record_failed(org_id, tk, aid, window, "contract_error", st, errors=exc.errors, model=exc.model,
+                                      kind=kind, since=since)
+            return
+        try:
+            await self._write(org_id, st, tk, aid, kind, claimed, window, pack, profile, analysis, since, secrets)
+        except Exception as exc:  # noqa: BLE001 — ghi lỗi ⇒ rollback cả giao dịch, tin về pending
+            log.exception("Ghi lượt phân tích %s lỗi", tk)
+            await self._release(evs, st, f"ghi lượt lỗi: {type(exc).__name__}", backoff=True)
+            await self._record_failed(org_id, tk, aid, window, "write_failed", st, kind=kind, since=since)
+
+    def _call(self, org_id: uuid.UUID, kind: str) -> Callable[[list[Message]], Awaitable[Any]]:
+        async def call(messages: list[Message]) -> Any:
+            routed = await self.r.router.generate(org_id, agent_key=AGENT_KEY, purpose=budget.PURPOSE[kind], messages=messages,
+                                                  json_mode=True, temperature=0.0)
+            return l3.ModelReply(routed.text, routed.model, routed.tokens_in, routed.tokens_out)
+        return call
+
+    # ─── nhận tin của luồng ────────────────────────────────────────────────────────────────────────────────────────
+
+    async def _claim(self, org_id: uuid.UUID, run_id: uuid.UUID, tk: str, kind: str = budget.KIND_NORMAL,
+                     aid: uuid.UUID | None = None) -> list[GEv]:
+        """Nhận tối đa một lượt tin MỚI của `tk` (`FOR UPDATE SKIP LOCKED`): theo thời gian, ≤ 60 tin / 12.000 ký tự, không cắt giữa chuỗi
+        trả lời; tin của người xả tin gộp thành một khối. Lượt `safety`/`gate` nhận tin ỨNG VIÊN trước (kèm 2 tin ngữ cảnh trước/sau và
+        chuỗi trả lời của nó) — tin tồn đọng thường không chen vào và không tiêu trần an toàn; chúng thành lượt thường. Lượt an toàn
+        đóng dấu `safety_turns` lên tin ứng viên (đếm theo người gửi, kể cả lượt lỗi). Trả các khối (đầu khối = tin đại diện)."""
+        want = {budget.KIND_SAFETY: "safety", budget.KIND_GATE: "gate"}.get(kind)
+        async with self.r.sm() as db:
+            rows = (await db.execute(text("""
+                SELECT s.event_id, s.event_received_at, s.attempts, e.seq, e.occurred_at, e.body_text, e.kind, e.direction,
+                       e.group_id, e.channel_id, e.sender_identity_id, e.external_msg_id, e.payload, pi.person_id,
+                       p.display_name, p.code AS person_code, s.detail ->> 'gate_class' AS gc
+                FROM refinery.event_state s JOIN raw.events e ON e.id = s.event_id AND e.received_at = s.event_received_at
+                LEFT JOIN core.person_identities pi ON pi.id = e.sender_identity_id
+                LEFT JOIN core.persons p ON p.id = pi.person_id
+                WHERE s.org_id = :o AND s.state = 'pending' AND s.detail ->> 'thread_key' = :t
+                  AND (s.detail ->> 'next_try_at' IS NULL OR CAST(s.detail ->> 'next_try_at' AS timestamptz) <= :now)
+                ORDER BY COALESCE(s.detail ->> 'gate_class' = CAST(:want AS text), false) DESC, e.occurred_at, e.seq
+                LIMIT 500 FOR UPDATE OF s SKIP LOCKED"""),
+                                     {"o": org_id, "t": tk, "now": clock.now(), "want": want})).all()
+            evs: list[GEv] = []
+            for r in rows:
+                pid, name, code = r.person_id, r.display_name, r.person_code
+                if pid is not None:
+                    live = await live_person(db, pid)
+                    if live != pid:
+                        pid = live
+                        lp = (await db.execute(text("SELECT display_name, code FROM core.persons WHERE id = :i"), {"i": live})).one()
+                        name, code = lp.display_name, lp.code
+                pl = r.payload
+                evs.append(GEv(r.event_id, r.event_received_at, r.occurred_at, r.seq, r.kind, r.body_text or "", r.direction,
+                               r.group_id, r.channel_id, r.sender_identity_id, pid, name, code, r.external_msg_id or "",
+                               str(_payload_get(pl, *REPLY_KEYS)) if _payload_get(pl, *REPLY_KEYS) else None,
+                               bool(_payload_get(pl, *FORWARD_KEYS)), r.attempts, r.gc))
+            evs.sort(key=lambda e: (e.occurred_at, e.seq))
+            cand_ids: list[uuid.UUID] = []
+            if want is not None and any(e.gate_class == want for e in evs):
+                keep: set[int] = set()
+                by_ext = {e.ext_id: i for i, e in enumerate(evs) if e.ext_id}
+                for i, e in enumerate(evs):
+                    if e.gate_class != want:
+                        continue
+                    cand_ids.append(e.event_id)
+                    keep.update(j for j in range(max(0, i - 2), min(len(evs), i + 3)) if evs[j].gate_class != "hard")
+                    if e.reply_ext and e.reply_ext in by_ext:
+                        keep.add(by_ext[e.reply_ext])
+                chosen = take_window([evs[i] for i in sorted(keep)])
+                if not any(e.gate_class == want for e in chosen):       # ứng viên không bao giờ bị cắt khỏi lượt của chính nó
+                    chosen = [e for e in evs if e.gate_class == want][:MAX_NEW_EVENTS]
+            else:
+                chosen = take_window(evs)
+            if not chosen:
+                return []
+            await db.execute(text("""
+                UPDATE refinery.event_state s SET state = 'processing', run_id = :run, updated_at = now(),
+                       attempts = s.attempts + 1
+                FROM unnest(CAST(:ids AS uuid[]), CAST(:rs AS timestamptz[])) AS u(id, r)
+                WHERE s.event_id = u.id AND s.event_received_at = u.r"""),
+                             {"run": run_id, "ids": [e.event_id for e in chosen], "rs": [e.received_at for e in chosen]})
+            if kind == budget.KIND_SAFETY and aid is not None:
+                stamp = orjson.dumps([{"a": str(aid), "t": clock.now().isoformat()}]).decode()
+                await db.execute(text("""
+                    UPDATE refinery.event_state SET detail = detail || jsonb_build_object(
+                        'safety_turns', COALESCE(detail -> 'safety_turns', '[]'::jsonb) || CAST(:st AS jsonb))
+                    WHERE org_id = :o AND event_id = ANY(:ids) AND detail ->> 'gate_class' = 'safety'"""),
+                                 {"o": org_id, "st": stamp, "ids": [e.event_id for e in chosen if e.gate_class == "safety"]})
+            await db.commit()
+        return merge_bursts(chosen)
+
+    async def _release(self, evs: list[GEv], st: RunStats, reason: str, *, count_error: bool = False,
+                       backoff: bool = False) -> None:
+        """Trả tin về `pending` (hoàn lần thử, trừ khi `count_error`); sai hợp đồng đủ `MAX_ATTEMPTS` lần ⇒ `error`. `backoff` lùi
+        `next_try_at` để không dội lại model mỗi 5 giây."""
+        nxt = (clock.now() + RETRY_BACKOFF).isoformat() if backoff else None
+        async with self.r.sm() as db:
+            for ev in evs:
+                attempts = (await db.execute(text("SELECT attempts FROM refinery.event_state WHERE event_id = :e AND event_received_at = :r"),
+                                             {"e": ev.event_id, "r": ev.received_at})).scalar_one()
+                final = count_error and attempts >= MAX_ATTEMPTS
+                d: dict[str, Any] = {"last_error": reason[:300]}
+                if nxt:
+                    d["next_try_at"] = nxt
+                await db.execute(text("""
+                    UPDATE refinery.event_state SET state = :s, updated_at = now(),
+                           attempts = CASE WHEN :refund THEN GREATEST(attempts - 1, 0) ELSE attempts END,
+                           detail = detail || CAST(:d AS jsonb)
+                    WHERE event_id = :e AND event_received_at = :r"""),
+                                 {"s": "error" if final else "pending", "e": ev.event_id, "r": ev.received_at,
+                                  "refund": not count_error, "d": orjson.dumps(d).decode()})
+                if final:
+                    st.errors += 1
+                    st.processed += 1
+            await db.commit()
+
+    async def _record_failed(self, org_id: uuid.UUID, tk: str, aid: uuid.UUID, window: Any, code: str, st: RunStats, *,
+                             kind: str, since: datetime, errors: list[str] | None = None, model: str | None = None) -> None:
+        """Dòng `refinery.analyses` cho lượt lỗi (CHỈ mã lỗi, không nội dung tin) + gắn thẻ luồng cho các dòng sổ chi phí của lượt đó
+        (lượt lỗi hợp đồng vẫn tốn lượt gọi: phải tính vào trần của luồng)."""
+        try:
+            async with self.r.sm() as db:
+                await db.execute(text("""
+                    INSERT INTO refinery.analyses (id, org_id, thread_key, run_id, window_from, window_to, new_n, context_n, model,
+                                                   contract_version, stage, status, errors, finished_at)
+                    VALUES (:id, :o, :t, :run, :wf, :wt, :nn, :cn, :m, 'brain-out/1', 'extract', :s, CAST(:er AS jsonb), now())"""),
+                                 {"id": aid, "o": org_id, "t": tk, "run": st.run_id,
+                                  "wf": window.new_events[0].sent_at if window.new_events else None,
+                                  "wt": window.new_events[-1].sent_at if window.new_events else None,
+                                  "nn": len(window.new_events), "cn": len(window.context_events), "m": model,
+                                  "s": "contract_error" if code == "contract_error" else "failed",
+                                  "er": orjson.dumps([{"code": code}, *({"code": e} for e in (errors or [])[:12])]).decode()})
+                await ai_cost.tag_calls(db, org_id, thread_key=tk, analysis_id=aid, purpose=budget.PURPOSE[kind], since=since)
+                await db.commit()
+        except Exception:  # noqa: BLE001 — sổ phân tích là phụ; không che lỗi gốc
+            log.warning("Không ghi được refinery.analyses cho lượt lỗi", exc_info=True)
+
+    # ─── dựng cửa sổ ───────────────────────────────────────────────────────────────────────────────────────────────
+
+    def _gevent(self, e: GEv, *, context: bool = False) -> Any:
+        return l3.GroupEvent(message_id=e.message_id, sent_at=e.occurred_at, body=e.body or None, sender_person_id=e.person_id,
+                             sender_name=e.person_name, kind=e.kind or "text", reply_to=None, forwarded=e.forwarded,
+                             raw_event_id=e.event_id, received_at=e.received_at, context=context)
+
+    async def _window(self, db: AsyncSession, org_id: uuid.UUID, tk: str, blocks: list[GEv]) -> tuple[Any, Any, Any]:
+        from gh.biz.mem import predicates, profile_read, retrieve
+
+        new_events = [self._gevent(b) for b in blocks]
+        by_ext = {b.ext_id: b.message_id for b in blocks if b.ext_id}
+        for ge, b in zip(new_events, blocks, strict=True):
+            if b.reply_ext and b.reply_ext in by_ext and by_ext[b.reply_ext] != b.message_id:
+                ge.reply_to = by_ext[b.reply_ext]
+        first = min(b.occurred_at for b in blocks)
+        ctx_events = await self._context(db, org_id, tk, blocks, first)
+        all_ids = [m.event_id for b in blocks for m in b.all_events] + [c.raw_event_id for c in ctx_events if c.raw_event_id]
+        media: dict[str, list[Any]] = {}
+        for r in (await db.execute(text("""
+            SELECT raw_event_id, kind, text FROM clean.media_texts
+            WHERE org_id = :o AND raw_event_id = ANY(:ids) AND status = 'ok' AND text IS NOT NULL ORDER BY created_at"""),
+                                  {"o": org_id, "ids": all_ids})).all():
+            media.setdefault(f"m_{r.raw_event_id}", []).append(l3.MediaText(f"m_{r.raw_event_id}", r.kind, r.text))
+        unreadable = {"voice": 0, "image": 0, "file": 0}
+        for r in (await db.execute(text("""
+            SELECT a.event_id, a.mime FROM raw.attachments a
+            WHERE a.org_id = :o AND a.event_id = ANY(:ids)"""), {"o": org_id, "ids": [m.event_id for b in blocks for m in b.all_events]})).all():
+            if f"m_{r.event_id}" in media:
+                continue
+            unreadable["voice" if str(r.mime).startswith("audio/") else "image" if str(r.mime).startswith("image/") else "file"] += 1
+        gname = None
+        if (gid := thread_group(tk)) is not None:
+            gname = (await db.execute(text("SELECT name FROM core.groups WHERE id = :g"), {"g": gid})).scalar_one_or_none()
+        pack = await retrieve.pack(db, org_id, tk, [{"sender_person_id": b.person_id, "raw_event_id": b.event_id, "text": b.body}
+                                                    for b in blocks], now=clock.now())
+        profile = await profile_read.snapshot(db, org_id)
+        preds = [(p.code, p.description_vi) for p in await predicates.all_predicates(db)]
+        window = l3.GroupWindow(thread_ref=tk, new_events=new_events, context_events=ctx_events, media_texts=media,
+                                unreadable=unreadable, now=clock.now(), group_name=gname, predicates=preds)
+        return window, pack, profile
+
+    async def _context(self, db: AsyncSession, org_id: uuid.UUID, tk: str, blocks: list[GEv], first: datetime) -> list[Any]:
+        """Cửa sổ gần: tối đa 30 tin VÀ trong 24 giờ trước tin mới đầu tiên, đã xử lý (không `pending`/`processing`), CÙNG luồng."""
+        gid = thread_group(tk)
+        params: dict[str, Any] = {"o": org_id, "first": first, "lo": first - CONTEXT_WINDOW, "n": CONTEXT_EVENTS}
+        if gid is not None:
+            where = "e.group_id = :g"
+            params["g"] = gid
+        else:
+            pid, chan = thread_dm(tk)
+            if chan is None:
+                return []
+            ids: list[uuid.UUID] = []
+            ext: list[str] = []
+            if pid is not None:
+                for r in (await db.execute(text("SELECT id, external_id FROM core.person_identities WHERE person_id = :p AND channel_id = :c"),
+                                           {"p": pid, "c": chan})).all():
+                    ids.append(r.id)
+                    if (b := _bare(r.external_id)):
+                        ext.append(b)
+            if not ids:
+                return []
+            where = (f"e.group_id IS NULL AND e.channel_id = :c AND (e.sender_identity_id = ANY(:ids) OR "
+                     f"{outbound_to_sql('e', 'CAST(:ids AS uuid[])', 'CAST(:ext AS text[])')})")
+            params |= {"c": chan, "ids": ids, "ext": ext}
+        rows = (await db.execute(text(f"""
+            SELECT e.id, e.received_at, e.occurred_at, e.kind, e.body_text, e.payload, e.external_msg_id, e.sender_identity_id,
+                   pi.person_id, p.display_name
+            FROM raw.events e JOIN refinery.event_state s ON s.event_id = e.id AND s.event_received_at = e.received_at
+            LEFT JOIN core.person_identities pi ON pi.id = e.sender_identity_id
+            LEFT JOIN core.persons p ON p.id = pi.person_id
+            WHERE e.org_id = :o AND {where} AND e.occurred_at < :first AND e.occurred_at >= :lo
+              AND s.state NOT IN ('pending', 'processing')
+            ORDER BY e.occurred_at DESC LIMIT :n"""), params)).all()  # noqa: S608 — `where` là hằng + outbound_to_sql nội bộ
+        out = [l3.GroupEvent(message_id=f"m_{r.id}", sent_at=r.occurred_at, body=r.body_text or None, sender_person_id=r.person_id,
+                             sender_name=r.display_name, kind=r.kind or "text", forwarded=bool(_payload_get(r.payload, *FORWARD_KEYS)),
+                             raw_event_id=r.id, received_at=r.received_at, context=True) for r in rows]
+        out.reverse()
+        return out
+
+    # ─── ghi: MỘT giao dịch ngắn ───────────────────────────────────────────────────────────────────────────────────
+
+    async def _write(self, org_id: uuid.UUID, st: RunStats, tk: str, aid: uuid.UUID, kind: str, blocks: list[GEv], window: Any,
+                     pack: Any, profile: Any, analysis: Any, since: datetime, secrets: tuple[str, ...] = ()) -> None:
+        from gh.biz.mem import predicates
+
+        evs = [m for b in blocks for m in b.all_events]
+        persons = {b.person_id for b in blocks if b.person_id} | {c.sender_person_id for c in window.context_events if c.sender_person_id}
+        async with self.r.sm() as db:
+            known_preds = await predicates.codes(db)
+        verified = self.verify(analysis.out, window.all_events, window.media_texts, now=clock.now(), tz=window.tz, thread_ref=tk,
+                               profile_fact_ids=profile.fact_ids(), known_person_refs={f"u_{p}" for p in persons},
+                               known_predicates=known_preds, secrets=secrets)
+        block_of = {m.event_id: b for b in blocks for m in b.all_events}
+        cited: dict[uuid.UUID, str] = {}                          # event_id → nhãn (kind) của đơn vị đầu tiên trích tin đó
+        unit_rows: list[tuple[uuid.UUID, datetime, str]] = []
+        errors: list[dict[str, Any]] = [{"code": e} for e in verified.errors[:12]]
+        async with self.r.sm() as db:
+            await db.execute(text("""
+                INSERT INTO refinery.analyses (id, org_id, thread_key, run_id, window_from, window_to, new_n, context_n, facts_in_n,
+                                               profile_version, contract_version, model, tokens_in, tokens_out, stage, status, errors,
+                                               started_at, finished_at)
+                VALUES (:id, :o, :t, :run, :wf, :wt, :nn, :cn, :fn, :pv, 'brain-out/1', :m, :ti, :to, 'extract', 'ok',
+                        CAST(:er AS jsonb), :st, now())"""),
+                             {"id": aid, "o": org_id, "t": tk, "run": st.run_id, "wf": window.new_events[0].sent_at,
+                              "wt": window.new_events[-1].sent_at, "nn": len(evs), "cn": len(window.context_events),
+                              "fn": len(pack.facts) + len(pack.related), "pv": getattr(pack, "profile_version", None),
+                              "m": analysis.model, "ti": analysis.tokens_in, "to": analysis.tokens_out, "er": "[]", "st": since})
+            fact_ins: list[Any] = []
+            unit_ids: dict[str, tuple[uuid.UUID, datetime]] = {}
+            for vu in verified.units:
+                u = vu.unit
+                if vu.status != "ok":
+                    errors.append({"code": "unit_absent", "unit_ref": u.unit_ref})
+                    continue
+                vqs = vu.verified_quotes
+                first_q = vqs[0]
+                first_ev = next((e for e in evs if e.event_id == first_q.raw_event_id), evs[0])
+                observed = vu.event_at or vu.msg_at or first_q.sent_at or first_ev.occurred_at
+                uid = (await db.execute(text("""
+                    INSERT INTO clean.meaning_units (org_id, observed_at, group_id, person_id, event_type, side, conclusion, entities,
+                                                     confidence, run_id, extractor_version, kind_hint, analysis_id, flags, gate_candidate,
+                                                     level_hint, harm)
+                    VALUES (:o, :obs, :g, :p, 'GroupUnit', NULL, :c, CAST(:ent AS jsonb), :conf, :run, :ev, :kh, :a, CAST(:fl AS jsonb),
+                            :gc, :lh, CAST(:hm AS jsonb))
+                    RETURNING id"""),
+                                         {"o": org_id, "obs": observed, "g": first_ev.group_id, "p": first_ev.person_id,
+                                          "c": u.summary[:400], "ent": orjson.dumps({"unit_ref": u.unit_ref, "event_ref": u.event_ref,
+                                                                                    "kind": u.kind}).decode(),
+                                          "conf": UNVERIFIED_CONFIDENCE, "run": st.run_id, "ev": l3.EXTRACTOR_VERSION, "kh": u.kind,
+                                          "a": aid, "fl": orjson.dumps(u.flags.model_dump()).decode(), "gc": u.gate_candidate,
+                                          "lh": u.level_hint if u.level_hint in ("red", "amber", "grey") else None,
+                                          "hm": orjson.dumps(u.harm.model_dump()).decode() if u.harm is not None else None})).scalar_one()
+                unit_ids[u.unit_ref] = (uid, observed)
+                unit_rows.append((uid, observed, u.summary[:400]))
+                st.unit_ids.append(str(uid))
+                for q in vqs:
+                    await db.execute(text("""
+                        INSERT INTO clean.evidence (meaning_unit_id, meaning_observed_at, raw_event_id, raw_received_at, quote, quote_status,
+                                                    source_field, span_start, span_end, verified_at, extractor_version)
+                        VALUES (:m, :mo, :e, :r, :q, 'verified', :sf, :ss, :se, now(), :ev) ON CONFLICT DO NOTHING"""),
+                                     {"m": uid, "mo": observed, "e": q.raw_event_id, "r": next((e.received_at for e in evs
+                                                                                               if e.event_id == q.raw_event_id), None),
+                                      "q": q.text[:280], "sf": q.field, "ss": q.span_start, "se": q.span_end, "ev": l3.EXTRACTOR_VERSION})
+                    if q.raw_event_id is not None and q.raw_event_id not in cited:
+                        cited[q.raw_event_id] = u.kind or "GroupUnit"
+                for pm in u.people:
+                    await self._mention(db, org_id, uid, observed, first_ev, pm, persons)
+                await self._notebook(db, org_id, uid, u, first_ev)
+            fact_ins = await self._facts(db, org_id, verified, unit_ids, evs, persons)
+            if fact_ins:
+                res = await facts_mod.assert_facts(db, fact_ins, analysis_id=aid)
+                st.facts_written += len(res.written)
+                errors.extend(res.errors)
+            # trạng thái từng tin: có đơn vị trích ⇒ clean; còn lại ⇒ discarded (không có sự việc)
+            for e in evs:
+                head = block_of[e.event_id]
+                is_cited = any(x.event_id in cited for x in head.all_events)
+                label = next((cited[x.event_id] for x in head.all_events if x.event_id in cited), None)
+                await self.r._set_state(db, e, "clean" if is_cited else "discarded", st.run_id, label=label if is_cited else "Noise",
+                                        confidence=UNVERIFIED_CONFIDENCE if is_cited else None,
+                                        detail={"analysis_id": str(aid), "model": analysis.model, "thread_key": tk,
+                                                **({} if is_cited else {"discarded_by": "group_no_unit"})})
+                st.processed += 1
+                if is_cited:
+                    st.clean += 1
+                else:
+                    st.noise += 1
+            errors.extend({"code": k, "n": n} for k, n in sorted(verified.counters.items()))        # bộ đếm lỗi kiểm (mã + số, không nội dung)
+            if errors:
+                await db.execute(text("UPDATE refinery.analyses SET errors = CAST(:e AS jsonb) WHERE id = :i"),
+                                 {"e": orjson.dumps(errors).decode(), "i": aid})
+            await db.execute(text("""
+                INSERT INTO refinery.group_watermarks (org_id, thread_key, group_id, last_received_at, last_event_id, last_analysis_at,
+                                                       pending_n)
+                VALUES (:o, :t, :g, :lr, :le, :now, (SELECT count(*) FROM refinery.event_state WHERE org_id = :o AND state = 'pending'
+                                                      AND detail ->> 'thread_key' = :t))
+                ON CONFLICT (org_id, thread_key) DO UPDATE SET last_received_at = EXCLUDED.last_received_at,
+                       last_event_id = EXCLUDED.last_event_id, last_analysis_at = EXCLUDED.last_analysis_at,
+                       pending_n = EXCLUDED.pending_n, group_id = COALESCE(refinery.group_watermarks.group_id, EXCLUDED.group_id)"""),
+                             {"o": org_id, "t": tk, "g": thread_group(tk), "lr": max(e.received_at for e in evs),
+                              "le": evs[-1].event_id, "now": clock.now()})
+            await ai_cost.tag_calls(db, org_id, thread_key=tk, analysis_id=aid, purpose=budget.PURPOSE[kind], since=since)
+            await db.commit()
+        for e in evs:
+            head = block_of[e.event_id]
+            ok = any(x.event_id in cited for x in head.all_events)
+            await self.r._raw_state(org_id, e, "clean" if ok else "discarded", cited.get(e.event_id) or ("Noise" if not ok else None),
+                                    UNVERIFIED_CONFIDENCE if ok else None)
+        await self.r._embed(org_id, unit_rows)
+
+    async def _notebook(self, db: AsyncSession, org_id: uuid.UUID, uid: uuid.UUID, u: Any, first_ev: GEv) -> None:
+        ev = Ev(first_ev.event_id, first_ev.received_at, first_ev.seq, first_ev.occurred_at, first_ev.kind, first_ev.body,
+                first_ev.direction, first_ev.group_id, None, first_ev.person_id, first_ev.person_code, group_name=None,
+                person_name=first_ev.person_name)
+        et = "Complained" if u.kind == "xung_dot_khieu_nai" else "GroupUnit"
+        await notebook_note(db, org_id, "attention_now" if et in ATTENTION_TYPES else "rolling_context", uid, u.summary[:400], ev,
+                            first_ev.person_id, first_ev.group_id)
+
+    async def _mention(self, db: AsyncSession, org_id: uuid.UUID, uid: uuid.UUID, observed: datetime, first_ev: GEv, pm: Any,
+                       persons: set[uuid.UUID]) -> None:
+        from gh.biz.mem import entities, mentions
+
+        ent: uuid.UUID | None = None
+        if pm.person_ref and pm.person_ref.startswith("u_"):
+            try:
+                pid = uuid.UUID(pm.person_ref[2:])
+            except ValueError:
+                pid = None
+            if pid in persons:                                   # chỉ người CÓ mặt trong cửa sổ — mã lạ của model bị bỏ
+                ent = (await entities.ensure_person(db, org_id, pid)).id
+        await mentions.link(db, org_id, meaning_unit_id=uid, meaning_observed_at=observed, surface=pm.surface,
+                            raw_event_id=first_ev.event_id, group_id=first_ev.group_id, entity_id=ent, method="llm" if ent else None)
+
+    async def _resolve(self, db: AsyncSession, org_id: uuid.UUID, person_ref: str | None, surface: str | None, group_id: uuid.UUID | None,
+                       persons: set[uuid.UUID]) -> uuid.UUID | None:
+        from gh.biz.mem import aliases, entities
+
+        if person_ref and person_ref.startswith("u_"):
+            try:
+                pid = uuid.UUID(person_ref[2:])
+            except ValueError:
+                return None
+            return (await entities.ensure_person(db, org_id, pid)).id if pid in persons else None
+        if surface:
+            m = await aliases.resolve(db, org_id, surface, group_id)
+            if m and m[0].method == "alias_exact" and len([x for x in m if x.method == "alias_exact"]) == 1:
+                return m[0].entity_id
+        return None
+
+    async def _facts(self, db: AsyncSession, org_id: uuid.UUID, verified: Any, unit_ids: dict[str, tuple[uuid.UUID, datetime]],
+                     evs: list[GEv], persons: set[uuid.UUID]) -> list[Any]:
+        """`verified.facts` → `FactIn`. Chủ thể/đối tượng chỉ nối được khi `person_ref` là người CÓ mặt trong cửa sổ hoặc cách gọi khớp
+        MỘT thực thể chính xác (không đoán). `payment_account` KHÔNG ghi từ model (STK chỉ qua luật (a) + bảng đã xác minh — T7)."""
+        from gh.biz.mem import entities, predicates
+
+        out: list[Any] = []
+        for vf in verified.facts:
+            f = vf.fact
+            if f.unit_ref not in unit_ids or f.predicate == "payment_account":
+                verified.bump("fact_skipped")
+                continue
+            try:
+                pred = await predicates.get(db, f.predicate)
+            except predicates.UnknownPredicate:
+                verified.bump("unknown_predicate")
+                continue
+            q0 = vf.evidence[0]
+            first_ev = next((e for e in evs if e.event_id == q0.raw_event_id), None)
+            gid = first_ev.group_id if first_ev else None
+            subj = await self._resolve(db, org_id, f.subject.person_ref, f.subject.surface, gid, persons)
+            if subj is None:
+                verified.bump("fact_subject_unresolved")
+                continue
+            obj_ent: uuid.UUID | None = None
+            obj_val: Any = None
+            if pred.object_kind == "entity":
+                obj_ent = await self._resolve(db, org_id, f.object.person_ref, f.object.surface, gid, persons)
+                if obj_ent is None:
+                    verified.bump("fact_object_unresolved")
+                    continue
+            else:
+                obj_val = f.object.value if f.object.value is not None else f.object.surface
+                if obj_val is None:
+                    verified.bump("fact_value_missing")
+                    continue
+            speaker = (await entities.ensure_person(db, org_id, vf.speaker_person_id)).id if vf.speaker_person_id else None
+            same = speaker is not None and speaker == await entities.canonical(db, subj)
+            fwd = bool(first_ev and first_ev.forwarded)
+            cls = "forwarded" if fwd else "insider" if same else "member"
+            rel = facts_mod.RELIABILITY[cls]
+            out.append(facts_mod.FactIn(
+                org_id=org_id, subject_id=subj, predicate=f.predicate, valid_from=q0.sent_at or (first_ev.occurred_at if first_ev else clock.now()),
+                object_entity_id=obj_ent, object_value=obj_val, source_class=cls, speaker_entity_id=speaker,
+                attributed_to=None if same else speaker, source_raw_event_id=q0.raw_event_id, source_received_at=first_ev.received_at if first_ev else None,
+                confidence_exist=UNVERIFIED_CONFIDENCE, confidence_content=round(FACT_CONTENT_FACTOR * rel, 3), context_code=None,
+                extractor_version=l3.EXTRACTOR_VERSION, created_by="extractor",
+                evidence=[facts_mod.EvidenceIn("raw_event", raw_event_id=q.raw_event_id, raw_received_at=next(
+                    (e.received_at for e in evs if e.event_id == q.raw_event_id), None), span=q.span) for q in vf.evidence if q.raw_event_id]))
+        return out

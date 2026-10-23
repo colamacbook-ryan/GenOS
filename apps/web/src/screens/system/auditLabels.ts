@@ -60,6 +60,7 @@ export const ACTION_LABEL: Record<string, string> = {
   'provider.chain_reordered': 'Đổi thứ tự nhà cung cấp AI dự phòng',
   'ai.price_changed': 'Sửa đơn giá mô hình AI',
   'ai.budget_changed': 'Sửa hạn mức chi phí AI',
+  'ai.intel_budget_changed': 'Sửa trần lượt / chi phí AI tình báo',
   'ai.background_cli_changed': 'Sửa nguồn AI chạy nền',
   'cli.login_started': 'Bắt đầu đăng nhập công cụ AI trên máy',
   'cli.logged_in': 'Đăng nhập công cụ AI trên máy',

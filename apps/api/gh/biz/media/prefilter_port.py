@@ -12,8 +12,14 @@ import importlib
 from collections.abc import Callable
 from typing import Any
 
-#: Tên trường nguồn của chữ lấy từ media (khớp `{source_field, span_start, span_end}` của bằng chứng `raw_event`, §4.2).
-SOURCE_FIELD = "media_texts.text"
+#: Loại chữ media (`clean.media_texts.kind`) → trường nguồn mà luật (a) của L2 nhận (`prefilter.SOURCE_FIELDS`).
+SOURCE_FIELD_BY_KIND = {"transcript": "transcript", "ocr": "ocr", "description": "caption"}
+SOURCE_FIELD = "transcript"
+
+
+def source_field_for(kind: str) -> str:
+    """Trường nguồn cho chữ media loại `kind`; loại lạ coi như mô tả (`caption`)."""
+    return SOURCE_FIELD_BY_KIND.get(kind, "caption")
 
 
 def _real() -> Callable[[str, str], Any] | None:

@@ -481,7 +481,8 @@ async def seed_demo(sm: async_sessionmaker[AsyncSession], redis: Redis) -> dict[
     all_ids = await _demo_event_ids(sm, org_id)
     router = SeedRouter(unit_of)
     refinery = Refinery(sm, redis, router)  # type: ignore[arg-type]  # SeedRouter: cùng vai trò FakeRouter (tests)
-    st = await refinery.run(org_id, "manual", event_ids=all_ids, limit=len(all_ids) or 1)
+    # SeedRouter trả định dạng lô cũ ⇒ ép đường cũ (đường theo luồng bật mặc định khi L3 thật đã cắm)
+    st = await refinery.run(org_id, "manual", event_ids=all_ids, limit=len(all_ids) or 1, legacy=True)
 
     async with sm() as db:
         if st.unit_ids:
