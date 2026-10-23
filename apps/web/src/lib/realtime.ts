@@ -394,8 +394,11 @@ export function applyEvent(qc: QueryClient, e: RealtimeEvent): void {
         if (old.items.some((n) => n.id === item.id)) return old;
         return { items: [item, ...old.items].slice(0, 20), unread: old.unread + (item.read ? 0 : 1) };
       });
-      // Chưa có danh sách trong bộ đệm (chuông chưa tải) → tải lần tới sẽ có.
-      if (!qc.getQueryData(qk.notifications)) void qc.invalidateQueries({ queryKey: qk.notifications });
+      // Luôn lấy lại danh sách từ máy chủ sau khi chèn. Nếu một lần tải đang bay (tải đầu của chuông, hoặc tải lại lúc ổ cắm mở)
+      // thì nó có thể đã được máy chủ trả TRƯỚC khi thông báo này tạo ra: khi bộ đệm còn trống tin này bị bỏ ở trên, khi đã có
+      // dữ liệu thì phản hồi cũ về SAU và ghi đè mục vừa chèn; còn `invalidate` thường chỉ nhập vào lần tải đang bay đó (bộ đệm
+      // trống thì không huỷ được). Vì vậy huỷ lần tải cũ rồi mới làm mới (e2e gen-kho-write-v0150 chập chờn).
+      void qc.cancelQueries({ queryKey: qk.notifications, exact: true }).then(() => qc.invalidateQueries({ queryKey: qk.notifications }));
       return;
     }
     case 'notification.resolved': {
