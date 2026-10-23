@@ -57,6 +57,7 @@ from gh.gen.coach import store as coach_store
 from gh.gen.tools import ToolRunner, tools_for
 from gh.gen.validator import Validator
 from gh.hub_link import KHO_LABEL, kho_write, load_kho_label, relabel
+from gh.providers import agy_policy
 from gh.providers.clients import Message
 from gh.providers.router import REASON_NO_KEY, ModelRouter, ModelUnavailable
 
@@ -77,13 +78,20 @@ MODEL_DOWN = ("Gen chưa gọi được model lúc này (nguồn AI đang lỗi 
 # v0.1.66 (F010): nguồn khoá API còn model nhưng KHÔNG còn khoá dùng được — cần thêm khoá.
 NO_KEY = ("Gen chưa dùng được model đã chọn vì nguồn AI không còn khoá nào dùng được. {addr} thêm khoá ở màn "
           "API & Model (hoặc đăng nhập Antigravity CLI) rồi hỏi lại nhé.")
+# v0.1.75 (Nợ #45): lượt có chữ người ngoài cần agy chạy trong hộp riêng mà hộp chưa chạy / chưa cài, và không còn nguồn
+# AI nào khác ⇒ dừng lượt (KHÔNG chạy agy trong tiến trình api) và nói rõ cách gỡ.
+BOX_NEEDED = ("Câu này cần đọc tin nhắn của người ngoài nên em chỉ được chạy Antigravity trong hộp riêng, mà hộp riêng "
+              "đang chưa chạy — em dừng lượt này cho an toàn. {addr} xem dòng \"Hộp riêng Antigravity\" ở Sức khoẻ, "
+              "hoặc gán thêm một nguồn khoá API cho \"Gen — trợ lý quản trị\" rồi hỏi lại nhé.")
 # Phân loại công cụ theo nguồn nội dung: công cụ chỉ trả số liệu/cấu hình nội bộ — mọi công cụ khác (queue.*, draft.*,
 # profile.*, social.*, hub.kho_*, task.list…) trả nội dung do người ngoài viết (tin khách, mạng xã hội, Kho).
 # v0.1.38 (F-22) từng dùng phân loại này để KHÔNG gửi lượt đã đọc nội dung ngoài cho Antigravity CLI; v0.1.62 gỡ luật
 # đó; v0.1.63 (H2) tách chỗ chạy agy theo VAI (Gen của Owner trong tiến trình, Gen của nhân
 # viên qua hộp riêng không khoá —
-# `gh.providers.placement`) nên phân loại không chặn lượt nào — nội dung ngoài vẫn được bọc `wrap_untrusted`. Giữ lại
-# cho các test phân loại.
+# `gh.providers.placement`) nên phân loại không chặn lượt nào — nội dung ngoài vẫn được bọc `wrap_untrusted`.
+# v0.1.75 (review bảo mật 22/10, Nợ #45): phân loại này DÙNG LẠI để xếp chỗ chạy agy — lượt đã gọi công cụ ngoài danh
+# sách này (hoặc lịch sử có kết quả như vậy, hoặc lượt từ kênh quản trị) là lượt có chữ người ngoài ⇒ `external=True` ⇒
+# agy qua hộp riêng thay vì trong tiến trình api (nơi có khoá master, mật khẩu DB). Không chặn nguồn khoá API.
 # v0.1.54: coach.status cũng chỉ trả khoá / tiêu đề tĩnh / số đếm của hệ thống (không nội dung ngoài).
 AGY_SAFE_TOOLS = frozenset({"screens.list", "guide.list", "system.health", "refinery.summary", "coach.status"})
 
@@ -347,6 +355,11 @@ def _untrusted_tool(name: str) -> bool:
     return name not in AGY_SAFE_TOOLS
 
 
+def box_unavailable(reasons: list[str]) -> bool:
+    """Bộ định tuyến bỏ Antigravity vì hộp riêng chưa chạy / chưa cài (câu của `agy_policy`)."""
+    return any(r in (agy_policy.REASON_BOX_DOWN, agy_policy.REASON_BOX_NOT_INSTALLED) for r in reasons)
+
+
 def _history_tainted(msgs: list[dict[str, Any]]) -> bool:
     """Lịch sử gửi kèm có câu trả lời từng dùng công cụ trả nội dung bên ngoài ⇒ câu trả lời đó có thể chép lại nội dung
     của khách — coi như không tin cậy với agy."""
@@ -452,14 +465,19 @@ async def _owner_pinned(db: AsyncSession, org_id: uuid.UUID) -> bool:
 
 
 def _tier_kw(router: Any, tier: str | None, effort: str | None, *, owner: bool = True,
-             temperature: float | None = None) -> dict[str, Any]:
+             temperature: float | None = None, external: bool = False) -> dict[str, Any]:
     """`tier` / `effort` / `owner` / `temperature` chỉ truyền cho bộ định tuyến NHẬN tham số đó (bộ giả của test cũ
     không nhận; ModelRouter chưa có tham số này cũng không) — `ModelRouter.generate` thật luôn nhận cả bốn tham số.
     Gói G: `owner=False` (nhân viên hỏi Gen) được truyền để bộ định tuyến không chạy Antigravity CLI; Owner (mặc
-    định) không cần truyền."""
+    định) không cần truyền. v0.1.75: `external=True` (lượt có chữ người ngoài ⇒ agy qua hộp) — cùng luật đóng an toàn
+    như `owner=False`."""
     want: dict[str, Any] = {k: v for k, v in (("tier", tier), ("effort", effort), ("temperature", temperature)) if v}
+    safety: dict[str, Any] = {}
     if not owner:
-        want["owner"] = False
+        safety["owner"] = False
+    if external:
+        safety["external"] = True
+    want.update(safety)
     if not want:
         return {}
     try:
@@ -467,7 +485,7 @@ def _tier_kw(router: Any, tier: str | None, effort: str | None, *, owner: bool =
     except (TypeError, ValueError):
         # Review v0.1.63 (P3): không đọc được chữ ký ⇒ ĐÓNG AN TOÀN — Gen của nhân viên vẫn truyền owner=False (bộ
         # định tuyến không nhận thì lỗi rõ ràng) chứ không âm thầm thành lượt của Owner (agy trong tiến trình).
-        return {} if owner else {"owner": False}
+        return safety
     var_kw = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
     return {k: v for k, v in want.items() if var_kw or k in params}
 
@@ -659,8 +677,16 @@ async def _run(turn: Turn, *, app: Any, router: ModelRouter, session_token: str,
     # người hỏi (v0.1.63): Owner trong tiến trình, nhân viên qua hộp riêng. v0.1.55 (G3): tầng
     # / mức suy nghĩ đã chọn (hoặc J3 chọn Nhanh).
     # v0.1.66 (F021): nhiệt độ của hồ sơ vai Gen (0,3) đi vào lượt gọi — trước đây `generate` luôn dùng mặc định 0,2.
-    route_kw: dict[str, Any] = _tier_kw(router, tier, effort, owner=is_owner,
-                                        temperature=profiles.role_temperature(AGENT_KEY))
+    # v0.1.75 (review bảo mật 22/10, Nợ #45): lượt có chữ người ngoài ⇒ agy qua hộp riêng (`external=True`): mọi lượt
+    # kênh quản trị (Zalo / WhatsApp / Telegram), lịch sử có kết quả công cụ ngoài, và — từ vòng kế — khi model vừa gọi
+    # công cụ trả nội dung ngoài (`_untrusted_tool`: group.recent, queue.list, profile.*…).
+    external = bool(inp.channel) or _history_tainted(prior)
+
+    def _kw() -> dict[str, Any]:
+        return _tier_kw(router, tier, effort, owner=is_owner, temperature=profiles.role_temperature(AGENT_KEY),
+                        external=external)
+
+    route_kw: dict[str, Any] = _kw()
     retried = False
     for _ in range(MAX_ROUNDS):
         try:
@@ -668,6 +694,11 @@ async def _run(turn: Turn, *, app: Any, router: ModelRouter, session_token: str,
                                            purpose=f"gen.{inp.channel}" if inp.channel else "gen.turn",
                                            messages=messages, json_mode=True, **route_kw)
         except ModelUnavailable as e:
+            if external and box_unavailable(e.reasons):
+                await turn.emit({"kind": "say", "text": BOX_NEEDED.format(addr=turn.addr)})
+                await turn.log("gen.answer", result="blocked", target_type="model", reasons=e.reasons[:5],
+                               error="agy_box_required")
+                return
             down = e.no_chain is False
             no_key = down and bool(e.reasons) and all(REASON_NO_KEY in r for r in e.reasons)
             msg = NO_KEY if no_key else MODEL_DOWN if down else NO_MODEL
@@ -716,6 +747,9 @@ async def _run(turn: Turn, *, app: Any, router: ModelRouter, session_token: str,
                 else:
                     await turn.emit(envelope.dump_step(step))
             elif isinstance(step, envelope.ToolCall):
+                if not external and _untrusted_tool(step.name):
+                    external = True                  # vòng sau prompt có kết quả công cụ ngoài ⇒ agy qua hộp
+                    route_kw = _kw()
                 res = await runner.run(step.name, step.args)
                 await turn.log("gen.query", result="ok" if res.ok else "blocked", target_type="tool",
                                target_id=step.name, tool=step.name, args_digest=digest(step.args),

@@ -189,13 +189,18 @@ async def test_locked_user_closes_4401(app: Any, owner_api: Api, fast_recheck: N
     assert ws not in hub.clients
 
 
+def _types(ws: Any) -> list[str]:
+    # plugin.log đến từ pub/sub Redis dùng chung (log plugin nền của test khác) — không thuộc kịch bản kiểm quyền.
+    return [m["type"] for m in ws.sent if m["type"] != "plugin.log"]
+
+
 async def test_role_change_applies_next_recheck(app: Any, owner_api: Api, fast_recheck: None) -> None:
     hub: realtime.Hub = app.state.ws_hub
     ws, task = await _connect(app, _token(owner_api))
     user = hub.clients[ws]
     assert user.role_code == rbac.OWNER
     await hub.dispatch({"type": "cli.login", "data": {}, "org_id": str(user.org_id)})
-    assert [m["type"] for m in ws.sent] == ["cli.login"]
+    assert _types(ws) == ["cli.login"]
 
     await _admin_sql("""UPDATE core.user_roles SET role_id = (SELECT id FROM core.roles
                                                               WHERE org_id = :o AND code = 'auditor')
@@ -206,7 +211,7 @@ async def test_role_change_applies_next_recheck(app: Any, owner_api: Api, fast_r
         await asyncio.sleep(0.01)
     assert hub.clients[ws].role_code == rbac.AUDITOR
     await hub.dispatch({"type": "cli.login", "data": {}, "org_id": str(user.org_id)})
-    assert [m["type"] for m in ws.sent] == ["cli.login"]  # Auditor không còn nhận sự kiện system.manage
+    assert _types(ws) == ["cli.login"]  # Auditor không còn nhận sự kiện system.manage
     assert ws.closed is None
     await ws.close(1000)
     await _wait_closed(ws, task)

@@ -606,7 +606,8 @@ class ModelRouter:
 
     async def generate(self, org_id: uuid.UUID, *, agent_key: str, purpose: str, messages: list[Message],
                        json_mode: bool = True, temperature: float = 0.2,
-                       tier: str | None = None, effort: str | None = None, owner: bool = True) -> Routed:
+                       tier: str | None = None, effort: str | None = None, owner: bool = True,
+                       external: bool = False) -> Routed:
         """`owner` = người hỏi là Owner (mặc định True: việc nền / hệ thống không có người hỏi). Chỉ `core.gen` phân
         biệt. v0.1.63 (H2): chỗ chạy Antigravity CLI theo VAI — Gen của Owner, agent nội bộ chạy agy trong tiến
         trình; Gen của nhân viên (`owner=False`), `core.reply`, `core.refinery`, `core.briefing`, agent ngoại giao và
@@ -616,6 +617,10 @@ class ModelRouter:
         tiến trình thay cho hộp (`agy_policy.decide`, luật ở `gh.providers.placement`). Xem docstring module.
         Soạn lại / Dịch nháp (`draft_*`) luôn qua hộp bất kể khoá; thử quy tắc (`purpose="rule_test"`) KHÔNG dùng agy
         ở đâu cả — văn bản tuỳ ý của vai chỉ đọc (review F2, v0.1.62).
+
+        v0.1.75 (review bảo mật 22/10, Nợ #45): `external=True` = prompt lượt này có chữ người ngoài (Gen của Sếp vừa
+        đọc tin nhóm / Hộp thư, lượt từ kênh quản trị) ⇒ agy QUA HỘP bất kể vai; hộp tắt ⇒ bỏ agy khỏi chuỗi như trên.
+        Nguồn khoá API và Claude Code CLI (`--tools ""`) không có công cụ hệ thống nên không đổi.
 
         v0.1.41 (F-86): việc nền (`is_background(purpose)`) bỏ qua Claude Code CLI trừ khi Owner đã cho phép
         (`background_cli_allowed`) — điều khoản gói Claude, GIỮ NGUYÊN.
@@ -628,7 +633,8 @@ class ModelRouter:
         background = is_background(purpose)
         reasons: list[str] = []
         async with self.sm() as db:
-            verdict = await agy_policy.verdict_for(db, org_id, agent_key, owner=owner, purpose=purpose)
+            verdict = await agy_policy.verdict_for(db, org_id, agent_key, owner=owner, purpose=purpose,
+                                                   external=external)
             chain = await self._chain(db, org_id, agent_key, tier=tier, agy=verdict)
             bg_cli = await background_cli_allowed(db, org_id) if background else set()
             if not verdict.allowed and verdict.reason and await self._agy_enabled(db, org_id):

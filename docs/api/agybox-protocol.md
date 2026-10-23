@@ -35,7 +35,8 @@ st = await box_status()          # cache 10 giây; không tham số = đọc GH_
 
 | Vai | Nơi chạy agy |
 |---|---|
-| `core.gen` của Owner, `agent:<id>` nội bộ (không gắn kênh / nhóm / người) | trong tiến trình (`AgyClient`) |
+| `core.gen` của Owner (lượt CHƯA có chữ người ngoài), `agent:<id>` nội bộ (không gắn kênh / nhóm / người) | trong tiến trình (`AgyClient`) |
+| v0.1.75 (Nợ #45): mọi lượt có `external=True` — Gen của Sếp ở kênh quản trị, đã gọi / có trong lịch sử công cụ trả nội dung ngoài (`group.recent`, Hộp thư…) | qua hộp (`AgyBoxClient`); hộp tắt ⇒ nguồn khoá API hoặc Gen dừng lượt, không chạy trong tiến trình |
 | `core.briefing` (gói sửa review P2-3: prompt có tên hiển thị khách, tiêu đề việc), `core.reply`, `core.refinery`, `agent:<id>` ngoại giao (có `channel_scopes` / BOT nhóm / BOT người), `core.gen` của nhân viên, lượt thử agent (`purpose="setup_agent_try"`), trực việc (`purpose="duty_decide"`), khoá lạ | qua hộp (`AgyBoxClient`) |
 
 - Một điểm quyết định: `agy_policy.decide(role, owner=, diplomatic=, box=, purpose=)` = `placement.placement(...)` ⊕ `box_status()["state"]`;
@@ -99,13 +100,14 @@ st = await box_status()          # cache 10 giây; không tham số = đọc GH_
   sạch của agy. Proxy chỉ nhận `CONNECT host:443`, phân giải tên MỘT lần, mọi IP phải định tuyến toàn cầu (chặn loopback, RFC1918, link-local,
   CGNAT 100.64/10, gateway Docker, IPv6 nội bộ/ULA, IPv4-mapped, 6to4/NAT64 nhúng IP nội bộ) rồi nối THẲNG IP đã kiểm (chống DNS rebinding). Trước đây hộp ở
   `agy-out` (bridge thường) nên tới được gateway và mọi dịch vụ trong LAN của máy chủ.
-- Allowlist tên miền: `GH_AGY_EGRESS_ALLOW` (trong `.env`, phân cách dấu phẩy, tên miền con tính theo) — **mặc định rỗng = mọi tên miền công khai**
-  (chỉ chặn IP nội bộ). Đã đo (agy 1.2.9, token giả): agy có theo `HTTPS_PROXY`, thấy CONNECT tới `antigravity-unleash.goog:443`, `play.googleapis.com:443`.
-  Danh sách theo quan sát + đoán cho phiên thật: `googleapis.com, accounts.google.com, antigravity-unleash.goog` — chưa đo đường gọi model/OAuth thật nên
-  chưa bật mặc định (bật sai thì agy trong hộp hỏng). Nợ #44: bật allowlist chặt khi có phiên đăng nhập để ghi đủ tên miền.
+- Allowlist tên miền (v0.1.75, Nợ #44): **mặc định chỉ `googleapis.com`, `accounts.google.com`, `antigravity-unleash.goog`** (tên miền con tính theo,
+  `gh.agybox.egress.DEFAULT_ALLOW`). `GH_AGY_EGRESS_ALLOW` (trong `.env`, phân cách dấu phẩy) THÊM tên miền; `*` = mọi tên miền công khai (cách cũ, chỉ
+  chặn IP nội bộ). Tên miền bị chặn ⇒ 403 + log cảnh báo `chặn host:port …` của `agy-egress`. Đã đo (agy 1.2.9, token giả): agy có theo `HTTPS_PROXY`, thấy
+  CONNECT tới `antigravity-unleash.goog:443`, `play.googleapis.com:443`; đường gọi model/OAuth thật suy theo cấu trúc dịch vụ Google, chưa đo — thiếu tên
+  miền thì agy trong hộp lỗi mạng, thêm bằng biến trên.
 - **Rủi ro còn lại — token Google của Sếp nằm trong hộp**: mỗi lượt hộp nhận tệp token OAuth (access + refresh token) của tài khoản Google đang đăng nhập
-  Antigravity. Tin khách lừa được agy trong hộp chạy lệnh thì đọc được token đó và gửi ra ngoài qua proxy tới bất kỳ tên miền công khai nào (allowlist
-  chưa bật) — token có quyền của tài khoản Google đó trong phạm vi OAuth agy xin. Gợi ý: dùng **một tài khoản Google riêng** cho Antigravity (không phải
+  Antigravity. Tin khách lừa được agy trong hộp chạy lệnh thì đọc được token đó và gửi ra ngoài qua proxy — từ v0.1.75 chỉ tới tên miền
+  trong allowlist (Google), trước đó tới bất kỳ tên miền công khai nào — token có quyền của tài khoản Google đó trong phạm vi OAuth agy xin. Gợi ý: dùng **một tài khoản Google riêng** cho Antigravity (không phải
   tài khoản Gmail/Drive chính của Sếp), và thu hồi phiên ở myaccount.google.com › Bảo mật nếu nghi lộ.
 - **HOME tạm mỗi lượt (gói sửa review, P1-1)**: mọi lượt agy — trong hộp lẫn trong tiến trình api/worker — chạy với HOME là thư mục mới 0700
   (`clients.make_turn_home`, xoá sau lượt) chỉ chứa tệp token, và `TMPDIR` là thư mục riêng trong HOME tạm đó (kiểm thật: agy ghi bộ đệm

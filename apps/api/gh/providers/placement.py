@@ -10,7 +10,7 @@ Bảng (`AGY_PLACEMENT` + ba ngoại lệ bên dưới):
 
 | Vai | Nơi chạy |
 |---|---|
-| `core.gen` của Owner (Gen của Sếp) | inproc |
+| `core.gen` của Owner (Gen của Sếp) | inproc — trừ lượt có dữ liệu người ngoài (`external=True`) ⇒ box |
 | `core.briefing` (Bản tin Gen — prompt có tên hiển thị khách, tiêu đề việc, lý do giữ nháp) | box |
 | `agent:<id>` nội bộ (không gắn kênh / nhóm / người) | inproc |
 | `core.reply` (soạn lại / dịch nháp tin khách) | box |
@@ -20,6 +20,14 @@ Bảng (`AGY_PLACEMENT` + ba ngoại lệ bên dưới):
 | `core.gen` của nhân viên (không phải Owner) | box |
 | lượt thử agent, Soạn lại / Dịch nháp tin khách, trực việc (`purpose` ∈ `BOX_PURPOSES`) | box |
 | khoá lạ (không có trong bảng) | box — đóng an toàn |
+| bất kỳ vai nào, lượt có `external=True` (prompt chứa chữ người ngoài) | box |
+
+v0.1.75 (review bảo mật 22/10/2026, Nợ #45): từ v0.1.74 Gen của Sếp đọc chữ người ngoài (tool `group.recent`, Hộp
+thư, kênh quản trị Zalo / WhatsApp) nên "Owner ⇒ inproc" không còn đúng: prompt injection trong tin nhóm có thể khiến
+agy đọc `/run/secrets/gh_master_key` hay mật khẩu DB của container api. Bên gọi biết lượt nào có dữ liệu người ngoài
+(bộ máy Gen: đã gọi tool trả nội dung ngoài, lịch sử có kết quả tool như vậy, mọi lượt từ kênh quản trị) ⇒ truyền
+`external=True` ⇒ lượt đó qua hộp; hộp tắt ⇒ không có agy cho lượt đó (nguồn khoá API vẫn chạy bình thường — chỉ agy
+có công cụ hệ thống; Claude Code CLI chạy `--tools ""`).
 
 Hộp chưa cài / tắt ⇒ vai `box` KHÔNG BAO GIỜ rơi về agy trong tiến trình: bộ định tuyến gỡ Antigravity khỏi chuỗi của
 lượt đó và chuyển nguồn AI kế (`agy_policy.decide` ghi lý do tiếng Việt). Module này THUẦN (không DB, không mạng): trạng
@@ -93,15 +101,16 @@ def _diplomatic(agent: "AgentRef | bool | str | None") -> bool:
 
 
 def placement(role: str, agent: "AgentRef | bool | str | None" = None, *, owner: bool = True,
-              purpose: str | None = None) -> str:
+              purpose: str | None = None, external: bool = False) -> str:
     """Chỗ chạy agy của MỘT lượt gọi: "inproc" | "box".
 
     - `role`: khoá agent của bộ định tuyến (`core.gen`, `core.reply`, `core.refinery`, `core.briefing`, `agent:<id>`);
     - `agent`: với `agent:<id>` — `AgentRef(diplomatic=…)` hoặc chính cờ `bool` (ngoại giao?); chuỗi / None ⇒ nội bộ;
       khoá khác bỏ qua;
     - `owner`: người hỏi là Owner (chỉ ảnh hưởng `core.gen`; mặc định True cho lượt không có người hỏi cụ thể);
-    - `purpose`: mục đích lượt gọi (chỉ `BOX_PURPOSES` đổi kết quả: luôn qua hộp)."""
-    if purpose in BOX_PURPOSES:
+    - `purpose`: mục đích lượt gọi (chỉ `BOX_PURPOSES` đổi kết quả: luôn qua hộp);
+    - `external`: prompt của lượt này có chữ người ngoài (v0.1.75) ⇒ luôn qua hộp, bất kể vai / người hỏi."""
+    if external or purpose in BOX_PURPOSES:
         return BOX
     if role.startswith(AGENT_PREFIX):
         return DIPLOMATIC_AGENT_PLACEMENT if _diplomatic(agent) else AGY_PLACEMENT[ROLE_AGENT]
@@ -111,7 +120,7 @@ def placement(role: str, agent: "AgentRef | bool | str | None" = None, *, owner:
 
 
 def box_required(role: str, agent_key: "AgentRef | bool | str | None" = None, *, owner: bool = True,
-                 purpose: str | None = None) -> bool:
+                 purpose: str | None = None, external: bool = False) -> bool:
     """Vai này BẮT BUỘC qua hộp riêng để dùng Antigravity (hộp tắt ⇒ không có agy cho vai này). Hợp đồng cho B2:
     `box_required(role: str, agent_key: str | None) -> bool` (xem docstring module)."""
-    return placement(role, agent_key, owner=owner, purpose=purpose) == BOX
+    return placement(role, agent_key, owner=owner, purpose=purpose, external=external) == BOX

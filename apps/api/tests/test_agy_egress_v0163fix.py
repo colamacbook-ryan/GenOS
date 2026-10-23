@@ -51,10 +51,12 @@ def test_host_allowlist() -> None:
 
 
 def test_config_from_env() -> None:
-    assert egress.config_from_env({}) == ((), frozenset({443}), 3128)
+    # v0.1.75 (Nợ #44): biến rỗng ⇒ allowlist MẶC ĐỊNH (không còn "mọi tên miền công khai").
+    assert egress.config_from_env({}) == (egress.DEFAULT_ALLOW, frozenset({443}), 3128)
     allow, ports, listen = egress.config_from_env({"GH_AGY_EGRESS_ALLOW": " *.googleapis.com, accounts.google.com ,",
                                                    "GH_AGY_EGRESS_PORTS": "443,8443", "GH_AGY_EGRESS_PORT": "3129"})
-    assert allow == ("googleapis.com", "accounts.google.com") and ports == frozenset({443, 8443}) and listen == 3129
+    # Trùng tên miền mặc định ⇒ bỏ trùng.
+    assert allow == egress.DEFAULT_ALLOW and ports == frozenset({443, 8443}) and listen == 3129
     with pytest.raises(RuntimeError):
         egress.config_from_env({"GH_AGY_EGRESS_PORTS": "x"})
 
