@@ -5,6 +5,7 @@
 //  - Không ghi token / URL có chữ ký vào log: lỗi chỉ mang MÃ (xem MEDIA_ERRORS), không mang URL hay nội dung.
 import { createHash } from 'node:crypto';
 import dns from 'node:dns/promises';
+import https from 'node:https';
 import net from 'node:net';
 
 export const MEDIA_CAPS = Object.freeze({
@@ -171,24 +172,58 @@ export function hostAllowed(hostname, suffixes = ZALO_MEDIA_HOST_SUFFIXES) {
   return suffixes.some((s) => h === s || h.endsWith(`.${s}`));
 }
 
-/** IPv4/IPv6 riêng/loopback/link-local/CGNAT/multicast/chưa xác định ⇒ true (không được tải). */
+// Mọi dải không phải địa chỉ công khai. IPv6: ::ffff: (IPv4-mapped, xử lý riêng), 64:ff9b::/96 (NAT64), 2002::/16 (6to4), 2001::/32
+// (Teredo) bị chặn NGUYÊN dải — CDN công khai không dùng các dạng này, còn chúng là đường vòng quen thuộc để giấu IP nội bộ.
+const BLOCKED = new net.BlockList();
+for (const [net4, bits] of [['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16],
+  ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.0.2.0', 24], ['192.88.99.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15],
+  ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4]]) BLOCKED.addSubnet(net4, bits, 'ipv4');
+for (const [net6, bits] of [['::', 128], ['::1', 128], ['64:ff9b::', 96], ['64:ff9b:1::', 48], ['100::', 64],
+  ['2001::', 32], ['2001:db8::', 32], ['2002::', 16], ['fc00::', 7], ['fe80::', 10], ['fec0::', 10], ['ff00::', 8]]) {
+  BLOCKED.addSubnet(net6, bits, 'ipv6');
+}
+
+/** Không phải IP công khai (riêng/loopback/link-local/CGNAT/multicast/site-local/NAT64/6to4/mapped…) hoặc không phải IP ⇒ true. */
 export function isPrivateIp(ip) {
   const v = net.isIP(ip);
-  if (v === 4) {
-    const [a, b] = ip.split('.').map(Number);
-    return a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254)
-      || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 192 && b === 0) || (a === 198 && (b === 18 || b === 19))
-      || a >= 224;
-  }
+  if (v === 0) return true;
+  // IPv4-mapped (::ffff:a.b.c.d / ::ffff:aabb:ccdd): chặn nguyên dạng. Không đưa ::ffff:0:0/96 vào BlockList vì Node coi mọi
+  // IPv4 là khớp dải mapped.
   if (v === 6) {
-    const x = ip.toLowerCase();
-    if (x === '::' || x === '::1') return true;
-    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(x);
-    if (mapped) return isPrivateIp(mapped[1]);
-    return x.startsWith('fc') || x.startsWith('fd') || x.startsWith('fe8') || x.startsWith('fe9') || x.startsWith('fea')
-      || x.startsWith('feb') || x.startsWith('ff') || x.startsWith('2001:db8');
+    let canon = ip.toLowerCase();
+    try { canon = new URL(`http://[${ip}]/`).hostname.slice(1, -1); } catch { return true; }
+    if (canon.startsWith('::ffff:')) return true;
   }
-  return true; // không phải IP hợp lệ
+  return BLOCKED.check(ip, v === 4 ? 'ipv4' : 'ipv6');
+}
+
+/**
+ * fetch tối giản qua `node:https` với IP ĐÃ GHIM (`init.pinned = {address, family}`): kết nối thẳng tới IP đã kiểm là công khai,
+ * vẫn gửi SNI/Host theo tên miền ⇒ không còn khe DNS rebinding giữa lúc kiểm và lúc nối. Trả đối tượng giống Response:
+ * `{status, ok, headers.get, body}` (body là Readable, hỗ trợ `for await` và `destroy`).
+ */
+export function pinnedHttpsFetch(url, init = {}, deps = {}) {
+  const request = deps.request ?? https.request;
+  const pin = init.pinned;
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const lookup = pin ? (_host, opts, cb) => (opts?.all
+      ? cb(null, [{ address: pin.address, family: pin.family }])
+      : cb(null, pin.address, pin.family)) : undefined;
+    const req = request({
+      protocol: 'https:', hostname: u.hostname, port: 443, path: `${u.pathname}${u.search}`, method: 'GET',
+      headers: init.headers, signal: init.signal, servername: u.hostname, lookup,
+    }, (res) => {
+      const first = (h) => { const v = res.headers[String(h).toLowerCase()]; return Array.isArray(v) ? v[0] : v; };
+      resolve({ status: res.statusCode, ok: res.statusCode >= 200 && res.statusCode < 300, headers: { get: first }, body: res });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+function dropBody(body) {
+  try { (body?.destroy ?? body?.cancel)?.call(body); } catch { /* đã đóng */ }
 }
 
 /** URL tải được: https, không tài khoản, cổng mặc định, host trong allowlist. Trả URL đã parse hoặc null. */
@@ -204,11 +239,11 @@ const MAX_REDIRECTS = 3;
 /**
  * Tải một URL Zalo có kiểm soát: allowlist host, mọi địa chỉ phân giải phải công khai, tự đi theo redirect (≤ 3, kiểm lại
  * từng chặng), trần byte (Content-Length rồi đếm dòng chảy), hạn giờ. Lỗi chỉ ném MediaError (mã, không URL).
- * Còn lại: phân giải DNS ≠ địa chỉ fetch dùng (rebinding) — giảm bằng allowlist tên miền của Zalo; không ghim được IP với fetch.
+ * Kết nối GHIM vào IP đã kiểm (`pinnedHttpsFetch`), không phân giải lại ⇒ không có khe DNS rebinding.
  * @returns {Promise<{bytes: Buffer, mime: string}>} mime = mime của phản hồi (đã bỏ tham số), '' nếu không có/generic
  */
 export async function guardedFetch(rawUrl, {
-  cap, fetchImpl = globalThis.fetch, lookup = (h) => dns.lookup(h, { all: true }), timeoutMs = 20000,
+  cap, fetchImpl = pinnedHttpsFetch, lookup = (h) => dns.lookup(h, { all: true }), timeoutMs = 20000,
   suffixes = ZALO_MEDIA_HOST_SUFFIXES,
 } = {}) {
   let url = safeMediaUrl(rawUrl, suffixes);
@@ -223,25 +258,27 @@ export async function guardedFetch(rawUrl, {
       const list = (Array.isArray(addrs) ? addrs : [addrs]).map((a) => (typeof a === 'string' ? a : a?.address));
       if (!list.length || list.some((ip) => !ip || isPrivateIp(ip))) throw new MediaError(MEDIA_ERRORS.blockedHost);
       let res;
+      const first = (typeof addrs[0] === 'string' ? addrs[0] : addrs[0]?.address) ?? list[0];
       try {
         res = await fetchImpl(url.toString(), {
           redirect: 'manual', signal: ctl.signal, headers: { 'user-agent': 'Gen-Harness-bridge', accept: '*/*' },
+          pinned: { address: first, family: net.isIP(first) },
         });
       } catch (err) {
         throw new MediaError(ctl.signal.aborted || err?.name === 'AbortError' ? MEDIA_ERRORS.timeout : MEDIA_ERRORS.downloadFailed);
       }
       if (res.status >= 300 && res.status < 400) {
         const next = res.headers?.get?.('location');
-        try { res.body?.cancel?.(); } catch { /* bỏ */ }
+        dropBody(res.body);
         const target = next ? safeMediaUrl(new URL(next, url).toString(), suffixes) : null;
         if (!target) throw new MediaError(MEDIA_ERRORS.blockedHost);
         url = target;
         continue;
       }
-      if (!res.ok) { try { res.body?.cancel?.(); } catch { /* bỏ */ } throw new MediaError(MEDIA_ERRORS.downloadFailed); }
+      if (!res.ok) { dropBody(res.body); throw new MediaError(MEDIA_ERRORS.downloadFailed); }
       const declared = Number(res.headers?.get?.('content-length'));
       if (Number.isFinite(declared) && declared > cap) {
-        try { res.body?.cancel?.(); } catch { /* bỏ */ }
+        dropBody(res.body);
         throw new MediaError(MEDIA_ERRORS.tooLarge);
       }
       let bytes;

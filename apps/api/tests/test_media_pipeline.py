@@ -175,9 +175,14 @@ async def test_loi_tai_co_dinh_vs_tam_thoi(app, db, redis: Redis, tmp_path: Path
     for ev in await pend(org):
         await jobs.process_event(d, ev)
     st = await status.event_status(db, org, [gone, flaky])
-    assert (st[gone].state, st[gone].error_code, st[gone].will_retry) == ("failed", "not_found", False)
+    assert (st[gone].state, st[gone].error_code, st[gone].will_retry) == ("failed", "not_found", True)   # lần 1: còn thử lại
     assert (st[flaky].state, st[flaky].error_code, st[flaky].will_retry) == ("failed", "timeout", True)
-    assert "bridge" in (st[gone].reason or "") or "không còn lấy được" in (st[gone].reason or "")
+    assert len(await pend(org)) == 2                                         # cả hai còn trong hàng đợi
+    for ev in await pend(org):
+        await jobs.process_event(d, ev)                                      # lần 2: not_found chốt `gone`
+    st = await status.event_status(db, org, [gone, flaky])
+    assert (st[gone].error_code, st[gone].will_retry) == ("gone", False) and "không còn lấy được" in (st[gone].reason or "")
+    assert st[flaky].will_retry is True
     assert [p.media_ref for p in await pend(org)] == [REF.format("2")]      # lỗi tạm còn trong hàng đợi, lỗi cố định thì không
 
 
@@ -204,7 +209,7 @@ async def test_engine_loi_giu_file_va_thu_lai_khong_tai_lai(app, db, redis: Redi
     [eid] = await put(sessionmaker(), org, media_msg("voice", "1"))
     f = FakeFetcher({REF.format("1"): fake_voice_bytes("đã đọc được rồi")})
     [ev] = await pend(org)
-    assert await jobs.process_event(deps(redis, tmp_path, f, stt=FakeSttEngine(fail="engine_unavailable")), ev) == "failed"
+    assert await jobs.process_event(deps(redis, tmp_path, f, stt=FakeSttEngine(fail="engine_unavailable"), unavailable_cooldown_s=0), ev) == "failed"
     st = (await status.event_status(db, org, [eid]))[eid]
     assert (st.state, st.error_code, st.will_retry) == ("failed", "engine_unavailable", True)
     assert len(f.calls) == 1
@@ -292,3 +297,48 @@ async def test_tin_thieu_rang_buoc_khong_tai_chot_bad_request(app, db, redis: Re
     assert await jobs.process_event(deps(redis, tmp_path, f), old) == "failed"
     assert f.calls == []
     assert (await status.event_status(db, org, [eid]))[eid].error_code == "bad_request"
+
+
+async def test_engine_chua_bat_khong_tinh_luot_thu_khong_gave_up_va_doc_lai_khi_co(app, db, redis: Redis, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    org = await org_id(db)
+    await listen(db, org, "g1")
+    [eid] = await put(sessionmaker(), org, media_msg("voice", "1"))
+    f = FakeFetcher({REF.format("1"): fake_voice_bytes("đọc được sau khi bật công cụ")})
+    off = deps(redis, tmp_path, f, stt=FakeSttEngine(fail="engine_unavailable"), unavailable_cooldown_s=0, max_attempts=2)
+    for _ in range(6):                                   # nhiều hơn max_attempts nhiều lần
+        [ev] = await pend(org)
+        assert await jobs.process_event(off, ev) == "failed"
+    st = (await status.event_status(db, org, [eid]))[eid]
+    assert (st.state, st.error_code, st.will_retry) == ("failed", "engine_unavailable", True)
+    assert st.reason == "Chưa bật công cụ đọc voice/ảnh."
+    assert len(f.calls) == 1                             # file đã lưu, không tải lại
+    assert await redis.get(jobs.attempts_key(ev.id)) in (b"0", 0, None)      # không tính lượt thử
+    [ev] = await pend(org)                               # vẫn trong hàng đợi, KHÔNG gave_up
+    assert await jobs.process_event(deps(redis, tmp_path, f), ev) == "ok"      # công cụ được bật ⇒ đọc lại
+    assert (await status.event_status(db, org, [eid]))[eid].state == "ok"
+
+
+async def test_engine_chua_bat_thu_lai_cham_15_phut(app, db, redis: Redis, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    org = await org_id(db)
+    await listen(db, org, "g1")
+    await put(sessionmaker(), org, media_msg("voice", "1"))
+    f = FakeFetcher({REF.format("1"): fake_voice_bytes("x")})
+    d = deps(redis, tmp_path, f, stt=FakeSttEngine(fail="engine_unavailable"))
+    assert d.unavailable_cooldown_s == 900
+    [ev] = await pend(org)
+    assert await jobs.process_event(d, ev) == "failed"
+    assert 800 < await redis.ttl(jobs.cooldown_key(ev.id)) <= 900
+    stt = FakeSttEngine()
+    d2 = deps(redis, tmp_path, f, stt=stt)
+    assert await jobs.process_event(d2, ev) == "cooldown" and stt.calls == 0      # chưa tới giờ: không đụng engine
+    await redis.delete(jobs.cooldown_key(ev.id))
+    assert await jobs.process_event(d2, ev) == "ok"
+
+
+async def test_will_retry_sai_khi_qua_cua_so_quet(app, db, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    org = await org_id(db)
+    await listen(db, org, "g1")
+    [eid] = await put(sessionmaker(), org, media_msg("voice", "1"))
+    assert (await status.event_status(db, org, [eid]))[eid].will_retry is True
+    monkeypatch.setattr(mf, "RETRY_WINDOW_H", 0)           # tin coi như đã quá cửa sổ quét
+    assert (await status.event_status(db, org, [eid]))[eid].will_retry is False

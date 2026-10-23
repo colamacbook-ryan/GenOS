@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { MEDIA_FETCH, MEDIA_RESULT_TTL_S, envelope, mediaResultKey, uuid7 } from '../src/envelope.js';
-import { MediaCache, bindingOk, guardedFetch, mediaKey, isPrivateIp, mediaRef, parseMediaRef, validRequestId } from '../src/media.js';
+import { Readable } from 'node:stream';
+import { MediaCache, bindingOk, guardedFetch, mediaKey, pinnedHttpsFetch, isPrivateIp, mediaRef, parseMediaRef, validRequestId } from '../src/media.js';
 
 test('uuid7 có phiên bản 7 và sắp theo thời gian', () => {
   const a = uuid7();
@@ -62,4 +63,36 @@ test('L5 mediaKey: băm theo chat+người gửi+id; bindingOk đòi khớp đ�
     assert.equal(bindingOk(d, bad), false);
   }
   assert.equal(bindingOk({}, { chat: 'G', sender: 'S' }), false);
+});
+
+test('L5 isPrivateIp phủ IPv4-mapped (cả dạng hex), NAT64, 6to4, Teredo, site-local, ULA, link-local; IP công khai vẫn qua', () => {
+  for (const ip of ['::ffff:10.0.0.1', '::ffff:a00:1', '::FFFF:7f00:1', '64:ff9b::a00:1', '2002:a00:1::1', '2001::1', 'fec0::1', 'fd12::1',
+    'fe80::1', 'ff02::1', '::', '198.51.100.7', '203.0.113.9', '240.0.0.1', '255.255.255.255', '0.0.0.0', '192.0.0.8']) {
+    assert.equal(isPrivateIp(ip), true, ip);
+  }
+  for (const ip of ['8.8.8.8', '1.1.1.1', '104.16.0.1', '2606:4700::1111', '2a00:1450:4001::1']) assert.equal(isPrivateIp(ip), false, ip);
+});
+
+test('L5 guardedFetch GHIM IP đã kiểm (không phân giải lại) và pinnedHttpsFetch nối đúng IP đó với SNI theo tên miền', async () => {
+  let seen;
+  const fakeFetch = async (url, init) => {
+    seen = init.pinned;
+    return { status: 200, ok: true, headers: { get: () => 'audio/mp4' }, body: Readable.from([Buffer.from('ok')]) };
+  };
+  const r = await guardedFetch('https://voice.zadn.vn/a', { cap: 100, fetchImpl: fakeFetch, lookup: async () => [{ address: '8.8.4.4', family: 4 }] });
+  assert.deepEqual([seen, r.bytes.toString()], [{ address: '8.8.4.4', family: 4 }, 'ok']);
+
+  let opts;
+  const request = (o, cb) => {
+    opts = o;
+    const res = Object.assign(Readable.from([Buffer.from('x')]), { statusCode: 200, headers: { 'content-type': ['audio/ogg'] } });
+    const req = { on() { return req; }, end() { setImmediate(() => cb(res)); } };
+    return req;
+  };
+  const resp = await pinnedHttpsFetch('https://voice.zadn.vn/p/q?sig=1', { pinned: { address: '8.8.4.4', family: 4 }, headers: { a: 'b' } }, { request });
+  assert.deepEqual([opts.hostname, opts.servername, opts.path, resp.status, resp.headers.get('Content-Type')], ['voice.zadn.vn', 'voice.zadn.vn', '/p/q?sig=1', 200, 'audio/ogg']);
+  const out = await new Promise((resolve) => opts.lookup('voice.zadn.vn', {}, (e, a, f) => resolve([e, a, f])));
+  assert.deepEqual(out, [null, '8.8.4.4', 4]); // mọi lần phân giải của socket đều ra IP đã ghim
+  const all = await new Promise((resolve) => opts.lookup('voice.zadn.vn', { all: true }, (e, a) => resolve(a)));
+  assert.deepEqual(all, [{ address: '8.8.4.4', family: 4 }]);
 });

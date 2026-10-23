@@ -696,3 +696,21 @@ test('L5 media.fetch qua SessionManager: nhóm KHÔNG nghe không vào sổ; sai
   assert.equal(wa.ctrl.downloads.length, 1);
   mgr.shutdown();
 });
+
+test('L5 tải WhatsApp quá 20 giây (ở đây 30ms) ⇒ timeout, huỷ yêu cầu và đóng dòng chảy; cấu hình sổ media đọc từ tuỳ chọn', async () => {
+  const { a, wa } = activeAdapter();
+  a.mediaTimeoutMs = 30;
+  let aborted = false;
+  let destroyed = false;
+  wa.lib.downloadContentFromMessage = async (desc, type, opts) => {
+    opts.options.signal.addEventListener('abort', () => { aborted = true; });
+    return { destroy() { destroyed = true; }, [Symbol.asyncIterator]() { return { next: () => new Promise(() => {}) }; } }; // treo mãi
+  };
+  const p = norm(a, voiceMsg());
+  const t0 = Date.now();
+  await assert.rejects(fm(a, p), { code: 'timeout' });
+  assert.ok(Date.now() - t0 < 2000);
+  assert.deepEqual([aborted, destroyed], [true, true]);
+  const small = new WhatsAppAdapter({ lib: wa.lib, sessionId: 'w1', mediaCacheMax: 2, mediaCacheTtlMs: 5 });
+  assert.deepEqual([small.media.max, small.media.ttlMs], [2, 5]);
+});

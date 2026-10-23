@@ -217,7 +217,10 @@ function classify(message, stubType) {
 export class WhatsAppAdapter extends EventEmitter {
   channel = 'whatsapp';
 
-  constructor({ lib, sessionId, logger = silentLogger, qrMax = 5, now = Date.now, reconnectBaseMs = 2000 } = {}) {
+  constructor({
+    lib, sessionId, logger = silentLogger, qrMax = 5, now = Date.now, reconnectBaseMs = 2000,
+    mediaCacheMax = 500, mediaCacheTtlMs = 6 * 60 * 60 * 1000, mediaTimeoutMs = 20000,
+  } = {}) {
     super();
     this.lib = lib;
     this.sessionId = sessionId;
@@ -226,7 +229,8 @@ export class WhatsAppAdapter extends EventEmitter {
     this.now = now;
     this.reconnectBaseMs = reconnectBaseMs;
     this.state = 'idle';
-    this.media = new MediaCache({ now });
+    this.media = new MediaCache({ now, max: mediaCacheMax, ttlMs: mediaCacheTtlMs });
+    this.mediaTimeoutMs = mediaTimeoutMs;
     this.sock = null;
     this.gen = 0;
     this.qrCount = 0;
@@ -693,14 +697,25 @@ export class WhatsAppAdapter extends EventEmitter {
     if (this.state !== 'active' || !this.sock) throw new MediaError(MEDIA_ERRORS.sessionInactive);
     const { mediaKey, directPath } = d.download || {};
     if (!mediaKey || typeof directPath !== 'string' || !DIRECT_PATH_RE.test(directPath)) throw new MediaError(MEDIA_ERRORS.badRequest);
+    // Trần thời gian 20 giây cho CẢ tải lẫn đọc: hết giờ ⇒ huỷ yêu cầu (AbortController) và đóng dòng chảy.
+    const ctl = new AbortController();
     let stream;
-    try {
-      stream = await this.lib.downloadContentFromMessage({ mediaKey, directPath }, d.type, { host: WA_MEDIA_HOST });
-    } catch { throw new MediaError(MEDIA_ERRORS.downloadFailed); }
+    let timer;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => { ctl.abort(); try { stream?.destroy?.(); } catch { /* đã đóng */ } reject(new MediaError(MEDIA_ERRORS.timeout)); }, this.mediaTimeoutMs);
+    });
     let bytes;
-    try { bytes = await collectCapped(stream, capBytes(d.kind)); } catch (err) {
-      throw err instanceof MediaError ? err : new MediaError(MEDIA_ERRORS.downloadFailed);
-    }
+    try {
+      bytes = await Promise.race([timeout, (async () => {
+        try {
+          stream = await this.lib.downloadContentFromMessage({ mediaKey, directPath }, d.type,
+            { host: WA_MEDIA_HOST, options: { signal: ctl.signal } });
+        } catch { throw new MediaError(MEDIA_ERRORS.downloadFailed); }
+        try { return await collectCapped(stream, capBytes(d.kind)); } catch (err) {
+          throw err instanceof MediaError ? err : new MediaError(MEDIA_ERRORS.downloadFailed);
+        }
+      })()]);
+    } finally { clearTimeout(timer); }
     return { bytes, mime: d.mime };
   }
 

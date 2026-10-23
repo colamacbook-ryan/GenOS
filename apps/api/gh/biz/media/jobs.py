@@ -49,7 +49,8 @@ log = logging.getLogger("gh.biz.media")
 SWEEP_LIMIT = 10
 SWEEP_CONCURRENCY = 3
 SWEEP_BUDGET_S = 200.0
-SINCE_HOURS = 24
+SINCE_HOURS = mfetch.RETRY_WINDOW_H
+UNAVAILABLE_COOLDOWN_S = 900     # engine chưa bật: thử lại chậm (15 phút/lần), không tính lượt thử
 MAX_ATTEMPTS = 3
 CLAIM_TTL_S = 600
 PLACEHOLDER_PREFIX = "none:"       # storage_key của hàng `raw.attachments` giữ chỗ (chưa có file) — kho không có khoá này
@@ -63,6 +64,10 @@ def claim_key(event_id: uuid.UUID) -> str:
 
 def attempts_key(event_id: uuid.UUID) -> str:
     return f"gh:media:try:{event_id}"
+
+
+def cooldown_key(event_id: uuid.UUID) -> str:
+    return f"gh:media:cool:{event_id}"
 
 
 @dataclass
@@ -102,6 +107,7 @@ class Deps:
     scan: Scanner = prefilter_port.scan_text
     fetch_timeout_s: float = mfetch.FETCH_TIMEOUT_S
     max_attempts: int = MAX_ATTEMPTS
+    unavailable_cooldown_s: int = UNAVAILABLE_COOLDOWN_S
     stats: dict[str, int] = field(default_factory=dict)
 
     def bump(self, k: str) -> None:
@@ -212,6 +218,8 @@ async def _escalate_fast(db: AsyncSession, ev: PendingEvent) -> None:
 
 async def process_event(d: Deps, ev: PendingEvent) -> str:
     """Xử lý một tin; trả trạng thái: ok | failed | too_large | skipped_budget | claimed (đang có worker khác làm)."""
+    if await d.redis.exists(cooldown_key(ev.id)):
+        return "cooldown"            # engine chưa bật: chờ hết 15 phút mới thử lại (không tốn tải/ngân sách)
     if not await d.redis.set(claim_key(ev.id), b"1", nx=True, ex=CLAIM_TTL_S):
         return "claimed"
     try:
@@ -263,6 +271,8 @@ async def _process(d: Deps, ev: PendingEvent) -> str:
             got = await d.fetcher(d.bus, ev.org_id, kind=ev.kind, media_ref=ev.media_ref, chat=ev.bind["chat"],
                                   sender=ev.bind["sender"], timeout=d.fetch_timeout_s)
         except mfetch.MediaFetchError as e:
+            if e.code == "not_found" and n >= mfetch.NOT_FOUND_ATTEMPTS:
+                return await _record_failure(d, ev, "gone")      # hai lần liền không còn ref ⇒ chốt
             return await _record_failure(d, ev, e.code)
         data, mime = got.data, got.mime
         key = new_key(ev.org_id, mfetch.safe_filename(None, mime))
@@ -276,6 +286,12 @@ async def _process(d: Deps, ev: PendingEvent) -> str:
     try:
         results = await _run_engines(d, ev, settings, data, mime)
     except EngineError as e:
+        if e.code == "engine_unavailable":
+            # Chưa có công cụ đọc (vd. router chưa có đường âm thanh/ảnh): KHÔNG tính lượt thử, không chốt gave_up; giữ file
+            # đã lưu và thử lại chậm — khi công cụ được bật thì tin tự được đọc.
+            await d.redis.decr(attempts_key(ev.id))
+            if d.unavailable_cooldown_s > 0:
+                await d.redis.set(cooldown_key(ev.id), b"1", ex=d.unavailable_cooldown_s)
         async with d.sm() as db:
             await _set_org(db, ev.org_id)
             await _write_text(db, ev, att_id, kind=PRIMARY_KIND[ev.kind], status="failed", error=e.code)

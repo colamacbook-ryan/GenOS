@@ -340,3 +340,17 @@ test('L5 sổ media Zalo: cùng msgId ở hai chat ⇒ ref khác; chưa qua bộ
   assert.equal(a.registerMedia(poisoned), false);
   assert.equal((await fm(a, real)).bytes.toString(), 'THAT');
 });
+
+test('L5 Zalo: payload thô không còn URL nào (href, thumb, params.*Url/hd) — kể cả params là chuỗi JSON; params hỏng bị bỏ', () => {
+  const a = mediaAdapter(fakeFetch({}));
+  const params = JSON.stringify({ duration: 12000, fileSize: 3000, hd: 'https://x.zadn.vn/hd?sig=A', rawUrl: 'https://x.zadn.vn/r?sig=B',
+    nested: { thumbUrl: 'https://t', ok: 1 }, voiceUrl: 'https://v?sig=C', m4aUrl: 'https://m', url: 'https://u' });
+  const v = norm(a, zaloMessage({ msgType: 'chat.voice', content: { href: ZALO_URL, thumb: 'https://t', params } }));
+  const raw = JSON.stringify(v);
+  for (const bad of ['http', 'sig=', 'zadn.vn', 'voiceUrl', 'rawUrl', '"hd"']) assert.equal(raw.includes(bad), false, bad);
+  const kept = JSON.parse(v.payload.data.content.params);
+  assert.deepEqual([kept.duration, kept.fileSize, kept.nested.ok], [12000, 3000, 1]);
+  assert.equal(v.media.seconds, 12); // thời lượng/kích thước lấy từ params TRƯỚC khi gỡ URL
+  const bad = norm(a, zaloMessage({ msgType: 'chat.photo', content: { href: 'https://f.zadn.vn/x?sig=D', params: '{không phải json https://leak?sig=E' } }));
+  assert.equal(JSON.stringify(bad).includes('leak'), false);
+});

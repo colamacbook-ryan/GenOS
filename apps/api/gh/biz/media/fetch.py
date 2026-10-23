@@ -57,14 +57,20 @@ FRIENDLY: dict[str, str] = {
     "timeout": "Tải file quá lâu nên tạm dừng.",
     "download_failed": "Nền tảng không cho tải file này.",
     "bad_request": "Tin này không có file hợp lệ để đọc.",
-    "engine_unavailable": "Chưa có công cụ đọc voice/ảnh đang chạy.",
+    "engine_unavailable": "Chưa bật công cụ đọc voice/ảnh.",
     "engine_error": "Công cụ đọc voice/ảnh báo lỗi với file này.",
     "engine_timeout": "Công cụ đọc voice/ảnh trả lời quá lâu.",
+    "gone": "Gen không còn lấy được file này (bridge đã khởi động lại hoặc tin quá cũ).",
     "gave_up": "Gen đã thử nhiều lần vẫn không đọc được file này.",
     "skipped_budget": "Tạm chưa đọc để giữ trần chi phí AI; Gen sẽ đọc khi còn ngân sách.",
 }
 #: Lỗi KHÔNG đáng thử lại (kết quả không đổi theo thời gian).
-FINAL_ERRORS = frozenset({"too_large", "mime_not_allowed", "blocked_host", "not_found", "bad_request", "gave_up"})
+#: `not_found` KHÔNG cố định ngay (bridge vừa khởi động lại / tin chưa kịp vào sổ có thể hết lỗi): thử thêm một lần, lần
+#: thứ hai chốt thành `gone`. `engine_unavailable` cũng không cố định và không tính lượt thử (xem `jobs`).
+FINAL_ERRORS = frozenset({"too_large", "mime_not_allowed", "blocked_host", "bad_request", "gone", "gave_up"})
+#: Cửa sổ quét/thử lại của việc nền (giờ) — quá cửa sổ thì tin không còn được nhặt nữa (`will_retry` = False).
+RETRY_WINDOW_H = 72
+NOT_FOUND_ATTEMPTS = 2
 
 
 class MediaFetchError(Exception):

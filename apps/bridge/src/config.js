@@ -38,6 +38,9 @@ export function loadConfig(env = process.env) {
     directoryMs: Number(env.GH_BRIDGE_DIRECTORY_MS || 2 * 60 * 60 * 1000),
     // Giãn cách giữa hai lần hỏi nền tảng khi quét thành viên (ms).
     directoryGapMs: Number(env.GH_BRIDGE_DIRECTORY_GAP_MS || 1000),
+    // Sổ mô tả media trong RAM (L5): số mục tối đa và thời gian giữ.
+    mediaCacheMax: Number(env.GH_BRIDGE_MEDIA_CACHE_MAX || 500),
+    mediaCacheTtlMs: Number(env.GH_BRIDGE_MEDIA_CACHE_TTL_MS || 6 * 60 * 60 * 1000),
     bridgeKey: key,
     bridgeKeyError: error,
   };

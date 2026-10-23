@@ -60,6 +60,28 @@ async function imageMetadataGetter() {
   throw new Error('IMAGE_SEND_UNSUPPORTED');
 }
 
+const URL_KEY_RE = /(^|[a-z])url$|^hd$|^href$|^thumb$/i;
+
+function stripUrlKeys(node) {
+  if (!node || typeof node !== 'object') return;
+  for (const k of Object.keys(node)) {
+    if (URL_KEY_RE.test(k)) delete node[k];
+    else stripUrlKeys(node[k]);
+  }
+}
+
+/** Gỡ URL khỏi `content` của tin ảnh/voice (kể cả trong `params` là chuỗi JSON); `params` hỏng/không phải JSON ⇒ bỏ hẳn. */
+function stripZaloUrls(c) {
+  stripUrlKeys(c);
+  if (typeof c.params === 'string') {
+    try {
+      const p = JSON.parse(c.params);
+      stripUrlKeys(p);
+      c.params = JSON.stringify(p);
+    } catch { delete c.params; }
+  }
+}
+
 function chunk(arr, n) {
   const out = [];
   for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
@@ -72,7 +94,7 @@ export class ZaloAdapter extends EventEmitter {
   constructor({
     lib, sessionId, logger = silentLogger, qrMax = 5, now = Date.now, reconnectDelayMs = 5000,
     retryMaxMs = ZALO_RETRY_MAX_MS, retryNoticeAfter = ZALO_RETRY_NOTICE_AFTER, unknownRetryMax = ZALO_UNKNOWN_RETRY_MAX,
-    directoryGapMs = 0, fetchImpl = globalThis.fetch, lookup, mediaTimeoutMs = 20000,
+    directoryGapMs = 0, fetchImpl, lookup, mediaTimeoutMs = 20000, mediaCacheMax = 500, mediaCacheTtlMs = 6 * 60 * 60 * 1000,
   } = {}) {
     super();
     this.lib = lib;
@@ -93,7 +115,7 @@ export class ZaloAdapter extends EventEmitter {
     this.ownId = '';
     this.groupNames = new Map();
     this.directoryGapMs = directoryGapMs;
-    this.media = new MediaCache({ now });
+    this.media = new MediaCache({ now, max: mediaCacheMax, ttlMs: mediaCacheTtlMs });
     this.fetchImpl = fetchImpl;
     this.lookup = lookup;
     this.mediaTimeoutMs = mediaTimeoutMs;
@@ -549,10 +571,11 @@ export class ZaloAdapter extends EventEmitter {
       payload: toPlain({ type: msg.type, threadId: msg.threadId, isSelf: msg.isSelf, isGroup: msg.isGroup, data: d }),
     };
     if (mediaOut) { out.media_ref = mediaOut.ref; out.media = mediaOut.desc; }
-    if (mediaOut) {
-      // href là URL của CDN (có thể ký sẵn): không để trong payload thô; chỉ sổ RAM giữ để tải khi lõi yêu cầu.
+    // Nội dung ảnh/voice: URL (có thể ký sẵn) KHÔNG nằm trong payload thô — bỏ href/thumb và mọi khoá URL trong `params`
+    // (hd, rawUrl, normalUrl, thumbUrl, voiceUrl, m4aUrl, url…). Chỉ sổ RAM giữ href để tải khi lõi yêu cầu.
+    if (!isReaction && (kind === 'image' || kind === 'voice')) {
       const c = out.payload?.data?.content;
-      if (c && typeof c === 'object') for (const k of ['href', 'thumb']) delete c[k];
+      if (c && typeof c === 'object') stripZaloUrls(c);
     }
     if (isGroup && this.groupNames.has(threadId)) {
       out.group_name = this.groupNames.get(threadId);
@@ -579,7 +602,8 @@ export class ZaloAdapter extends EventEmitter {
     if (bad) throw new MediaError(bad);
     if (this.state !== 'active') throw new MediaError(MEDIA_ERRORS.sessionInactive);
     const got = await guardedFetch(d.href, {
-      cap: capBytes(d.kind), fetchImpl: this.fetchImpl, timeoutMs: this.mediaTimeoutMs, ...(this.lookup ? { lookup: this.lookup } : {}),
+      cap: capBytes(d.kind), timeoutMs: this.mediaTimeoutMs, ...(this.fetchImpl ? { fetchImpl: this.fetchImpl } : {}),
+      ...(this.lookup ? { lookup: this.lookup } : {}),
     });
     // Zalo không khai mime: tin phản hồi; generic ⇒ rỗng (lõi dò theo magic bytes); mime lạ rõ ràng thì từ chối.
     const mime = baseMime(got.mime);

@@ -12,6 +12,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from gh.biz.media import fetch as mfetch
 from gh.biz.media.fetch import FINAL_ERRORS, friendly
 
 PENDING, OK, FAILED, TOO_LARGE, SKIPPED_BUDGET = "pending", "ok", "failed", "too_large", "skipped_budget"
@@ -60,9 +61,9 @@ async def event_status(db: AsyncSession, org_id: uuid.UUID, raw_event_ids: list[
     if not raw_event_ids:
         return {}
     evs = (await db.execute(text("""
-        SELECT id, kind FROM raw.events
+        SELECT id, kind, received_at > now() - make_interval(hours => :w) AS in_window FROM raw.events
          WHERE org_id = :o AND id = ANY(:ids) AND kind IN ('voice', 'image') AND payload->>'media_ref' IS NOT NULL"""),
-        {"o": org_id, "ids": raw_event_ids})).all()
+        {"o": org_id, "ids": raw_event_ids, "w": mfetch.RETRY_WINDOW_H})).all()
     rows = (await db.execute(text("""
         SELECT raw_event_id, kind, status, error_code, created_at, lang, engine, length(coalesce(text, '')) AS chars
           FROM clean.media_texts WHERE org_id = :o AND raw_event_id = ANY(:ids)"""),
@@ -80,7 +81,7 @@ async def event_status(db: AsyncSession, org_id: uuid.UUID, raw_event_ids: list[
             reason = friendly(code or state)
         out[e.id] = MediaStatus(
             raw_event_id=e.id, kind=e.kind, state=state, label=LABELS[state], reason=reason, error_code=code,
-            will_retry=retry and state != OK,
+            will_retry=retry and state != OK and bool(e.in_window),   # quá cửa sổ quét ⇒ không còn được thử lại
             texts=[{"kind": r["kind"], "status": r["status"], "chars": r["chars"], "lang": r["lang"], "engine": r["engine"]}
                    for r in by.get(e.id, [])])
     return out
