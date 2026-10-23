@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     # vào api). Console chỉ đọc khi Owner + PIN (Bộ khôi phục, Tải gói mang đi). Thiếu tệp ⇒ None (`offsite_key()`).
     offsite_key_file: str = "/run/secrets/gh_offsite_key"
     # Kho phát hành để hỏi bản mới nhất (GitHub Releases); rỗng ⇒ không kiểm bản mới.
-    release_repo: str = "Genesis-ryan-84-0567536339/Gen-Harness"
+    release_repo: str = "colamacbook-ryan/GenOS"
     cli_binary: str = "agy"
     # v0.1.31: Claude Code CLI (gói Claude của Owner) — CLAUDE_CONFIG_DIR (.credentials.json + .claude.json); volume
     # chung api/worker như agy. Không có tệp chạy ⇒ thẻ Claude Code báo "chưa cài", không ảnh hưởng nguồn khác.

@@ -1,4 +1,4 @@
-# Nhật ký thay đổi Gen-Harness
+# Nhật ký thay đổi GenOS
 
 Mới nhất ở trên. Mỗi bản 3–5 dòng; chi tiết (vì sao, thay đổi theo mã, kiểm tra, việc Boss phải làm) ở `docs/releases/vX.Y.Z.md`.
 Hiện trạng và việc dở: [docs/reports/HANDOFF-v0.1.1.md](docs/reports/HANDOFF-v0.1.1.md) · tiến độ và mục Nợ: [docs/ROADMAP.md](docs/ROADMAP.md) ·
@@ -6,6 +6,12 @@ vận hành: [docs/runbook.md](docs/runbook.md).
 Ngày = ngày Release trên GitHub theo giờ Việt Nam; tiêu đề trong `docs/releases/` có thể ghi ngày làm việc nên lệch 1 ngày
 (v0.1.32–v0.1.34, v0.1.40, v0.1.46) hoặc vài ngày (v0.1.47, v0.1.48: làm 03/10, phát hành 09/10).
 Việc sửa nóng không đổi số bản (PR #46, #48, #53, #55, #58, #59) ghi ở [ROADMAP › Bản phản ứng](docs/ROADMAP.md).
+
+## v0.1.75 — GenOS bản đầu: tự đứng ở repo riêng, vá bảo mật đăng nhập/PIN, cách ly hộp AI (23/10/2026)
+- **GenOS bản đầu tiên** (trước đây là Gen-Harness): nguồn cập nhật + cài đặt (`install.sh`, `install.ps1`, `genh` tự cập nhật, `release_repo`) chuyển sang `colamacbook-ryan/GenOS`. Máy đang cài Gen-Harness cũ KHÔNG tự lên GenOS (xem `docs/releases/v0.1.75.md`).
+- **Vá bảo mật đăng nhập/PIN (auth-guard)**: khoá chống dò mật khẩu/PIN theo tài khoản + nguồn, nhãn Nhật ký kiểm toán mới; cookie thiết bị tin cậy gắn với mật khẩu (đổi mật khẩu ⇒ cookie cũ hết hiệu lực, vẫn chịu ngưỡng riêng) và đếm sai nguyên tử chống request song song vượt ngưỡng; test `test_auth_guard_v0175.py`.
+- **Cách ly hộp AI (agy-isolation)**: allowlist egress hộp agy BẬT MẶC ĐỊNH và so khớp CHÍNH XÁC theo host (`antigravity-unleash.goog`, `play.googleapis.com`, `cloudcode-pa.googleapis.com`, `oauth2.googleapis.com`, `accounts.google.com`, `openidconnect.googleapis.com`). **Đổi hành vi**: không còn khớp hậu tố `googleapis.com`; `GH_AGY_EGRESS_ALLOW` thêm `host` (chính xác) hoặc `*.domain` (gồm tên miền con, trừ dịch vụ lưu trữ/chia sẻ như storage/firebase/drive), `*` = mở như cũ (Nợ #44). Cờ «chữ người ngoài» là MỘT nguồn sự thật (`gh/untrusted.py`): prompt có khối dữ liệu không tin cậy ⇒ agy chạy QUA HỘP (Nợ #45).
+- **Robot `staging-smoke`** (kiểm nhanh staging) và sửa CI: test ws không còn flake vì `plugin.log` từ Redis dùng chung, timeout job web 30 → 45 phút.
 
 ## v0.1.74 — Bot quản trị Zalo/WhatsApp dùng chung bộ não Gen đầy đủ, nói bằng Agent ngoại giao (19/10/2026)
 - **Bản tính năng trên v0.1.73, không migration.** Sếp hỏi bot trên Zalo/WhatsApp (kênh quản trị 1-1) giờ chạy ĐÚNG động cơ Gen của Console: có **trí nhớ hội thoại** (một hội thoại riêng mỗi kênh), **công cụ đọc dữ liệu** áp quyền Owner, nói bằng **Agent ngoại giao** (không xưng Gen), văn bản thường; không còn giới hạn 6 dòng (quá dài thì tóm + mời hỏi tiếp).

@@ -1,8 +1,8 @@
 ﻿#Requires -Version 5.1
 <#
-Gen-Harness — bootstrap một lệnh (Windows, PowerShell 5.1+).
+GenOS — bootstrap một lệnh (Windows, PowerShell 5.1+).
 
-    irm https://github.com/Genesis-ryan-84-0567536339/Gen-Harness/releases/latest/download/install.ps1 | iex
+    irm https://github.com/colamacbook-ryan/GenOS/releases/latest/download/install.ps1 | iex
 
 Việc duy nhất của tệp này: tải đúng binary genh.exe cho máy, kiểm
 SHA-256, thêm vào PATH người dùng (không cần quyền admin), rồi giao lại
@@ -12,7 +12,7 @@ PowerShell 5.1 + mạng — không cần Docker/git/Node/Python có sẵn.
 
 $ErrorActionPreference = 'Stop'
 
-$Repo = 'Genesis-ryan-84-0567536339/Gen-Harness'
+$Repo = 'colamacbook-ryan/GenOS'
 $ReleaseBase = "https://github.com/$Repo/releases/latest/download"
 
 $InstallRoot = $env:GEN_HARNESS_HOME

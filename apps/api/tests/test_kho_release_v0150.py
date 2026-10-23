@@ -32,7 +32,7 @@ from tests.test_hub_kho_write_v0150 import PREFIX, FakeHub, _linked, _pin, fake_
 from tests.test_rbac_api import PASSWORD
 from tests.test_rls import _as_low_priv
 
-REPO = "Genesis-ryan-84-0567536339/Gen-Harness"
+REPO = "colamacbook-ryan/GenOS"
 TITLE = "Gen đề xuất ghi Kho · Phiên {v}"
 
 
