@@ -87,8 +87,10 @@ async def test_refinery_prompt_unmasked_q9(app, db, redis) -> None:  # type: ign
     await Refinery(sessionmaker(), redis, router).run(org, "manual")  # type: ignore[arg-type]
     assert router.calls, "phải có lượt gọi model"
     prompt = "\n".join(m.content for m in router.calls[0])
-    for kept in ("482913", "0912 345 678", "1234 5678 9012 3456", "0988777666", "25.000.000"):
+    for kept in ("0912 345 678", "1234 5678 9012 3456", "25.000.000"):
         assert kept in prompt, kept
+    # ngoại lệ Q9: thông tin đăng nhập
+    assert "482913" not in prompt and "abc12345xyz" not in prompt and "[OTP 6 số]" in prompt
 
 
 async def test_duty_context_line_masks_outsider_text() -> None:

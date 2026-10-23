@@ -25,6 +25,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from gh.biz.mem import vi_time
+from gh.chassis import masking as _masking
 from gh.refinery.brain_contract import BrainOut, FactProposed, MemoryUpdate, Unit
 
 DEFAULT_TZ = vi_time.DEFAULT_TZ
@@ -84,6 +85,7 @@ class VerifiedQuote:
     raw_event_id: uuid.UUID | None = None
     sender_person_id: uuid.UUID | None = None
     reason: str | None = None                # message_unknown | field_missing | not_substring
+    via_scrub: bool = False                  # khớp qua bản đã che thông tin đăng nhập (trích dẫn chứa nhãn)
 
     @property
     def span(self) -> dict[str, Any] | None:
@@ -197,6 +199,111 @@ def parse_money_vnd(text: str | None) -> int | None:
     return None
 
 
+# ─── NGOẠI LỆ Q9 duy nhất: thông tin ĐĂNG NHẬP không tới model (Gen duyệt, review bảo mật 23/10) ─────────────────────────────
+# Q9 = gửi model chat ĐẦY ĐỦ (tên, SĐT, số tiền, STK nguyên văn vì code cần STK để so lịch sử). Riêng mã OTP, mật khẩu, số thẻ đầy đủ
+# (13–19 số, qua Luhn) và API key/token bị thay bằng NHÃN giữ được nghĩa ("[OTP 6 số]", "[mật khẩu]", "[thẻ …1234]", "[token]") để model
+# vẫn biết "đã gửi OTP" mà không thấy giá trị. THỨ TỰ BẮT BUỘC: luật (a) (`credentials_entered`, `hard_rule_hit`) chạy trên bản GỐC của tin
+# TRƯỚC khi che; che chỉ xảy ra lúc dựng prompt (không sửa tin gốc). Trích dẫn của model có thể chứa nhãn ⇒ `_quote_status` thử thêm
+# bản đã che của tin (cùng hàm này) và ánh xạ span về chữ gốc.
+_CARD_RE = re.compile(r"(?<![\d-])\d(?:[ -]?\d){12,18}(?!\d)")
+_STK_CTX_RE = re.compile(r"(?:stk|so tk|tai khoan|chuyen khoan|\bck\b|ngan hang|so tai khoan)\s*[:\-]?\s*$")
+
+
+def _luhn_ok(digits: str) -> bool:
+    total, alt = 0, False
+    for ch in reversed(digits):
+        d = int(ch)
+        if alt:
+            d = d * 2 - 9 if d * 2 > 9 else d * 2
+        total += d
+        alt = not alt
+    return total % 10 == 0
+
+
+def _credential_spans(text_: str) -> list[tuple[int, int, str]]:
+    m_ = _masking
+    spans: list[tuple[int, int, str]] = []
+
+    def add(m: re.Match[str], grp: int, label: str) -> None:
+        if m.start(grp) >= 0 and m.end(grp) > m.start(grp):
+            spans.append((m.start(grp), m.end(grp), label))
+
+    def otp_label(code: str) -> str:
+        n = len(re.sub(r"\D", "", code))
+        return f"[OTP {n} số]"
+
+    for rx in (m_._RE_OTP_AFTER, m_._RE_OTP_GAP, m_._RE_OTP_BEFORE, m_._RE_OTP_BEFORE_CODE):
+        for m in rx.finditer(text_):
+            add(m, 2, otp_label(m.group(2)))
+    for m in m_._RE_OTP_BARE.finditer(text_):
+        tail = re.search(r"\d{3}[ -]\d{3}$|\d+$", m.group(0))
+        if tail:
+            a, b = m.start() + tail.start(), m.start() + tail.end()
+            spans.append((a, b, otp_label(m.group(0)[tail.start():tail.end()])))
+    for rx, need_mark in ((m_._RE_PW_EXPLICIT, False), (m_._RE_PW_IS, True)):
+        for m in rx.finditer(text_):
+            val = m.group(2)
+            core = val.rstrip(".,;!?)")
+            if len(core) >= 4 and not (need_mark and all(c.isalpha() for c in core)):
+                spans.append((m.start(2), m.start(2) + len(core), "[mật khẩu]"))
+    for rx in (m_._RE_URL_PARAM, m_._RE_URL_PATH):
+        for m in rx.finditer(text_):
+            add(m, 2, "[token]")
+    for m in m_._RE_SECRET.finditer(text_):
+        spans.append((m.start(), m.end(), "[token]"))
+    for m in _CARD_RE.finditer(text_):
+        digits = re.sub(r"\D", "", m.group(0))
+        if 13 <= len(digits) <= 19 and _luhn_ok(digits):
+            if _STK_CTX_RE.search(_fold(text_[max(0, m.start() - 24):m.start()])):
+                continue                      # "STK 1234 …": số tài khoản ngân hàng, Q9 giữ nguyên để so lịch sử
+            spans.append((m.start(), m.end(), f"[thẻ …{digits[-4:]}]"))
+    spans.sort(key=lambda t: (t[0], -(t[1] - t[0])))
+    out: list[tuple[int, int, str]] = []
+    for a, b, lab in spans:
+        if out and a < out[-1][1]:
+            continue
+        out.append((a, b, lab))
+    return out
+
+
+def scrub_credentials_map(text_: str) -> tuple[str, list[tuple[int, int, int, int]]]:
+    """(chữ đã che, [(đầu_mới, cuối_mới, đầu_cũ, cuối_cũ)]) — để ánh xạ span về chữ gốc."""
+    pieces: list[str] = []
+    segs: list[tuple[int, int, int, int]] = []
+    pos_old, new_len = 0, 0
+    for a, b, lab in _credential_spans(text_):
+        pieces.append(text_[pos_old:a])
+        new_len += a - pos_old
+        segs.append((new_len, new_len + len(lab), a, b))
+        pieces.append(lab)
+        new_len += len(lab)
+        pos_old = b
+    pieces.append(text_[pos_old:])
+    return "".join(pieces), segs
+
+
+def scrub_credentials(text_: str | None) -> str | None:
+    """Thay OTP / mật khẩu / số thẻ / token bằng nhãn giữ nghĩa; mọi thứ khác (tên, SĐT, tiền, STK) giữ NGUYÊN (Q9)."""
+    return None if text_ is None else scrub_credentials_map(text_)[0]
+
+
+def _map_back(segs: list[tuple[int, int, int, int]], new_pos: int, *, end: bool) -> int:
+    delta = 0
+    for ns, ne, os_, oe in segs:
+        if end:
+            if ns < new_pos <= ne:
+                return oe
+            if new_pos <= ns:
+                break
+        else:
+            if ns <= new_pos < ne:
+                return os_
+            if new_pos < ns:
+                break
+        delta = oe - ne
+    return new_pos + delta
+
+
 # ─── kiểm trích dẫn ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 def _quote_status(q: Any, ev_by_id: Mapping[str, Any], media: Mapping[str, list[Any]]) -> VerifiedQuote:
     mid, fld, text = q.message_id, q.field, norm(q.text)
@@ -226,6 +333,13 @@ def _quote_status(q: Any, ev_by_id: Mapping[str, Any], media: Mapping[str, list[
         i = hn.find(text)
         if i >= 0:
             base.status, base.span_start, base.span_end = "verified", i, i + len(text)
+            return base
+    for h in haystacks:                     # trích dẫn có thể chứa nhãn che đăng nhập ("[OTP 6 số]"): so với bản đã che, span ánh xạ về chữ gốc
+        hn = norm(h)
+        sn, segs = scrub_credentials_map(hn)
+        if segs and (i := sn.find(text)) >= 0:
+            base.status, base.span_start, base.span_end = "verified", _map_back(segs, i, end=False), _map_back(segs, i + len(text), end=True)
+            base.via_scrub = True
             return base
     base.reason = "not_substring"
     return base

@@ -30,7 +30,7 @@ from gh.providers.clients import Message, parse_json_block
 from gh.refinery import brain_contract
 from gh.refinery.brain_contract import BrainOut
 from gh.refinery.rules import RuleDef
-from gh.refinery.verify import MediaText
+from gh.refinery.verify import MediaText, scrub_credentials
 from gh.untrusted import wrap_untrusted
 
 if TYPE_CHECKING:
@@ -114,13 +114,16 @@ def chunks(events: list[EventIn]) -> list[list[EventIn]]:
 
 
 def scrub_secrets(text: str | None, secrets: Sequence[str] = ()) -> str | None:
-    """Q9: KHÔNG che nội dung chat; chỉ thay chuỗi bí mật HỆ THỐNG (khoá API, token của GenOS) bằng `[đã che]`."""
+    """Q9: chữ chat tới model NGUYÊN VĂN (tên, SĐT, số tiền, STK giữ nguyên). HAI ngoại lệ, đều là thứ không bao giờ cần cho model:
+    (1) bí mật HỆ THỐNG (`secrets`: khoá API, token của GenOS, secrets của tổ chức) ⇒ `[đã che]`;
+    (2) thông tin ĐĂNG NHẬP trong tin (OTP, mật khẩu, số thẻ 13–19 số qua Luhn, API key/token) ⇒ nhãn giữ nghĩa `[OTP 6 số]`,
+    `[mật khẩu]`, `[thẻ …1234]`, `[token]` (`verify.scrub_credentials`). Luật (a) chạy trên bản GỐC trước khi che; che chỉ lúc dựng prompt."""
     if text is None:
         return None
     for sec in secrets:
         if sec:
             text = text.replace(sec, "[đã che]")
-    return text
+    return scrub_credentials(text)
 
 
 def build_messages(events: list[EventIn], rules: list[RuleDef], event_types: list[str], *,
@@ -138,7 +141,7 @@ def build_messages(events: list[EventIn], rules: list[RuleDef], event_types: lis
                            **({"rule_hints": e.hints} if e.hints else {})}).decode()
              for e in events]
     user = ("Quy tắc của tổ chức:\n" + ("\n".join(rule_lines) or "(không có)") +
-            "\n\nTin nhắn (mỗi dòng một JSON):\n" + "\n".join(lines))
+            "\n\nTin nhắn (mỗi dòng một JSON):\n" + wrap_untrusted("tin nhắn của người ngoài", "\n".join(lines)))
     return [Message("system", SYSTEM.replace("{event_types}", ", ".join(event_types))), Message("user", user)]
 
 
@@ -341,9 +344,11 @@ def build_user_prompt(window: GroupWindow, pack: ContextPack, profile: ProfileSn
         body = "\n".join(event_line(e, media, window.tz, secrets) for e in window.context_events)
         parts.append(wrap_untrusted("tin ngữ cảnh (đã xử lý, chỉ để hiểu; được trích khi chứng minh việc trước đó)", body))
     body = "\n".join(event_line(e, media, window.tz, secrets) for e in window.new_events) or "(không có tin mới)"
+    if window.group_name:                  # tên nhóm do NGƯỜI NGOÀI đặt ⇒ nằm trong khối không tin cậy, không nằm trong chỉ dẫn lượt
+        body = orjson.dumps({"group_name": scrub_secrets(window.group_name, secrets)}).decode() + "\n" + body
     parts.append(wrap_untrusted("tin mới của luồng", body))
     unread = {k: int(v) for k, v in dict(window.unreadable).items() if v}
-    tail = [f"Luồng: thread_ref = {window.thread_ref}" + (f" · nhóm “{scrub_secrets(window.group_name, secrets)}”" if window.group_name else ""),
+    tail = [f"Luồng: thread_ref = {window.thread_ref}",
             f"Bây giờ (chỉ để biết, KHÔNG tự tính ngày): {_local(now, window.tz)}"]
     if unread:
         tail.append("Tin không đọc được (đếm vào `unreadable`): " + ", ".join(f"{k} {v}" for k, v in unread.items()))

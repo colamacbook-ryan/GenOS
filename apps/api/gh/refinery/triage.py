@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from gh.biz.hooks import CronJob, Hook, HookCtx
 from gh.gen import decider as decmod
+from gh.refinery.verify import scrub_credentials
 from gh.textnorm import strip_accents  # F-38: bỏ dấu dùng chung (NFKD — giữ text_hash đã lưu)
 
 log = logging.getLogger("gh.refinery.triage")
@@ -365,7 +366,8 @@ async def ask_jev_batch(dec: decmod.Decider, jobs: list[tuple[str, str]]) -> lis
                 return
             # v0.1.76 (Q9, CNS-081): chữ chat tới model NGUYÊN VĂN (không che ở đây). Lưu ý: `JevClient.masked`
             # (gh/gen/jev.py, ngoài phạm vi L3) vẫn che một lớp trước khi rời máy — xem báo cáo L3.
-            text_in = raw[:JEV_TEXT_MAX]
+            # chỉ thông tin đăng nhập bị thay nhãn (ngoại lệ Q9: OTP, mật khẩu, thẻ, token)
+            text_in = (scrub_credentials(raw[:4000]) or "")[:JEV_TEXT_MAX]
             d = await dec.classify(text_in, JEV_OPTIONS, jev_context(event_type))
         if d is None:
             fails += 1
