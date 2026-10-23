@@ -153,6 +153,8 @@ export const ACTION_LABEL: Record<string, string> = {
   'raw.exported': 'Xuất dữ liệu thô',
   'audit_log.exported': 'Xuất Nhật ký hành động',
   'retention_policy.changed': 'Sửa hạn lưu dữ liệu',
+  'mem.fact_correct': 'Sửa / xoá một sự thật trong trí nhớ',
+  'mem.group_contexts_set': 'Đặt bối cảnh của nhóm',
   'refinery.run_requested': 'Chạy lọc dữ liệu thủ công',
   'refinery.schedule_changed': 'Sửa lịch lọc dữ liệu',
   'refinery.triage_settings_changed': 'Sửa cài đặt phân loại tin',
