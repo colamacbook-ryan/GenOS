@@ -391,7 +391,7 @@ function createMockState(opts: MockOptions = {}, broadcast: (type: string, data:
     current: 'v0.1.16', latest: opts.updateAvailable ? 'v0.1.17' : 'v0.1.16', updater: 'systemd', linked: true, can_request: true,
     state: 'idle', message: null as string | null, from: null as string | null, to: null as string | null, started_at: null as string | null,
     finished_at: null as string | null, requested_at: null as string | null,
-    release_url: 'https://github.com/Genesis-ryan-84-0567536339/Gen-Harness/releases', release_notes: '- Nút Cập nhật ngay trong Console',
+    release_url: 'https://github.com/colamacbook-ryan/GenOS/releases', release_notes: '- Nút Cập nhật ngay trong Console',
     checked_at: new Date().toISOString() as string | null,
     // v0.1.53 (F-99, F-96): như api mới — chưa có nguyên nhân treo, chưa có ứng viên lịch đêm, genh chưa ghi nightly-status.json.
     stalled_reason: null as SystemUpdate['stalled_reason'],

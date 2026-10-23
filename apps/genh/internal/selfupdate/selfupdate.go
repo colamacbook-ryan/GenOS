@@ -49,7 +49,7 @@ import (
 // trong unit test.
 type Options struct {
 	// Owner/Repo xác định repo GitHub phát hành genh, ví dụ
-	// "Genesis-ryan-84-0567536339" / "Gen-Harness".
+	// "colamacbook-ryan" / "GenOS".
 	Owner string
 	Repo  string
 

@@ -1,6 +1,6 @@
-# Gen-Harness
+# GenOS
 
-Gen-Harness là một hệ thống tự trị có kiểm soát cho một tổ chức bán hàng/dịch vụ nhỏ: lắng nghe các kênh nhắn
+GenOS (trước đây là Gen-Harness) là một hệ thống tự trị có kiểm soát cho một tổ chức bán hàng/dịch vụ nhỏ: lắng nghe các kênh nhắn
 tin (Zalo, WhatsApp, Facebook…), sàng lọc thành dữ liệu sạch có nguồn gốc rõ ràng, và để agent AI soạn — nhưng không tự
 ý gửi — phản hồi, cập nhật cơ hội bán hàng, cảnh báo sớm. Mọi việc "ra ngoài", vượt ngưỡng tiền, hoặc liên quan
 nhân sự luôn dừng lại chờ người duyệt ở Bàn làm việc. **Gen** là trợ lý trong Console: trả lời, dẫn đường từng bước, nhớ sở thích
@@ -20,12 +20,12 @@ Mở cửa sổ dòng lệnh trên máy sẽ làm máy chủ và dán **đúng m
 
 ```bash
 # Linux · macOS
-curl -fsSL https://github.com/Genesis-ryan-84-0567536339/Gen-Harness/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/colamacbook-ryan/GenOS/releases/latest/download/install.sh | sh
 ```
 
 ```powershell
 # Windows (PowerShell)
-irm https://github.com/Genesis-ryan-84-0567536339/Gen-Harness/releases/latest/download/install.ps1 | iex
+irm https://github.com/colamacbook-ryan/GenOS/releases/latest/download/install.ps1 | iex
 ```
 
 Trình cài tự kiểm máy, tự lo phần Docker nếu thiếu, tự tạo khoá bí mật rồi mở trình duyệt vào **trang thiết lập**. Nhập mã thiết lập

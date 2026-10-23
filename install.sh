@@ -1,7 +1,7 @@
 #!/bin/sh
-# Gen-Harness — bootstrap một lệnh (Linux/macOS).
+# GenOS — bootstrap một lệnh (Linux/macOS).
 #
-#   curl -fsSL https://github.com/Genesis-ryan-84-0567536339/Gen-Harness/releases/latest/download/install.sh | sh
+#   curl -fsSL https://github.com/colamacbook-ryan/GenOS/releases/latest/download/install.sh | sh
 #
 # Việc duy nhất của tệp này: tải đúng binary genh cho máy, kiểm SHA-256,
 # thêm vào PATH, rồi giao lại cho `genh install` (xem
@@ -9,7 +9,7 @@
 # curl HOẶC wget — không cần Docker, git, Python, Node… có sẵn.
 set -eu
 
-REPO="Genesis-ryan-84-0567536339/Gen-Harness"
+REPO="colamacbook-ryan/GenOS"
 RELEASE_BASE="https://github.com/${REPO}/releases/latest/download"
 INSTALL_ROOT="${GEN_HARNESS_HOME:-$HOME/.gen-harness}"
 BIN_DIR="${INSTALL_ROOT}/bin"

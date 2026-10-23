@@ -150,11 +150,11 @@ class RepoDocsInvariantTest(unittest.TestCase):
         n = len((REPO / "CLAUDE.md").read_text(encoding="utf-8").splitlines())
         self.assertLessEqual(n, 60, f"CLAUDE.md {n} dòng")
 
-    def test_changelog_has_every_version_heading_v0_1_28_to_v0_1_74(self) -> None:
+    def test_changelog_has_every_version_heading_v0_1_28_to_v0_1_75(self) -> None:
         text = (REPO / "CHANGELOG.md").read_text(encoding="utf-8")
         found = [int(m.group(1)) for m in re.finditer(r"^## v0\.1\.(\d+)\b", text, flags=re.MULTILINE)]
-        self.assertEqual(found, list(range(74, 27, -1)),
-                         "tiêu đề '## v0.1.N' phải đủ v0.1.74 … v0.1.28, mới nhất trên cùng")
+        self.assertEqual(found, list(range(75, 27, -1)),
+                         "tiêu đề '## v0.1.N' phải đủ v0.1.75 … v0.1.28, mới nhất trên cùng")
         for n in found:
             self.assertIn(f"docs/releases/v0.1.{n}.md", text, f"CHANGELOG thiếu link chi tiết v0.1.{n}")
 

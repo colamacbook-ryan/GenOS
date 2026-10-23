@@ -46,8 +46,8 @@ import (
 // selfupdateOwner/selfupdateRepo là repo GitHub genh tự hỏi bản mới nhất —
 // cùng REPO dùng bởi install.sh/install.ps1 (docs/handoff/05-installer.md).
 const (
-	selfupdateOwner = "Genesis-ryan-84-0567536339"
-	selfupdateRepo  = "Gen-Harness"
+	selfupdateOwner = "colamacbook-ryan"
+	selfupdateRepo  = "GenOS"
 )
 
 // Biến gói CHỈ để test (sản xuất giữ nguyên giá trị mặc định): tiêm bước tự cập nhật
