@@ -8,7 +8,7 @@ from sqlalchemy import text
 
 from gh.biz.mem import aliases, disputes, entities, facts, forget, mentions
 from tests.conftest import OWNER, Api
-from tests.mem_helpers import T, mk_entity, mkfact
+from tests.mem_helpers import T, mk_entity, mkfact, pay
 from tests.phase2 import org_id
 
 
@@ -200,7 +200,7 @@ async def test_mem_core_routes_sensitive_facts_need_pin_for_read_and_correct(own
     api: Api = owner_api
     org = await org_id(db)
     lan = await mk_entity(db, org, "Chị Lan")
-    stk = await facts.assert_fact(db, mkfact(org, lan, {"digest": "aa", "last3": "123"}, T(1), predicate="payment_account"))
+    stk = await facts.assert_fact(db, mkfact(org, lan, pay("aa", "123"), T(1), predicate="payment_account"))
     phone = await facts.assert_fact(db, mkfact(org, lan, "0901", T(1)))
     hr = await facts.assert_fact(db, mkfact(org, lan, "nghỉ", T(1), predicate="said_will_leave"))
     await db.commit()

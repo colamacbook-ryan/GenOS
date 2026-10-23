@@ -79,3 +79,13 @@ async def assert_no_overlap(db: AsyncSession, subject: uuid.UUID, predicate: str
 async def n_disputes(db: AsyncSession, subject: uuid.UUID | None = None) -> int:
     q = "SELECT count(*) FROM mem.disputes" + (" WHERE subject_id = :s" if subject else "")
     return int((await db.execute(text(q), {"s": subject})).scalar_one())
+
+
+def pay(tag: str = "a", last3: str = "123", bank: str | None = None) -> dict[str, str]:
+    """Giá trị `payment_account` hợp lệ: digest 64 hex (băm khoá của số tài khoản — ở đây giả bằng sha256 của `tag`)."""
+    import hashlib
+
+    v = {"digest": hashlib.sha256(tag.encode()).hexdigest(), "last3": last3}
+    if bank:
+        v["bank"] = bank
+    return v

@@ -41,7 +41,9 @@ async def add(db: AsyncSession, org_id: uuid.UUID, entity_id: uuid.UUID, alias: 
         raise ValueError(f"nguồn bí danh không hợp lệ: {source}")
     from gh.biz.mem import entities
 
+    await entities.require(db, org_id, entity_id, allow_forgotten=False)
     target = await entities.canonical(db, entity_id)
+    await entities.require(db, org_id, target, lock="share", allow_forgotten=False)
     return (await db.execute(text("""
         INSERT INTO mem.aliases (org_id, entity_id, alias, scope_group_id, source, confidence, evidence_raw_id)
         VALUES (:o, :e, :a, :g, :s, :c, :r)

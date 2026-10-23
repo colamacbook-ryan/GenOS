@@ -9,7 +9,7 @@ from sqlalchemy.exc import DBAPIError
 
 from gh.biz.mem import disputes, entities, facts
 from gh.biz.mem.facts import EvidenceIn, FactIn, FactWriteError
-from tests.mem_helpers import T, assert_no_overlap, mk_entity, mk_org, mkfact, n_disputes, rows
+from tests.mem_helpers import T, assert_no_overlap, mk_entity, mk_org, mkfact, n_disputes, pay, rows
 
 
 async def _owner_user(db, org):  # type: ignore[no-untyped-def]
@@ -254,7 +254,7 @@ async def test_rules_retry_failed_reprocesses_then_gives_up_after_three(fresh_db
     assert attempts == 3                                              # dừng ở 3, không thử nữa
     assert await facts.retry_failed(db) == {"ok": 0, "failed": 0}
     # serialize/deserialize FactIn khớp
-    f = mkfact(org, lan, {"digest": "x"}, T(3), predicate="payment_account")
+    f = mkfact(org, lan, pay("x"), T(3), predicate="payment_account")
     g = FactIn.from_json(f.to_json())
     assert g.valid_from == f.valid_from and g.object_value == f.object_value and g.evidence[0].raw_event_id == f.evidence[0].raw_event_id
     assert isinstance(g.evidence[0], EvidenceIn)
@@ -265,8 +265,8 @@ async def test_rules_dispute_expiry_retracts_both_except_payment_account(fresh_d
     lan, other = await mk_entity(db, org), await mk_entity(db, org, "Bình")
     await facts.assert_fact(db, mkfact(org, lan, "HN", T(1), predicate="lives_in", speaker=lan))
     await facts.assert_fact(db, mkfact(org, lan, "HCM", T(3), predicate="lives_in", speaker=other, cls="member"))
-    await facts.assert_fact(db, mkfact(org, lan, {"digest": "a"}, T(1), predicate="payment_account", speaker=lan))
-    await facts.assert_fact(db, mkfact(org, lan, {"digest": "b"}, T(3), predicate="payment_account", speaker=lan))
+    await facts.assert_fact(db, mkfact(org, lan, pay("a"), T(1), predicate="payment_account", speaker=lan))
+    await facts.assert_fact(db, mkfact(org, lan, pay("b"), T(3), predicate="payment_account", speaker=lan))
     await db.execute(text("UPDATE mem.disputes SET opened_at = now() - interval '31 days'"))
     assert await disputes.expire_stale(db, org) == 1                  # payment_account không hết hạn
     st = (await db.execute(text("SELECT predicate, status FROM mem.facts ORDER BY predicate, status"))).all()
@@ -279,10 +279,10 @@ async def test_rules_dispute_expiry_retracts_both_except_payment_account(fresh_d
 async def test_rules_payment_account_stores_only_digest_and_last3(fresh_db, db) -> None:  # type: ignore[no-untyped-def]
     org = await mk_org(db)
     lan = await mk_entity(db, org)
-    for bad in ("0123456789012", {"digest": "x", "so_tai_khoan": "1"}, {"last3": "123"}, {"digest": "0123456789012"},
-                {"digest": "abc", "last3": "1234"}, {"digest": "abc", "bank": "VCB 0123456789"}):
+    for bad in ("0123456789012", {**pay("x"), "so_tai_khoan": "1"}, {"last3": "123"}, {"digest": "0123456789012"},
+                {**pay("abc"), "last3": "1234"}, {**pay("abc"), "bank": "VCB 0123456789"}):
         with pytest.raises(FactWriteError) as ei:
             await facts.assert_fact(db, mkfact(org, lan, bad, predicate="payment_account"))
         assert ei.value.code == "invalid_fact", bad
-    ok = await facts.assert_fact(db, mkfact(org, lan, {"digest": "9f86d0", "last3": "789", "bank": "VCB"}, predicate="payment_account"))
+    ok = await facts.assert_fact(db, mkfact(org, lan, pay("9f86d0", "789", "VCB"), predicate="payment_account"))
     assert ok.sensitivity == "sensitive" and ok.status == "asserted"

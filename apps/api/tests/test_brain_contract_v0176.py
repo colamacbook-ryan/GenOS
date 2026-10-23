@@ -15,7 +15,7 @@ from gh.refinery import brain_contract as bc
 
 #: Vân tay JSON Schema. ĐỔI HỢP ĐỒNG ⇒ test này đỏ ⇒ phải tăng `CONTRACT_VERSION` ("brain-out/2"), cập nhật vân tay
 #: và chạy lại G-KB (spec §4F). Không sửa vân tay mà không tăng phiên bản.
-SCHEMA_SHA256 = "4423fce25941458f65822c3d63efedf7ef8049784f513a8f9b45b9b53c3b93f6"
+SCHEMA_SHA256 = "9be294ba6b62515604093510f1a9b3338ad7cffe02e7019aeeac0cbdf9dcfb7b"
 
 FULL: dict = {
     "contract_version": "brain-out/1",
@@ -32,6 +32,7 @@ FULL: dict = {
         "status_message_id": "m_123",
         "harm": {"what": "trễ hàng 1 tuần", "amount_text": "50 triệu", "horizon_text": "trong tuần", "irreversible": False},
         "delivery_form_hint": "direct", "txn": {"state_hint": "requested", "message_id": "m_123"},
+        "normalization_notes": [],
         "deadline": {"text": "thứ 6", "anchor_message_id": "m_123", "lunar": False, "ambiguous": False},
         "amount_text": "200 bao",
         "condition": {"text": None, "met": "unknown", "met_message_id": None},
@@ -71,7 +72,8 @@ def test_brain_contract_unit_keys_and_flags_exactly_as_spec() -> None:
     assert set(bc.Unit.model_fields) == {"unit_ref", "event_ref", "kind", "quotes", "people", "summary", "flags", "harm", "deadline",
                                          "amount_text", "condition", "status_hint", "evidence", "owner_relevance", "owner_basis",
                                          "gate_candidate", "level_hint", "competing_hypothesis", "action", "status_message_id",
-                                         "ongoing_message_ids", "event_time", "delivery_form_hint", "txn"}
+                                         "ongoing_message_ids", "event_time", "delivery_form_hint", "txn",
+                                         "normalization_notes"}
     assert list(bc.Flags.model_fields) == ["public", "nudged", "repeat_n", "explicit_urgent", "needs_owner", "blocks_work",
                                            "is_template", "conditional", "said_will_leave", "money_request", "credentials_entered",
                                            "account_takeover", "emergency", "ongoing"]
@@ -99,14 +101,10 @@ def test_brain_contract_rejects_schema_violations() -> None:
     _bad(lambda d: d["units"][0]["action"].update(who="khach"))
     _bad(lambda d: d["units"][0].update(gate_candidate="co_hoi_nong"))
     _bad(lambda d: d["units"][0].update(level_hint="orange"))
-    _bad(lambda d: d["units"][0].update(ongoing_message_ids=["m_999"]))               # §4F.1: id phải nằm trong quotes
-    _bad(lambda d: d["units"][0].update(ongoing_message_ids=[]))                      # ongoing = true mà không có id
-    _bad(lambda d: d["units"][0].update(status_message_id="m_999"))
     _bad(lambda d: d["units"][0]["event_time"].update(anchor_message_id="123"))
     _bad(lambda d: d["units"][0]["event_time"].update(extra="x"))
     _bad(lambda d: d["units"][0].update(delivery_form_hint="forward"))
     _bad(lambda d: d["units"][0].update(txn={"state_hint": "done", "message_id": None}))
-    _bad(lambda d: d["units"][0].update(txn={"state_hint": "transferred", "message_id": "m_999"}))   # phải nằm trong quotes
     _bad(lambda d: d["units"][0]["harm"].update(irreversible="maybe"))
     _bad(lambda d: d["units"][0].update(status_hint="xong"))
     _bad(lambda d: d["units"][0]["evidence"].update(modality="video"))
@@ -251,3 +249,28 @@ def test_brain_contract_r64_delta_defaults_roles_and_txn() -> None:
     assert bare.delivery_form_hint == "direct" and bare.txn is None and bare.harm is None
     assert bc.Harm(what="x").irreversible is False
     assert "nguoi_nhan_tien" in bc.ROLES
+
+
+def test_brain_contract_normalizes_message_refs_instead_of_failing_the_turn() -> None:
+    """Review L1 🟠6: id ngoài `quotes` bị lọc/đặt None/ép false và GHI vào normalization_notes; không raise."""
+    d = copy.deepcopy(FULL)
+    u = d["units"][0]
+    u["ongoing_message_ids"] = ["m_999", "m_123"]
+    u["status_message_id"] = "m_888"
+    u["txn"] = {"state_hint": "transferred", "message_id": "m_777"}
+    out = bc.BrainOut.model_validate(d).units[0]
+    assert out.ongoing_message_ids == ["m_123"] and out.flags.ongoing is True            # còn id hợp lệ ⇒ giữ ongoing
+    assert out.status_message_id is None and out.txn is not None and out.txn.message_id is None
+    assert out.txn.state_hint == "transferred"                                            # chỉ id bị bỏ, gợi ý giữ nguyên
+    assert out.normalization_notes == ["ongoing_message_id_dropped:m_999", "status_message_id_dropped:m_888",
+                                       "txn_message_id_dropped:m_777"]
+    u["ongoing_message_ids"] = ["m_999"]
+    out2 = bc.BrainOut.model_validate(d).units[0]
+    assert out2.ongoing_message_ids == [] and out2.flags.ongoing is False                # rỗng ⇒ ép false
+    assert "ongoing_forced_false" in out2.normalization_notes
+    u["ongoing_message_ids"] = []                                                         # ongoing=true mà không có id
+    assert bc.BrainOut.model_validate(d).units[0].normalization_notes[-1] == "ongoing_forced_false"
+    # đầu ra sạch ⇒ không có ghi chú; sai schema cơ bản vẫn raise
+    assert bc.BrainOut.model_validate(FULL).units[0].normalization_notes == []
+    _bad(lambda x: x["units"][0].update(txn={"state_hint": "done", "message_id": None}))
+    _bad(lambda x: x["units"][0].update(normalization_notes="x"))

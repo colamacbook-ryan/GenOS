@@ -348,7 +348,7 @@ CREATE TABLE IF NOT EXISTS mem.disputes (
   dispute_signal_kind  text REFERENCES biz.signal_kinds(code),
   opened_at            timestamptz NOT NULL DEFAULT now(),
   resolved_at          timestamptz,
-  resolved_by          text CHECK (resolved_by IS NULL OR resolved_by IN ('owner', 'consolidator', 'expiry')),
+  resolved_by          text CHECK (resolved_by IS NULL OR resolved_by IN ('owner', 'consolidator', 'expiry', 'unmerge')),
   winner_fact_id       uuid,
   projected_signal_id  uuid,            -- Đợt 1 chỉ ghi hàng chờ; T1 (Đợt 2) chiếu sang tín hiệu (CNS-076)
   note                 text,            -- vd 'stk_quay_lai_cu' / 'stk_moi' (so với toàn bộ lịch sử STK)

@@ -161,6 +161,8 @@ class Unit(_Strict):
     event_time: EventTime | None = None                  # §4F.1 #3
     delivery_form_hint: Literal["direct", "warning_story"] = "direct"   # §4F.1 #9: code (chuyển tiếp/simhash) thắng ⇒ forwarded
     txn: Txn | None = None                               # §4F.1 #10
+    # Do CODE ghi khi chuẩn hoá đầu ra của model (không phải model khai); model có gửi thì giữ và nối thêm.
+    normalization_notes: list[Annotated[str, StringConstraints(max_length=200)]] = Field(default_factory=list)
     evidence: Evidence = Field(default_factory=Evidence)
     owner_relevance: list[OwnerRelevance] = Field(default_factory=list)
     owner_basis: Literal["co_ho_so", "thieu_ho_so"] = "thieu_ho_so"
@@ -171,19 +173,28 @@ class Unit(_Strict):
     action: Action | None = None
 
     @model_validator(mode="after")
-    def _ids_inside_quotes(self) -> Unit:
-        """§4F.1: mọi id tham chiếu tin phải nằm trong `quotes` của CHÍNH đơn vị; `ongoing` cần ít nhất một id. (Việc
+    def _normalize_message_refs(self) -> Unit:
+        """§4F.1: id tham chiếu tin phải nằm trong `quotes` của CHÍNH đơn vị — CHUẨN HOÁ, không làm hỏng cả lượt: id lạ bị lọc,
+        `ongoing` rỗng id thì ép false, `status_message_id`/`txn.message_id` không hợp lệ thì đặt None. Mỗi lần chuẩn hoá ghi
+        một dòng vào `normalization_notes` (G-KB đếm). Chỉ sai schema cơ bản (kiểu/enum) mới raise. (Việc
         `sent_at ≥ now − 48h`, trích dẫn `verified`, `text` ⊂ tin anchor là của L3/`verify.py`.)"""
         quoted = {q.message_id for q in self.quotes}
+        notes: list[str] = []
         stray = [i for i in self.ongoing_message_ids if i not in quoted]
         if stray:
-            raise ValueError(f"ongoing_message_ids phải nằm trong quotes: {stray}")
+            self.ongoing_message_ids = [i for i in self.ongoing_message_ids if i in quoted]
+            notes.extend(f"ongoing_message_id_dropped:{i}" for i in stray)
         if self.status_message_id is not None and self.status_message_id not in quoted:
-            raise ValueError("status_message_id phải nằm trong quotes")
+            notes.append(f"status_message_id_dropped:{self.status_message_id}")
+            self.status_message_id = None
         if self.txn is not None and self.txn.message_id is not None and self.txn.message_id not in quoted:
-            raise ValueError("txn.message_id phải nằm trong quotes")
+            notes.append(f"txn_message_id_dropped:{self.txn.message_id}")
+            self.txn = self.txn.model_copy(update={"message_id": None})
         if self.flags.ongoing and not self.ongoing_message_ids:
-            raise ValueError("flags.ongoing = true cần ongoing_message_ids (danh sách rỗng thì ongoing phải là false)")
+            notes.append("ongoing_forced_false")
+            self.flags = self.flags.model_copy(update={"ongoing": False})
+        if notes:
+            self.normalization_notes = [*self.normalization_notes, *notes]
         return self
 
 

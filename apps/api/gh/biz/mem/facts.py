@@ -33,6 +33,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from gh import crypto
 from gh.biz.mem import disputes, entities, predicates
 from gh.textnorm import strip_accents
 
@@ -308,16 +309,31 @@ def _validate(fin: FactIn, pred: predicates.Predicate, subject: entities.Entity)
 
 PAYMENT_KEYS = frozenset({"digest", "last3", "bank"})
 _LONG_DIGITS = re.compile(r"\d{7,}")
+_DIGEST_RE = re.compile(r"[0-9a-f]{64}")
+BANK_MAX_LEN = 32
+
+
+def payment_digest(account_number: str) -> str:
+    """Băm CÓ KHOÁ (HMAC-SHA256 bằng khoá con của khoá master — `gh.crypto.keyed_digest`) của số tài khoản đã chuẩn hoá
+    (chỉ giữ chữ số), 64 hex thường. Số tài khoản là giá trị ngắn/đoán được: sha256 trần dò ngược được, nên bắt buộc dùng khoá."""
+    digits = re.sub(r"[\s.\-]", "", account_number or "")
+    if not digits.isdigit() or len(digits) < 6:
+        raise ValueError("số tài khoản phải có ít nhất 6 chữ số")
+    return crypto.keyed_digest(b"payment-account", digits.encode()).hex()
 
 
 def _validate_payment_value(v: Any) -> None:
-    """`payment_account` CHỈ lưu băm + 3 số cuối (+ mã ngân hàng): số tài khoản nguyên văn không bao giờ vào sổ sự thật."""
-    if not isinstance(v, dict) or not v.get("digest") or not set(v) <= PAYMENT_KEYS:
+    """`payment_account` CHỈ lưu băm có khoá (64 hex, `payment_digest`) + 3 số cuối (+ mã ngân hàng ngắn): số tài khoản nguyên
+    văn không bao giờ vào sổ sự thật. Chỉ `bank` (chữ tự do) bị quét chuỗi số dài; `digest` đúng định dạng cứng nên không quét."""
+    if not isinstance(v, dict) or not set(v) <= PAYMENT_KEYS:
         raise FactWriteError(ERR_INVALID, "payment_account: chỉ nhận {digest, last3, bank}")
-    if not isinstance(v["digest"], str) or any(isinstance(x, str) and _LONG_DIGITS.search(x) for x in v.values()):
-        raise FactWriteError(ERR_INVALID, "payment_account: không được chứa số tài khoản nguyên văn")
+    if not isinstance(v.get("digest"), str) or not _DIGEST_RE.fullmatch(v["digest"]):
+        raise FactWriteError(ERR_INVALID, "payment_account: digest phải là 64 ký tự hex thường (facts.payment_digest)")
     if "last3" in v and not (isinstance(v["last3"], str) and re.fullmatch(r"\d{1,3}", v["last3"])):
         raise FactWriteError(ERR_INVALID, "payment_account: last3 phải là tối đa 3 chữ số")
+    bank = v.get("bank")
+    if bank is not None and (not isinstance(bank, str) or len(bank) > BANK_MAX_LEN or _LONG_DIGITS.search(bank)):
+        raise FactWriteError(ERR_INVALID, "payment_account: bank phải là mã ngân hàng ngắn, không chứa số tài khoản")
 
 
 def _map_db_error(e: DBAPIError) -> FactWriteError:
@@ -378,14 +394,15 @@ async def _assert(db: AsyncSession, fin: FactIn, pred: predicates.Predicate) -> 
         object_entity = None if fin.object_entity_id is None else await entities.canonical(db, fin.object_entity_id)
         speaker = None if fin.speaker_entity_id is None else await entities.canonical(db, fin.speaker_entity_id)
         attributed = None if fin.attributed_to is None else await entities.canonical(db, fin.attributed_to)
+        # Khoá dòng thực thể (FOR SHARE, theo thứ tự id) TRƯỚC mọi khoá/ghi khác: quên người (FOR UPDATE) chờ lượt ghi đang
+        # chạy, lượt ghi đến sau thấy `forgotten_at` và bị từ chối — không để lại sự thật mồ côi sau khi quên.
+        await entities.lock_rows(db, [x for x in (subject_id, object_entity, speaker, attributed) if x is not None], "share")
+        subject = await entities.require(db, org, subject_id, allow_forgotten=False)
+        for ref in (object_entity, speaker, attributed):             # mọi tham chiếu cùng tổ chức, chưa bị quên
+            if ref is not None:
+                await entities.require(db, org, ref, allow_forgotten=False)
     except entities.EntityError as e:
         raise FactWriteError(ERR_INVALID, str(e)) from e
-    subject = await entities.get(db, subject_id)
-    assert subject is not None
-    if subject.org_id != org:
-        raise FactWriteError(ERR_INVALID, "chủ thể không thuộc tổ chức")
-    if subject.forgotten:
-        raise FactWriteError(ERR_INVALID, "chủ thể đã bị quên")
     _validate(fin, pred, subject)
     key = entity_key(object_entity) if object_entity is not None else value_key(fin.object_value)
     if attributed is None and fin.source_class in EXTERNAL_CLASSES:
@@ -401,6 +418,15 @@ async def _assert(db: AsyncSession, fin: FactIn, pred: predicates.Predicate) -> 
     # 3) idempotent theo tin nguồn + thay thế khi replay bằng extractor_version mới
     new_id: uuid.UUID | None = None
     if fin.source_raw_event_id is not None:
+        # Sếp đã sửa nội dung sự thật của tin này ⇒ replay KHÔNG được đảo ngược (kể cả sinh lại bản cũ hay đổi nội dung).
+        fixed = (await db.execute(text(f"""
+            SELECT {', '.join('n.' + c.strip() for c in _COLS.split(','))} FROM mem.facts o JOIN mem.facts n ON n.id = o.superseded_by
+            WHERE o.org_id = :o AND o.subject_id = ANY(:m) AND o.predicate = :p AND o.source_raw_event_id = :r
+              AND o.status = 'superseded' AND n.created_by = 'owner' AND n.status IN ('owner_confirmed', 'asserted', 'disputed')
+            ORDER BY n.recorded_at DESC LIMIT 1"""),  # noqa: S608
+            {"o": org, "m": members, "p": fin.predicate, "r": fin.source_raw_event_id})).one_or_none()
+        if fixed is not None:
+            return _fact(fixed, "duplicate")
         dup = (await db.execute(text(f"""
             SELECT {_COLS} FROM mem.facts WHERE org_id = :o AND subject_id = ANY(:m) AND predicate = :p AND object_key = :k
               AND source_raw_event_id = :r AND status <> 'retracted' ORDER BY recorded_at LIMIT 1"""),  # noqa: S608
@@ -495,10 +521,10 @@ async def _assert(db: AsyncSession, fin: FactIn, pred: predicates.Predicate) -> 
         mine = _aware(fin.source_received_at) if fin.source_received_at is not None else None
         n_before_prev = mine is not None and mine < _aware(prev_recv)
 
-    async def to_dispute(conflict: _Neighbor | None, note: str | None) -> Fact:
-        # prev đang hiệu lực ⇒ disputed (rời EXCLUDE) TRƯỚC khi chèn bản mới; cùng dispute_id
+    async def to_dispute(conflicts: list[_Neighbor], note: str | None) -> Fact:
+        # bên đang hiệu lực xung đột ⇒ disputed (rời EXCLUDE) TRƯỚC khi chèn bản mới; cùng dispute_id
         ids: list[uuid.UUID] = []
-        if conflict is not None:
+        for conflict in conflicts:
             await db.execute(text("""UPDATE mem.facts SET status = 'disputed', closed_recorded_at = now()
                                      WHERE id = :i AND status IN ('asserted', 'owner_confirmed')"""), {"i": conflict.id})
             ids.append(conflict.id)
@@ -511,14 +537,17 @@ async def _assert(db: AsyncSession, fin: FactIn, pred: predicates.Predicate) -> 
 
     # 6c) auto_supersede = false (payment_account): MỌI đổi giá trị ⇒ disputed, kể cả chính chủ tài khoản (CNS-096)
     if not pred.auto_supersede:
-        if covers and prev is not None and prev.object_key != key:
+        # Bất kể thời gian: prev (kể cả đã đóng) hoặc next mang giá trị KHÁC ⇒ tranh chấp. Chèn LÙI (tin cũ đến sau) cũng vậy —
+        # một đổi STK không bao giờ lặng lẽ thành hai dòng asserted (review L1 🔴1).
+        conflicts = [n for n in (prev, nxt) if n is not None and n.object_key != key]
+        if conflicts:
             seen = (await db.execute(text("""
                 SELECT EXISTS (SELECT 1 FROM mem.facts WHERE org_id = :o AND subject_id = ANY(:m) AND predicate = :p
                                   AND object_key = :k AND status <> 'retracted')"""),
                 {"o": org, "m": members, "p": fin.predicate, "k": key})).scalar_one()
-            return await to_dispute(prev, "stk_quay_lai_cu" if seen else "stk_moi")
+            return await to_dispute(conflicts, "stk_quay_lai_cu" if seen else "stk_moi")
         if open_disp_overlap:
-            return await to_dispute(None, "stk_moi")
+            return await to_dispute([], "stk_moi")
         if prev is not None and prev.valid_from == t and n_before_prev:
             fid = await insert("asserted", t, t)
             return await _load(db, fid, "inserted_between")
@@ -539,7 +568,7 @@ async def _assert(db: AsyncSession, fin: FactIn, pred: predicates.Predicate) -> 
     eligible_self = fin.source_class == "owner" or (speaker is not None and speaker == subject_id)
     if covers and prev is not None and prev.object_key != key and not n_before_prev:
         if ext or (prev.status == "owner_confirmed" and fin.source_class != "owner") or not eligible_self:
-            return await to_dispute(prev, "hai_nguon_khac_nhau")            # 6d / 6e
+            return await to_dispute([prev], "hai_nguon_khac_nhau")            # 6d / 6e
         # 6b) UPDATE prev TRƯỚC (đóng theo thời gian sự việc, GIỮ trạng thái), rồi INSERT bản mới
         await db.execute(text("""UPDATE mem.facts SET valid_to = :t, closed_recorded_at = now()
                                  WHERE id = :i AND (valid_to IS NULL OR valid_to > :t)"""), {"t": t, "i": prev.id})
@@ -547,7 +576,7 @@ async def _assert(db: AsyncSession, fin: FactIn, pred: predicates.Predicate) -> 
         await resolve_open(fid)
         return await _load(db, fid, "superseded_prev")
     if not covers and open_disp_overlap and not (fin.source_class == "owner" and eligible_self):
-        return await to_dispute(None, "hai_nguon_khac_nhau")
+        return await to_dispute([], "hai_nguon_khac_nhau")
     if n_before_prev:                       # tin cũ hơn, cùng thời điểm: xếp TRƯỚC prev, không đè
         fid = await insert("asserted", t, t)
         return await _load(db, fid, "inserted_between")
@@ -631,13 +660,25 @@ async def retire_stale_replay(db: AsyncSession, org_id: uuid.UUID, raw_event_ids
 
 # ─── đối soát sau gộp người (CNS-065) ──────────────────────────────────────
 
-async def reconcile_entity(db: AsyncSession, org_id: uuid.UUID, entity_id: uuid.UUID) -> int:
+@dataclass
+class Reconciled:
+    created: list[uuid.UUID] = field(default_factory=list)            # tranh chấp MỚI mở
+    disputes: list[uuid.UUID] = field(default_factory=list)           # mọi tranh chấp bị chạm (mới hoặc gia nhập)
+    facts: list[tuple[uuid.UUID, str]] = field(default_factory=list)  # (sự thật, trạng thái CŨ trước khi thành disputed)
+
+    def to_json(self) -> dict[str, Any]:
+        return {"disputes": [str(d) for d in self.disputes], "created": [str(d) for d in self.created],
+                "facts": [[str(i), st] for i, st in self.facts]}
+
+
+async def reconcile(db: AsyncSession, org_id: uuid.UUID, entity_id: uuid.UUID) -> Reconciled:
     """Sự thật ĐƠN TRỊ trái nhau giữa các thực thể đã gộp vào cùng một đích (mỗi bên giữ `subject_id` gốc nên EXCLUDE không
-    thấy) ⇒ mọi bên `disputed`, chung một tranh chấp. Trả số tranh chấp MỚI mở. Chạy lại an toàn."""
+    thấy) ⇒ mọi bên `disputed`, chung một tranh chấp. Ghi lại trạng thái cũ để tách lại hoàn tác (`reverse_reconcile`)."""
+    out = Reconciled()
     target = await entities.canonical(db, entity_id)
     members = await entities.members(db, target)
     if len(members) < 2:
-        return 0
+        return out
     pairs = (await db.execute(text("""
         SELECT DISTINCT a.predicate, a.id AS a_id, b.id AS b_id
         FROM mem.facts a JOIN mem.facts b
@@ -651,18 +692,56 @@ async def reconcile_entity(db: AsyncSession, org_id: uuid.UUID, entity_id: uuid.
     by_pred: dict[str, set[uuid.UUID]] = {}
     for p in pairs:
         by_pred.setdefault(p.predicate, set()).update((p.a_id, p.b_id))
-    new = 0
     await disputes.set_actor(db, "consolidator", "reconcile_after_merge")
     for pcode, ids in by_pred.items():
         pred = await predicates.get(db, pcode)
         await db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(CAST(:o AS text) || CAST(:s AS text) || :p, 0))"),
                          {"o": str(org_id), "s": str(target), "p": pcode})
+        before = (await db.execute(text("""SELECT id, status FROM mem.facts WHERE id = ANY(:i) AND status IN ('asserted', 'owner_confirmed')"""),
+                                   {"i": sorted(ids)})).all()
         await db.execute(text("""UPDATE mem.facts SET status = 'disputed', closed_recorded_at = now()
-                                 WHERE id = ANY(:i) AND status IN ('asserted', 'owner_confirmed')"""), {"i": sorted(ids)})
-        _did, created = await disputes.open(db, org_id, target, pcode, sorted(ids), signal_kind=pred.dispute_signal_kind,
-                                            note="sau_gop_nguoi")
-        new += 1 if created else 0
-    return new
+                                 WHERE id = ANY(:i) AND status IN ('asserted', 'owner_confirmed')"""), {"i": [r.id for r in before]})
+        out.facts.extend((r.id, r.status) for r in before)
+        did, created = await disputes.open(db, org_id, target, pcode, sorted(ids), signal_kind=pred.dispute_signal_kind,
+                                           note="sau_gop_nguoi")
+        out.disputes.append(did)
+        if created:
+            out.created.append(did)
+    return out
+
+
+async def reconcile_entity(db: AsyncSession, org_id: uuid.UUID, entity_id: uuid.UUID) -> int:
+    """Như `reconcile` nhưng chỉ trả số tranh chấp MỚI mở (job đối soát của L4 dùng)."""
+    return len((await reconcile(db, org_id, entity_id)).created)
+
+
+async def reverse_reconcile(db: AsyncSession, org_id: uuid.UUID, recon: dict[str, Any]) -> int:
+    """Hoàn tác đối soát lúc gộp khi TÁCH người: sự thật còn `disputed` và còn thuộc tranh chấp đã ghi ⇒ trả về trạng thái cũ,
+    bỏ khỏi tranh chấp; tranh chấp còn dưới 2 bên ⇒ đóng với `resolved_by='unmerge'`. Việc xảy ra SAU gộp (Sếp đã chọn bên
+    thắng, sự thật bị thay…) không bị lật lại: chỉ đụng sự thật vẫn `disputed`. Trả số sự thật đã trả lại."""
+    restored = 0
+    dispute_ids = [uuid.UUID(d) for d in recon.get("disputes", [])]
+    await disputes.set_actor(db, "consolidator", "unmerge")
+    for fid_s, old_status in recon.get("facts", []):
+        fid = uuid.UUID(fid_s)
+        try:
+            async with db.begin_nested():
+                r = await db.execute(text("""
+                    UPDATE mem.facts SET status = :s, dispute_id = NULL, closed_recorded_at = now()
+                    WHERE id = ANY(CAST(:f AS uuid[])) AND org_id = :o AND status = 'disputed' AND dispute_id = ANY(:d)"""),
+                                     {"s": old_status, "f": [fid], "o": org_id, "d": dispute_ids})
+                restored += int(r.rowcount)  # type: ignore[attr-defined]
+        except DBAPIError:                           # trả lại sẽ chồng khoảng với sự thật mới hơn ⇒ để nguyên disputed
+            continue
+    for did in dispute_ids:
+        await db.execute(text("""
+            UPDATE mem.disputes SET fact_ids = (SELECT coalesce(array_agg(f.id), '{}') FROM mem.facts f
+                                                WHERE f.id = ANY(mem.disputes.fact_ids) AND f.dispute_id = mem.disputes.id)
+            WHERE id = :d AND org_id = :o AND resolved_at IS NULL"""), {"d": did, "o": org_id})
+        await db.execute(text("""
+            UPDATE mem.disputes SET resolved_at = now(), resolved_by = 'unmerge', note = 'unmerge'
+            WHERE id = :d AND org_id = :o AND resolved_at IS NULL AND cardinality(fact_ids) < 2"""), {"d": did, "o": org_id})
+    return restored
 
 
 # ─── đọc & sửa ──────────────────────────────────────────────────────────────
@@ -711,6 +790,31 @@ async def correct(db: AsyncSession, org_id: uuid.UUID, fact_id: uuid.UUID, *, ac
     """Sếp sửa nội dung sai / xoá (§4A.1 6f, §7.2b). `retract` ⇒ `retracted` (đóng hiệu lực, KHÔNG xoá dòng). Sửa ⇒ bản cũ
     `superseded` (`superseded_by`), bản mới `owner_confirmed` cùng khoảng hiệu lực, bằng chứng `owner_edit`. Tranh chấp
     chứa bản cũ được đóng với bản mới là bên thắng."""
+    probe = (await db.execute(text("SELECT subject_id, predicate FROM mem.facts WHERE id = :i AND org_id = :o"),
+                              {"i": fact_id, "o": org_id})).one_or_none()
+    if probe is None:
+        raise FactWriteError(ERR_INVALID, "không có sự thật này")
+    pred = await predicates.get(db, probe.predicate)
+    obj: uuid.UUID | None = None
+    if not retract:                                   # kiểm giá trị mới TRƯỚC khi đụng bất kỳ dòng nào (review L1 🔴2)
+        if (new_value is None) == (new_object_id is None):
+            raise FactWriteError(ERR_INVALID, "cần đúng một trong new_value / new_object_id")
+        if pred.object_kind == "entity" and new_object_id is None or pred.object_kind == "value" and new_value is None:
+            raise FactWriteError(ERR_INVALID, f"{probe.predicate}: loại đối tượng không khớp")
+        if probe.predicate == "payment_account":
+            _validate_payment_value(new_value)
+    try:
+        subject_c = await entities.canonical(db, probe.subject_id)
+        if new_object_id is not None:
+            obj = await entities.canonical(db, new_object_id)
+        # cùng thứ tự khoá với assert_fact: dòng thực thể (share) → khoá tư vấn (chủ thể đích, vị từ) → dòng sự thật
+        await entities.lock_rows(db, [x for x in (subject_c, obj) if x is not None], "share")
+        if obj is not None:
+            await entities.require(db, org_id, obj, allow_forgotten=False)
+    except entities.EntityError as e:
+        raise FactWriteError(ERR_INVALID, str(e)) from e
+    await db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(CAST(:o AS text) || CAST(:s AS text) || :p, 0))"),
+                     {"o": str(org_id), "s": str(subject_c), "p": probe.predicate})
     old = (await db.execute(text(f"SELECT {_COLS} FROM mem.facts WHERE id = :i AND org_id = :o FOR UPDATE"),  # noqa: S608
                             {"i": fact_id, "o": org_id})).one_or_none()
     if old is None:
@@ -723,12 +827,6 @@ async def correct(db: AsyncSession, org_id: uuid.UUID, fact_id: uuid.UUID, *, ac
                                    valid_to = coalesce(valid_to, greatest(now(), valid_from)) WHERE id = :i"""),
                          {"i": fact_id})
         return await _load(db, fact_id, "retracted")
-    if (new_value is None) == (new_object_id is None):
-        raise FactWriteError(ERR_INVALID, "cần đúng một trong new_value / new_object_id")
-    pred = await predicates.get(db, old.predicate)
-    if pred.object_kind == "entity" and new_object_id is None or pred.object_kind == "value" and new_value is None:
-        raise FactWriteError(ERR_INVALID, f"{old.predicate}: loại đối tượng không khớp")
-    obj = None if new_object_id is None else await entities.canonical(db, new_object_id)
     key = entity_key(obj) if obj is not None else value_key(new_value)
     fin = FactIn(org_id=org_id, subject_id=old.subject_id, predicate=old.predicate, valid_from=old.valid_from,
                  object_entity_id=obj, object_value=new_value if obj is None else None, source_class="owner",
@@ -737,8 +835,6 @@ async def correct(db: AsyncSession, org_id: uuid.UUID, fact_id: uuid.UUID, *, ac
                  evidence=[EvidenceIn("owner_edit", action_log_id=action_log_id or uuid.uuid4())])
     try:
         async with db.begin_nested():
-            await db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(CAST(:o AS text) || CAST(:s AS text) || :p, 0))"),
-                             {"o": str(org_id), "s": str(old.subject_id), "p": old.predicate})
             # bản cũ rời EXCLUDE TRƯỚC khi chèn bản mới cùng khoảng
             await db.execute(text("UPDATE mem.facts SET status = 'superseded', closed_recorded_at = now() WHERE id = :i"),
                              {"i": fact_id})

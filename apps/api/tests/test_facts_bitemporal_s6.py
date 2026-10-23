@@ -13,7 +13,7 @@ from sqlalchemy import text
 from gh.biz.mem import disputes, entities, facts
 from gh.biz.mem.facts import FactWriteError
 from gh.db import sessionmaker
-from tests.mem_helpers import T, assert_no_overlap, mk_entity, mk_org, mkfact, n_disputes, rows
+from tests.mem_helpers import T, assert_no_overlap, mk_entity, mk_org, mkfact, n_disputes, pay, rows
 
 
 async def _setup(db):  # type: ignore[no-untyped-def]
@@ -155,8 +155,8 @@ async def test_s6_case7_three_facts_middle_missing_evidence_others_written(fresh
 
 async def test_s6_case8_owner_of_account_changes_stk_becomes_disputed(fresh_db, db) -> None:  # type: ignore[no-untyped-def]
     org, lan = await _setup(db)
-    v1 = {"digest": "aaa", "last3": "123"}
-    v2 = {"digest": "bbb", "last3": "456"}
+    v1 = pay("aaa", "123")
+    v2 = pay("bbb", "456")
     a = await facts.assert_fact(db, mkfact(org, lan, v1, T(1), predicate="payment_account", speaker=lan))
     assert a.status == "asserted"
     # chính chủ tài khoản đổi STK ⇒ vẫn disputed (CNS-096), không tự thay thế
@@ -183,7 +183,7 @@ async def test_s6_case8_owner_of_account_changes_stk_becomes_disputed(fresh_db, 
 
 async def test_s6_case8b_returning_to_previously_seen_stk_noted(fresh_db, db) -> None:  # type: ignore[no-untyped-def]
     org, lan = await _setup(db)
-    v1, v2 = {"digest": "aaa", "last3": "123"}, {"digest": "bbb", "last3": "456"}
+    v1, v2 = pay("aaa", "123"), pay("bbb", "456")
     a = await facts.assert_fact(db, mkfact(org, lan, v1, T(1), predicate="payment_account", speaker=lan))
     b = await facts.assert_fact(db, mkfact(org, lan, v2, T(3), predicate="payment_account", speaker=lan))
     d0 = (await disputes.list(db, org))[0]

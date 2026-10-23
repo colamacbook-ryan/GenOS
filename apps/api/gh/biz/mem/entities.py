@@ -43,9 +43,32 @@ def _entity(r: Any) -> Entity:
                   dict(r.attrs or {}), r.forgotten_at is not None)
 
 
-async def get(db: AsyncSession, entity_id: uuid.UUID) -> Entity | None:
-    r = (await db.execute(text(f"SELECT {_COLS} FROM mem.entities WHERE id = :i"), {"i": entity_id})).one_or_none()  # noqa: S608
+async def get(db: AsyncSession, entity_id: uuid.UUID, *, lock: str | None = None) -> Entity | None:
+    """`lock='share'` (ghi sự thật) / `'update'` (quên người, gộp): khoá dòng thực thể để quên người và worker ghi không đua nhau."""
+    suffix = {"share": " FOR SHARE", "update": " FOR UPDATE", None: ""}[lock]
+    r = (await db.execute(text(f"SELECT {_COLS} FROM mem.entities WHERE id = :i{suffix}"), {"i": entity_id})).one_or_none()  # noqa: S608
     return None if r is None else _entity(r)
+
+
+async def lock_rows(db: AsyncSession, ids: list[uuid.UUID], mode: str) -> None:
+    """Khoá nhiều dòng thực thể theo thứ tự id tăng dần (`share` = ghi sự thật; `update` = quên người/gộp) — mọi bên cùng thứ
+    tự nên không deadlock; quên người chờ các lượt ghi đang chạy, lượt ghi sau đó thấy `forgotten_at` và bị từ chối."""
+    uniq = sorted(set(ids))
+    if uniq:
+        suffix = {"share": "FOR SHARE", "update": "FOR UPDATE"}[mode]
+        await db.execute(text(f"SELECT id FROM mem.entities WHERE id = ANY(:i) ORDER BY id {suffix}"), {"i": uniq})  # noqa: S608
+
+
+async def require(db: AsyncSession, org_id: uuid.UUID, entity_id: uuid.UUID, *, lock: str | None = None,
+                  allow_forgotten: bool = True) -> Entity:
+    """Thực thể PHẢI tồn tại, thuộc đúng tổ chức (và, nếu `allow_forgotten=False`, chưa bị quên) — mọi chỗ nhận id thực thể
+    từ bên ngoài đều qua đây (chống tham chiếu chéo tổ chức, chống ghi vào người đã quên)."""
+    e = await get(db, entity_id, lock=lock)
+    if e is None or e.org_id != org_id:
+        raise EntityError(f"thực thể {entity_id} không thuộc tổ chức")
+    if e.forgotten and not allow_forgotten:
+        raise EntityError(f"thực thể {entity_id} đã bị quên")
+    return e
 
 
 async def canonical(db: AsyncSession, entity_id: uuid.UUID) -> uuid.UUID:
@@ -167,9 +190,11 @@ class MergeResult:
     target: uuid.UUID
     repointed: list[uuid.UUID]          # các entity từng trỏ `source`, nay trỏ `target` (để tách lại chính xác)
     disputes: int = 0                   # số tranh chấp mới do đối soát sau gộp (CNS-065)
+    reconciled: dict[str, Any] | None = None   # {"disputes": [...], "facts": [[id, trạng thái cũ], ...]} để tách lại hoàn tác
 
     def snapshot(self) -> dict[str, Any]:
-        return {"source": str(self.source), "target": str(self.target), "repointed": [str(i) for i in self.repointed]}
+        return {"source": str(self.source), "target": str(self.target), "repointed": [str(i) for i in self.repointed],
+                "reconciled": self.reconciled}
 
 
 async def merge(db: AsyncSession, org_id: uuid.UUID, source_id: uuid.UUID, target_id: uuid.UUID,
@@ -197,16 +222,21 @@ async def merge(db: AsyncSession, org_id: uuid.UUID, source_id: uuid.UUID, targe
     await db.execute(text("UPDATE mem.entities SET merged_into = :t WHERE merged_into = :s"), {"s": source_id, "t": target_id})
     await db.execute(text("UPDATE mem.entities SET merged_into = :t WHERE id = :s"), {"s": source_id, "t": target_id})
     n_disputes = 0
+    recon: dict[str, Any] | None = None
     if reconcile:
         from gh.biz.mem import facts
 
-        n_disputes = await facts.reconcile_entity(db, org_id, target_id)
-    return MergeResult(source_id, target_id, repointed, n_disputes)
+        rec = await facts.reconcile(db, org_id, target_id)
+        n_disputes = len(rec.created)
+        recon = rec.to_json()
+    return MergeResult(source_id, target_id, repointed, n_disputes, recon)
 
 
-async def unmerge(db: AsyncSession, org_id: uuid.UUID, source_id: uuid.UUID, repointed: list[uuid.UUID]) -> None:
+async def unmerge(db: AsyncSession, org_id: uuid.UUID, source_id: uuid.UUID, repointed: list[uuid.UUID],
+                  reconciled: dict[str, Any] | None = None) -> None:
     """Tách `source` khỏi đích: bỏ `merged_into`, trả các entity từng trỏ nó (theo bản ghi lúc gộp) về nó. Sự thật không
-    bị dời nên không cần dời lại. Sự thật đã chuyển `disputed` do đối soát vẫn do Sếp/job đóng."""
+    bị dời nên không cần dời lại. Các tranh chấp do đối soát lúc gộp (`reconciled`) được hoàn tác: sự thật còn `disputed` trả
+    về trạng thái cũ, tranh chấp đóng với lý do `unmerge` — không để hết hạn 30 ngày làm mất sự thật của cả hai người."""
     r = (await db.execute(text("SELECT org_id, merged_into FROM mem.entities WHERE id = :s FOR UPDATE"), {"s": source_id})).one_or_none()
     if r is None or r.org_id != org_id:
         raise EntityError("thực thể không tồn tại")
@@ -217,6 +247,10 @@ async def unmerge(db: AsyncSession, org_id: uuid.UUID, source_id: uuid.UUID, rep
     if repointed:
         await db.execute(text("UPDATE mem.entities SET merged_into = :s WHERE id = ANY(:ids) AND merged_into = :t"),
                          {"s": source_id, "ids": repointed, "t": target})
+    if reconciled:
+        from gh.biz.mem import facts
+
+        await facts.reverse_reconcile(db, org_id, reconciled)
 
 
 async def merge_persons(db: AsyncSession, org_id: uuid.UUID, drop_person: uuid.UUID,
@@ -243,4 +277,5 @@ async def unmerge_persons(db: AsyncSession, org_id: uuid.UUID, snap: dict[str, A
     """Đảo ngược `merge_persons` theo bản ghi (khoá lạ/thiếu ⇒ bỏ qua)."""
     if not snap or "source" not in snap:
         return
-    await unmerge(db, org_id, uuid.UUID(snap["source"]), [uuid.UUID(i) for i in snap.get("repointed", [])])
+    await unmerge(db, org_id, uuid.UUID(snap["source"]), [uuid.UUID(i) for i in snap.get("repointed", [])],
+                  snap.get("reconciled"))
