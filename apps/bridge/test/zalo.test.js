@@ -1,3 +1,4 @@
+import { META } from '../src/util.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ZaloAdapter } from '../src/channels/zalo.js';
@@ -17,7 +18,7 @@ test('chuẩn hoá: tin văn bản trong nhóm', () => {
   assert.deepEqual({ ...p, payload: undefined }, {
     channel: 'zalo', session_id: 's1', external_msg_id: '5001', external_group_id: 'G1', group_name: 'Nhóm bán hàng',
     sender_external_id: '111', sender_name: 'Lan', occurred_at: new Date(1758600000000).toISOString(),
-    kind: 'text', body_text: 'xin chào', direction: 'inbound', mentions_self: true, replies_to_self: false, payload: undefined,
+    kind: 'text', body_text: 'xin chào', direction: 'inbound', mentions_self: true, replies_to_self: false, payload: undefined, forwarded: null,
   });
   assert.equal(p.payload.data.content, 'xin chào');
   assert.equal(p.payload.threadId, 'G1');
@@ -45,7 +46,7 @@ test('chuẩn hoá: 1-1, ảnh, sticker, tệp, link, tin của chính mình', (
   assert.deepEqual([link.kind, link.body_text], ['text', 'Trang https://x.vn']);
 
   const voice = a.normalise(zaloMessage({ msgType: 'chat.voice', content: { href: 'https://v/a.aac' } }));
-  assert.deepEqual([voice.kind, voice.body_text], ['other', null]);
+  assert.deepEqual([voice.kind, voice.body_text], ['voice', null]);
 
   const self = a.normalise(zaloMessage({ isSelf: true, uidFrom: '900' }));
   assert.equal(self.direction, 'outbound');
@@ -194,4 +195,162 @@ test('gửi tin Zalo dùng ThreadType đúng', async () => {
   assert.equal(await a.send('G1', 'group', 'a'), '7001');
   assert.equal(await a.send('111', 'user', 'b'), '7002');
   assert.deepEqual(a.api.sent.map((x) => [x.content.msg, x.threadId, x.type]), [['a', 'G1', ThreadType.Group], ['b', '111', ThreadType.User]]);
+});
+
+
+// ─── L5: voice / ảnh / thu hồi / tải file an toàn ─────────────────────────────────────────────────────────────
+
+const norm = (a, m) => { const p = a.normalise(m); a.registerMedia(p[META]?.media); return p; };
+const fm = (a, p, over) => a.fetchMedia(p.media_ref, { chat: p.external_group_id ?? '', sender: p.sender_external_id, ...over });
+
+
+const ZALO_URL = 'https://voice-aac.zadn.vn/a/b.aac?sig=SIGNED';
+const PUBLIC = () => Promise.resolve([{ address: '8.8.8.8', family: 4 }]);
+
+function fakeFetch(map) {
+  const calls = [];
+  const fn = async (url, init) => {
+    calls.push({ url, init });
+    const r = map[url] ?? map['*'];
+    if (!r) throw new Error('mạng sập');
+    const body = r.body ?? Buffer.from('fake');
+    return {
+      status: r.status ?? 200, ok: (r.status ?? 200) < 400,
+      headers: { get: (h) => ({ 'content-type': r.type ?? 'audio/mp4', 'content-length': r.length ?? String(body.length), location: r.location }[h.toLowerCase()]) },
+      body: (async function* g() { yield body; }()),
+    };
+  };
+  fn.calls = calls;
+  return fn;
+}
+
+function mediaAdapter(fetchImpl, over = {}) {
+  const a = new ZaloAdapter({ lib: makeZaloLib().lib, sessionId: 's1', fetchImpl, lookup: PUBLIC, ...over });
+  a.ownId = '900';
+  a.state = 'active';
+  return a;
+}
+
+const zvoice = (over = {}) => zaloMessage({ msgType: 'chat.voice', content: { href: ZALO_URL, params: JSON.stringify({ duration: 12000, fileSize: 3000 }) }, ...over });
+
+test('L5 chuẩn hoá Zalo: voice → media_ref + thời lượng; href/URL ký không vào payload; forwarded = null (không biết)', () => {
+  const a = mediaAdapter(fakeFetch({}));
+  const p = norm(a, zvoice());
+  assert.equal(p.kind, 'voice');
+  assert.match(p.media_ref, /^zalo:s1:[0-9a-f]{32}$/);
+  assert.deepEqual(p.media, { kind: 'voice', mime: '', size: 3000, seconds: 12, ptt: true });
+  assert.equal(p.forwarded, null);
+  assert.equal(JSON.stringify(p).includes('SIGNED'), false);
+  const img = norm(a, zaloMessage({ msgId: '77', msgType: 'chat.photo', content: { title: 'ảnh', href: 'https://f1.zadn.vn/x.jpg?sig=Z', thumb: 'https://t' } }));
+  assert.match(img.media_ref, /^zalo:s1:[0-9a-f]{32}$/);
+  assert.notEqual(img.media_ref, p.media_ref);
+  assert.equal(JSON.stringify(img).includes('sig=Z'), false);
+  const gif = norm(a, zaloMessage({ msgType: 'chat.gif', content: { href: 'https://f1.zadn.vn/x.gif' } }));
+  assert.equal(gif.media_ref, undefined); // chỉ ảnh chụp cần OCR
+});
+
+test('L5 fetchMedia Zalo: tải qua allowlist, mime từ phản hồi, không gửi cookie', async () => {
+  const f = fakeFetch({ [ZALO_URL]: { type: 'audio/mp4; codecs=mp4a', body: Buffer.from('M4A-DATA') } });
+  const a = mediaAdapter(f);
+  const p = norm(a, zvoice());
+  const got = await fm(a, p);
+  assert.deepEqual([got.bytes.toString(), got.mime], ['M4A-DATA', 'audio/mp4']);
+  assert.equal(f.calls[0].init.redirect, 'manual');
+  assert.equal(JSON.stringify(f.calls[0].init.headers).toLowerCase().includes('cookie'), false);
+});
+
+test('L5 fetchMedia Zalo: chặn SSRF — host lạ, http, IP nội bộ, redirect ra ngoài, IP literal, userinfo', async () => {
+  const evil = (href) => norm(a2, zaloMessage({ msgId: String(Math.random()).slice(2, 8), msgType: 'chat.voice', content: { href } }));
+  const f = fakeFetch({ '*': {} });
+  const a2 = mediaAdapter(f);
+  for (const href of ['https://evil.example/a.aac', 'http://voice.zadn.vn/a', 'https://127.0.0.1/a', 'https://zadn.vn.evil.com/a',
+    'https://user:pw@voice.zadn.vn/a', 'https://voice.zadn.vn:8443/a', 'file:///etc/passwd', 'https://169.254.169.254/latest']) {
+    const p = evil(href);
+    await assert.rejects(fm(a2, p), { code: 'blocked_host' }, href);
+  }
+  assert.equal(f.calls.length, 0, 'không có yêu cầu mạng nào được phát ra');
+
+  // DNS trỏ IP nội bộ dù tên trong allowlist
+  const priv = mediaAdapter(fakeFetch({ '*': {} }), { lookup: () => Promise.resolve([{ address: '10.0.0.5' }]) });
+  const p = norm(priv, zvoice());
+  await assert.rejects(fm(priv, p), { code: 'blocked_host' });
+
+  // redirect sang host lạ bị chặn; redirect trong allowlist được theo
+  const redir = mediaAdapter(fakeFetch({ [ZALO_URL]: { status: 302, location: 'https://evil.example/x' } }));
+  await assert.rejects(fm(redir, norm(redir, zvoice())), { code: 'blocked_host' });
+  const ok = mediaAdapter(fakeFetch({ [ZALO_URL]: { status: 302, location: 'https://cdn2.zalo.me/z' }, 'https://cdn2.zalo.me/z': { body: Buffer.from('OK') } }));
+  assert.equal((await fm(ok, norm(ok, zvoice()))).bytes.toString(), 'OK');
+});
+
+test('L5 fetchMedia Zalo: trần byte (Content-Length và dòng chảy), mime lạ, lỗi mạng không lộ URL, ref lạ', async () => {
+  const a = mediaAdapter(fakeFetch({ [ZALO_URL]: { length: String(6 * 1024 * 1024) } }));
+  await assert.rejects(fm(a, norm(a, zvoice())), { code: 'too_large' });
+
+  const lie = mediaAdapter(fakeFetch({ [ZALO_URL]: { length: '10', body: Buffer.alloc(5 * 1024 * 1024 + 1) } }));
+  await assert.rejects(fm(lie, norm(lie, zvoice())), { code: 'too_large' });
+
+  const html = mediaAdapter(fakeFetch({ [ZALO_URL]: { type: 'text/html', body: Buffer.from('<html>') } }));
+  await assert.rejects(fm(html, norm(html, zvoice())), { code: 'mime_not_allowed' });
+
+  const down = mediaAdapter(fakeFetch({}));
+  await assert.rejects(fm(down, norm(down, zvoice())), (e) => e.code === 'download_failed' && !String(e.message).includes('zadn'));
+  await assert.rejects(down.fetchMedia('zalo:s1:khong-co'), { code: 'not_found' });
+
+  const long = mediaAdapter(fakeFetch({}));
+  const lp = norm(long, zaloMessage({ msgType: 'chat.voice', content: { href: ZALO_URL, params: JSON.stringify({ duration: 700000 }) } }));
+  await assert.rejects(fm(long, lp), { code: 'too_large' }); // > 10 phút, khai báo
+});
+
+test('L5 undo Zalo: lắng nghe `undo` → tin system mang revokes; trùng bị bỏ; vào qua bộ lọc tập nghe như tin thường', async () => {
+  const a = adapter();
+  const undo = { threadId: 'G1', isSelf: false, isGroup: true,
+    data: { msgId: '9001', cliMsgId: '4242', uidFrom: '111', dName: 'Lan', ts: '1758600001000', content: { globalMsgId: 5001, cliMsgId: 4241, deleteMsg: 1 } } };
+  const p = a.normaliseUndo(undo);
+  assert.deepEqual([p.kind, p.revokes, p.revokes_cli, p.external_group_id, p.sender_external_id, p.external_msg_id, p.direction],
+    ['system', '5001', '4241', 'G1', '111', 'undo:9001', 'inbound']);
+  assert.equal(a.normaliseUndo({ ...undo, data: { ...undo.data, content: {} } }), null);
+
+  const { bus, mgr, zalo, keyring } = await setup();
+  bus.listen.zalo = new Set(['G1']);
+  const blob = keyring.encryptTransport(JSON.stringify({ imei: 'i', cookie: [], userAgent: 'u' }), 'zalo:s1');
+  await mgr.handleControl(ctl('session.login', { channel: 'zalo', session_id: 's1', credential: blob }));
+  await waitFor(() => zalo.ctrl.api.listener.started);
+  zalo.ctrl.api.listener.emit("undo", undo);
+  zalo.ctrl.api.listener.emit("undo", undo);
+  await tick();
+  const got = bus.events.filter((e) => e.stream === STREAMS.inbound && e.payload.revokes);
+  assert.equal(got.length, 1);
+  assert.equal(got[0].payload.revokes, '5001');
+});
+
+test('L5 sổ media Zalo: cùng msgId ở hai chat ⇒ ref khác; chưa qua bộ lọc thì chưa tải; sai ràng buộc ⇒ not_found; không ghi đè', async () => {
+  const f = fakeFetch({ [ZALO_URL]: { body: Buffer.from('THAT') }, 'https://voice-aac.zadn.vn/gia.aac': { body: Buffer.from('GIA') } });
+  const a = mediaAdapter(f);
+  const real = a.normalise(zvoice({ threadId: 'G1', uidFrom: '111' }));
+  assert.equal(a.media.size, 0);
+  await assert.rejects(fm(a, real), { code: 'not_found' });
+  a.registerMedia(real[META].media);
+  const other = norm(a, zaloMessage({ threadId: 'G2', uidFrom: '222', msgType: 'chat.voice', content: { href: 'https://voice-aac.zadn.vn/gia.aac' } }));
+  assert.notEqual(real.media_ref, other.media_ref);
+  assert.equal((await fm(a, real)).bytes.toString(), 'THAT');
+  assert.equal((await fm(a, other)).bytes.toString(), 'GIA');
+  await assert.rejects(fm(a, real, { chat: 'G2' }), { code: 'not_found' });
+  await assert.rejects(fm(a, real, { sender: '222' }), { code: 'not_found' });
+  const poisoned = { ref: real.media_ref, entry: { kind: 'voice', mime: '', size: 1, seconds: 1, href: 'https://voice-aac.zadn.vn/gia.aac', bind: { chat: 'G2', sender: '222' } } };
+  assert.equal(a.registerMedia(poisoned), false);
+  assert.equal((await fm(a, real)).bytes.toString(), 'THAT');
+});
+
+test('L5 Zalo: payload thô không còn URL nào (href, thumb, params.*Url/hd) — kể cả params là chuỗi JSON; params hỏng bị bỏ', () => {
+  const a = mediaAdapter(fakeFetch({}));
+  const params = JSON.stringify({ duration: 12000, fileSize: 3000, hd: 'https://x.zadn.vn/hd?sig=A', rawUrl: 'https://x.zadn.vn/r?sig=B',
+    nested: { thumbUrl: 'https://t', ok: 1 }, voiceUrl: 'https://v?sig=C', m4aUrl: 'https://m', url: 'https://u' });
+  const v = norm(a, zaloMessage({ msgType: 'chat.voice', content: { href: ZALO_URL, thumb: 'https://t', params } }));
+  const raw = JSON.stringify(v);
+  for (const bad of ['http', 'sig=', 'zadn.vn', 'voiceUrl', 'rawUrl', '"hd"']) assert.equal(raw.includes(bad), false, bad);
+  const kept = JSON.parse(v.payload.data.content.params);
+  assert.deepEqual([kept.duration, kept.fileSize, kept.nested.ok], [12000, 3000, 1]);
+  assert.equal(v.media.seconds, 12); // thời lượng/kích thước lấy từ params TRƯỚC khi gỡ URL
+  const bad = norm(a, zaloMessage({ msgType: 'chat.photo', content: { href: 'https://f.zadn.vn/x?sig=D', params: '{không phải json https://leak?sig=E' } }));
+  assert.equal(JSON.stringify(bad).includes('leak'), false);
 });

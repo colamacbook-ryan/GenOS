@@ -38,9 +38,10 @@ async function loadLibs() {
 
 function createAdapter(channel, opts) {
   if (!libs[channel]) throw new Error(`CHANNEL_UNAVAILABLE:${channel}`);
+  const media = { mediaCacheMax: cfg.mediaCacheMax, mediaCacheTtlMs: cfg.mediaCacheTtlMs };
   return channel === 'zalo'
-    ? new ZaloAdapter({ lib: libs.zalo, directoryGapMs: cfg.directoryGapMs, ...opts })
-    : new WhatsAppAdapter({ lib: libs.whatsapp, ...opts });
+    ? new ZaloAdapter({ lib: libs.zalo, directoryGapMs: cfg.directoryGapMs, ...media, ...opts })
+    : new WhatsAppAdapter({ lib: libs.whatsapp, ...media, ...opts });
 }
 
 const manager = new SessionManager({
