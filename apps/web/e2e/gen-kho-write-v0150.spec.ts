@@ -229,6 +229,24 @@ test('Chuông không mất thông báo phát lúc ổ cắm realtime còn đang 
   await expect(page.getByRole('dialog', { name: 'Thông báo' }).locator('.nt-item', { hasText: 'Gen đề xuất ghi Kho · Phiên v0.1.50' })).toBeVisible();
 });
 
+test('Chuông không mất thông báo khi phản hồi danh sách (đã chụp TRƯỚC khi thông báo tạo ra) về muộn hơn tin ổ cắm "notification.new"', async ({ page }) => {
+  test.setTimeout(90_000);
+  // Máy chủ xử lý danh sách chuông ngay (chưa có thông báo), nhưng phản hồi về trình duyệt chậm 1,5 giây: tin ổ cắm của thông báo
+  // mới tới trong lúc lần tải cũ còn bay — danh sách cũ không được ghi đè / nuốt mất thông báo vừa chèn.
+  await page.route(/\/api\/v1\/notifications\?limit=20/, async (route) => {
+    const res = await route.fetch();
+    await new Promise((r) => setTimeout(r, 1500));
+    await route.fulfill({ response: res });
+  });
+  const socketOpen = page.waitForEvent('websocket', (w) => /\/api\/v1\/ws$/.test(w.url()));
+  await page.goto('/overview');
+  await socketOpen;
+  await page.waitForTimeout(300); // ổ cắm đã mở (React StrictMode mở lại một lần) và lần tải đầu đã tới máy chủ
+  await p3Hook(page.request, 'gen', 'khoRelease', { version: 'v0.1.50' });
+  await page.getByRole('button', { name: /^Thông báo/ }).click();
+  await expect(page.getByRole('dialog', { name: 'Thông báo' }).locator('.nt-item', { hasText: 'Gen đề xuất ghi Kho · Phiên v0.1.50' })).toBeVisible({ timeout: 15_000 });
+});
+
 test('Kho từ chối (HUB_WRITE_REJECTED) ⇒ câu nêu ĐÚNG lý do Kho + "Bấm Sửa"; "Chi tiết kỹ thuật" có mã + lý do; thẻ còn chờ, không ghi', async ({ page }) => {
   test.setTimeout(90_000);
   await hubSim(page.request, { kho: 'rejected' });
