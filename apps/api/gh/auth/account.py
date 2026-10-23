@@ -12,14 +12,15 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gh.auth import service
+from gh.auth import login_guard, service
 from gh.auth.deps import current_user
 from gh.chassis import actionlog
+from gh.config import get_settings
 from gh.crypto import hash_secret, verify_secret
 from gh.db import DB
 from gh.errors import ApiError, field_errors, not_found
@@ -60,14 +61,35 @@ async def _log(db: AsyncSession, user: service.CurrentUser, action: str, *, resu
                            detail=detail, ip=user.ip)
 
 
-async def _check_password(db: AsyncSession, user: service.CurrentUser, password: str | None, *, purpose: str) -> None:
-    """Sai → ghi nhật ký thất bại, commit, trả 422 ở ô current_password."""
+async def _check_password(db: AsyncSession, user: service.CurrentUser, password: str | None, *, purpose: str,
+                          redis: Any) -> None:
+    """Sai → ghi nhật ký thất bại, commit, trả 422 ở ô current_password.
+
+    v0.1.75: đếm sai theo user_id (login_guard, `account_pw_fail_limit` lần / cửa sổ) — kẻ cầm cookie phiên không dò
+    mật khẩu không giới hạn được. Chạm ngưỡng → thu hồi CHÍNH phiên này + 429; đang bị khoá thì không kiểm nữa."""
+    retry = await login_guard.user_blocked(redis, user.id)
+    if retry is not None:
+        await _lock_out(db, user, purpose=purpose, retry=retry)
     h = (await db.execute(text("SELECT password_hash FROM core.users WHERE id = :u"), {"u": user.id})).scalar()
     if password and h is not None and verify_secret(h, password):
+        await login_guard.clear_user(redis, user.id)
         return
+    fails = await login_guard.record_user_failure(redis, user.id)
     await _log(db, user, "account.password_check_failed", result="failed", detail={"purpose": purpose})
+    if fails >= get_settings().account_pw_fail_limit:
+        await _lock_out(db, user, purpose=purpose, retry=get_settings().login_fail_window_seconds)
     await db.commit()
     raise field_errors({"current_password": WRONG_PASSWORD})
+
+
+async def _lock_out(db: AsyncSession, user: service.CurrentUser, *, purpose: str, retry: int) -> None:
+    await service.revoke_session(db, user.session_id)
+    await _log(db, user, "account.password_check_locked", result="blocked", detail={"purpose": purpose})
+    await db.commit()
+    minutes = max(1, -(-retry // 60))
+    raise ApiError(429, "ACCOUNT_RATE_LIMITED",
+                   "Nhập sai mật khẩu quá nhiều lần — phiên đăng nhập này đã bị đăng xuất",
+                   f"Đăng nhập lại và thử sau khoảng {minutes} phút.", retry_after_s=retry)
 
 
 async def _revoke_others(db: AsyncSession, user: service.CurrentUser) -> int:
@@ -102,7 +124,7 @@ async def get_account(user: service.CurrentUser = Depends(current_user), db: Asy
 
 
 @router.patch("")
-async def update_profile(body: ProfileIn, user: service.CurrentUser = Depends(current_user),
+async def update_profile(body: ProfileIn, request: Request, user: service.CurrentUser = Depends(current_user),
                          db: AsyncSession = DB) -> dict[str, Any]:
     errors: dict[str, str] = {}
     changes: dict[str, Any] = {}
@@ -130,7 +152,8 @@ async def update_profile(body: ProfileIn, user: service.CurrentUser = Depends(cu
     if errors:
         raise field_errors(errors)
     if "email" in changes:
-        await _check_password(db, user, body.current_password, purpose="email.change")
+        await _check_password(db, user, body.current_password, purpose="email.change",
+                              redis=request.app.state.redis)
     if changes:
         sets = ", ".join(f"{k} = :{k}" for k in changes)
         await db.execute(text(f"UPDATE core.users SET {sets}, updated_at = now() WHERE id = :u"),  # noqa: S608
@@ -147,11 +170,12 @@ async def update_profile(body: ProfileIn, user: service.CurrentUser = Depends(cu
 
 
 @router.post("/password")
-async def change_password(body: PasswordIn, user: service.CurrentUser = Depends(current_user),
+async def change_password(body: PasswordIn, request: Request, user: service.CurrentUser = Depends(current_user),
                           db: AsyncSession = DB) -> dict[str, Any]:
     if len(body.new_password) < MIN_PASSWORD_LEN:
         raise field_errors({"new_password": f"Mật khẩu mới cần ít nhất {MIN_PASSWORD_LEN} ký tự"})
-    await _check_password(db, user, body.current_password, purpose="password.change")
+    await _check_password(db, user, body.current_password, purpose="password.change",
+                          redis=request.app.state.redis)
     if body.new_password == body.current_password:
         raise field_errors({"new_password": "Mật khẩu mới phải khác mật khẩu hiện tại"})
     await db.execute(text("UPDATE core.users SET password_hash = :h, must_change_password = false, "
@@ -163,8 +187,8 @@ async def change_password(body: PasswordIn, user: service.CurrentUser = Depends(
 
 
 @router.post("/pin", status_code=204)
-async def change_pin(body: PinIn, response: Response, user: service.CurrentUser = Depends(current_user),
-                     db: AsyncSession = DB) -> Response:
+async def change_pin(body: PinIn, request: Request, response: Response,
+                     user: service.CurrentUser = Depends(current_user), db: AsyncSession = DB) -> Response:
     # v0.1.61 (F071/F097): người chưa có PIN (Quản lý được mời…) ĐẶT PIN LẦN ĐẦU ở đây, cũng bằng mật khẩu đăng nhập
     # (như Owner đổi PIN). Trước đây trả 409 NO_PIN nên người được giao quyền duyệt không có đường nào đặt PIN.
     had_pin = bool((await db.execute(text("SELECT pin_hash IS NOT NULL FROM core.users WHERE id = :u"),
@@ -176,8 +200,12 @@ async def change_pin(body: PinIn, response: Response, user: service.CurrentUser 
         errors["new_pin_confirm"] = "Hai lần nhập mã PIN chưa khớp"
     if errors:
         raise field_errors(errors)
-    await _check_password(db, user, body.current_password, purpose="pin.change")
+    await _check_password(db, user, body.current_password, purpose="pin.change", redis=request.app.state.redis)
     await service.set_pin(db, user.id, body.new_pin)
+    await login_guard.clear_pin_lock_level(request.app.state.redis, user.id)
+    # v0.1.75: đổi PIN đóng MỌI cửa sổ PIN đang mở (kể cả phiên khác) — PIN cũ có thể là PIN bị lộ.
+    await db.execute(text("UPDATE core.sessions SET pin_verified_until = NULL WHERE user_id = :u "
+                          "AND pin_verified_until IS NOT NULL"), {"u": user.id})
     await _log(db, user, "account.pin_changed" if had_pin else "account.pin_set")  # không ghi PIN / mật khẩu
     response.status_code = 204
     return response

@@ -88,7 +88,10 @@ async def login(body: LoginIn, request: Request, response: Response,
                 db: AsyncSession = DB) -> dict[str, Any]:
     ip = client_ip(request)
     redis = request.app.state.redis
-    hit = await login_guard.blocked(redis, ip, body.email)
+    # v0.1.75: trình duyệt từng đăng nhập đúng (cookie thiết bị ký HMAC, gắn với email) không bị ngưỡng EMAIL chặn —
+    # người lạ biết email Owner không khoá được Owner ra ngoài; ngưỡng IP vẫn áp, mật khẩu vẫn phải đúng.
+    trusted = login_guard.device_ok(request.cookies.get(login_guard.DEVICE_COOKIE), body.email)
+    hit = await login_guard.blocked(redis, ip, body.email, trusted_device=trusted)
     if hit is not None:
         retry, scope = hit
         org_id = (await db.execute(text("SELECT id FROM core.organizations ORDER BY created_at LIMIT 1"))).scalar()
@@ -128,6 +131,9 @@ async def login(body: LoginIn, request: Request, response: Response,
     await actionlog.record(db, org_id=user.org_id, actor_type="user", actor_id=user.actor_id,
                            action="auth.login", ip=ip)
     set_session_cookies(response, new)
+    response.set_cookie(login_guard.DEVICE_COOKIE, login_guard.device_token(body.email),
+                        max_age=login_guard.DEVICE_TTL_S, httponly=True, secure=get_settings().cookie_secure,
+                        samesite="strict", path="/")
     return await me_payload(db, user)
 
 
@@ -149,9 +155,9 @@ async def me(user: service.CurrentUser = Depends(current_user),
 
 
 @router.post("/pin/verify")
-async def pin_verify(body: PinIn, user: service.CurrentUser = Depends(current_user),
+async def pin_verify(body: PinIn, request: Request, user: service.CurrentUser = Depends(current_user),
                      db: AsyncSession = DB) -> dict[str, Any]:
-    result = await service.verify_pin(db, user, body.pin)
+    result = await service.verify_pin(db, user, body.pin, redis=request.app.state.redis)
     if result.ok:
         return {"pin_verified_until": _iso(result.pin_verified_until)}
     await db.commit()  # số lần sai và dòng nhật ký phải được lưu dù trả lỗi

@@ -23,6 +23,7 @@ export const ACTION_LABEL: Record<string, string> = {
   'auth.pin_not_set': 'Cần mã PIN nhưng chưa đặt',
   'account.password_changed': 'Đổi mật khẩu',
   'account.password_check_failed': 'Nhập sai mật khẩu khi xác nhận',
+  'account.password_check_locked': 'Nhập sai mật khẩu quá nhiều lần — phiên bị đăng xuất',
   'account.pin_set': 'Đặt mã PIN lần đầu',
   'account.pin_changed': 'Đổi mã PIN',
   'account.profile_updated': 'Sửa thông tin tài khoản',
