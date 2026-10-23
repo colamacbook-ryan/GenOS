@@ -351,6 +351,33 @@ async def _member(db: AsyncSession, group_id: uuid.UUID, person_id: uuid.UUID, r
                      {"g": group_id, "p": person_id, "r": role})
 
 
+def _media_fields(kind: str, p: dict[str, Any]) -> dict[str, Any]:
+    """L5 (§4E): các khoá bridge gắn thêm vào tin, đưa vào `payload` của Kho thô (`raw.events` chỉ thêm).
+    - `media_ref` (chỉ khuôn hợp lệ — không bao giờ URL) + `media` (mô tả KHAI BÁO: loại/mime/size/giây) cho voice/ảnh;
+      việc `media.process` do `gh.biz.media.jobs` nhặt từ chính các tin này.
+    - `forwarded`: True/False (WhatsApp có cờ thật) hoặc null = KHÔNG BIẾT (Zalo) — refinery dùng simhash xuyên nhóm.
+    - `revokes` / `revokes_cli`: id tin bị thu hồi (tin `system` mới; trích dẫn trỏ tin đó hiện "(tin đã thu hồi)")."""
+    from gh.biz.media.fetch import valid_ref
+
+    out: dict[str, Any] = {}
+    ref = p.get("media_ref")
+    if kind in ("voice", "image") and valid_ref(ref):
+        out["media_ref"] = ref
+        raw_m = p.get("media")
+        m: dict[str, Any] = raw_m if isinstance(raw_m, dict) else {}
+        out["media"] = {k: m[k] for k in ("kind", "mime", "size", "seconds", "ptt")
+                        if isinstance(m.get(k), (str, int, float, bool))}
+        # Ràng buộc bridge đã gắn cho ref này (nhóm + người gửi): `media.fetch` gửi lại đúng cặp để bridge đối chiếu.
+        out["media_bind"] = {"chat": str(p.get("external_group_id") or ""),
+                             "sender": str(p.get("sender_external_id") or "")}
+    if "forwarded" in p and (p["forwarded"] is None or isinstance(p["forwarded"], bool)):
+        out["forwarded"] = p["forwarded"]
+    for k in ("revokes", "revokes_cli"):
+        if isinstance(p.get(k), str) and 0 < len(p[k]) <= 64:
+            out[k] = p[k]
+    return out
+
+
 async def ingest_message(db: AsyncSession, org_id: uuid.UUID, p: dict[str, Any]) -> uuid.UUID | None:
     """Ghi một tin vào Kho thô. Trả id bản ghi mới, hoặc None nếu bỏ (trùng, nhóm chưa bật, kênh lạ)."""
     channel = await channel_row(db, org_id, str(p.get("channel", "")))
@@ -397,11 +424,12 @@ async def ingest_message(db: AsyncSession, org_id: uuid.UUID, p: dict[str, Any])
     if fresh is None:
         return None  # bridge gửi lại / tin trùng
     body = p.get("body_text")
-    kind = p.get("kind") if p.get("kind") in KINDS else "other"
+    kind = p.get("kind") if p.get("kind") in (*KINDS, "voice") else "other"   # L5: thêm "voice" (tin thoại)
     payload: dict[str, Any] = p["payload"] if isinstance(p.get("payload"), dict) else {"value": p.get("payload")}
     replies = bool(p.get("replies_to_self"))
     if replies:
         payload = {**payload, "replies_to_self": True}    # v0.1.72: trả lời (quote) tin của chính bot
+    payload = {**payload, **_media_fields(str(kind), p)}  # L5: media_ref, cờ chuyển tiếp, thu hồi (chỉ THÊM khoá)
     content_hash = hashlib.sha256(orjson.dumps([channel.type, msg_id, sender, body or "", kind])).digest()
     direction = "outbound" if p.get("direction") == "outbound" else "inbound"
     mentions = bool(p.get("mentions_self"))

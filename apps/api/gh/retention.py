@@ -275,16 +275,23 @@ async def purge_orphan_attachments(db: AsyncSession, keep_days: int | None, dead
         store = get_object_store()
     total, failed = 0, 0
     while True:
-        rows = (await db.execute(text("""
-            DELETE FROM raw.attachments WHERE id IN (
-              SELECT a.id FROM raw.attachments a
-              WHERE a.event_received_at < now() - make_interval(days => :k)
-                AND NOT EXISTS (SELECT 1 FROM raw.events e
-                                WHERE e.id = a.event_id AND e.received_at = a.event_received_at)
-              LIMIT :lim)
-            RETURNING storage_key"""), {"k": keep_days, "lim": BATCH})).scalars().all()
+        ids = (await db.execute(text("""
+            SELECT a.id FROM raw.attachments a
+             WHERE a.event_received_at < now() - make_interval(days => :k)
+               AND NOT EXISTS (SELECT 1 FROM raw.events e
+                               WHERE e.id = a.event_id AND e.received_at = a.event_received_at)
+             LIMIT :lim"""), {"k": keep_days, "lim": BATCH})).scalars().all()
+        if not ids:
+            break
+        # L5: `clean.media_texts.attachment_id` là FK không ON DELETE ⇒ xoá chữ đã đọc TRƯỚC, cùng giao dịch với tệp
+        # (nếu không, cả lô hỏng ForeignKeyViolation và đêm nào cũng không xoá được dòng nào).
+        await db.execute(text("DELETE FROM clean.media_texts WHERE attachment_id = ANY(:ids)"), {"ids": ids})
+        rows = (await db.execute(text("DELETE FROM raw.attachments WHERE id = ANY(:ids) RETURNING storage_key"),
+                                 {"ids": ids})).scalars().all()
         await db.commit()
         for key in rows:
+            if str(key).startswith("none:"):      # hàng giữ chỗ của media (không có object)
+                continue
             try:
                 await store.delete(key)
             except Exception:  # noqa: BLE001 — best-effort
@@ -295,6 +302,33 @@ async def purge_orphan_attachments(db: AsyncSession, keep_days: int | None, dead
     if total:
         log.info("Dọn tệp đính kèm quá hạn: %d dòng (%d object không xoá được)", total, failed)
     return total
+
+
+async def purge_media_texts(db: AsyncSession, keep_days: int | None, deadline: float) -> int:
+    """L5: chữ STT/OCR (`clean.media_texts`) theo CÙNG hạn lưu của `raw.events` (cột `raw_received_at`) — chữ đọc từ
+    voice/ảnh không được sống lâu hơn tin gốc. Xoá theo lô, commit mỗi lô."""
+    if keep_days is None:
+        return 0
+    total = 0
+    while True:
+        n = (await db.execute(text("""
+            DELETE FROM clean.media_texts WHERE id IN (
+              SELECT id FROM clean.media_texts
+               WHERE raw_received_at < now() - make_interval(days => :k) LIMIT :lim)
+            RETURNING 1"""), {"k": keep_days, "lim": BATCH})).all()
+        await db.commit()
+        total += len(n)
+        if len(n) < BATCH or time.monotonic() >= deadline:
+            break
+    if total:
+        log.info("Dọn chữ media quá hạn: %d dòng", total)
+    return total
+
+
+async def purge_attachments_and_media_texts(db: AsyncSession, keep_days: int | None, deadline: float) -> int:
+    """Phần `raw.attachments` của lượt dọn: chữ media quá hạn trước, rồi tệp mồ côi (đếm số dòng tệp đã xoá)."""
+    await purge_media_texts(db, keep_days, deadline)
+    return await purge_orphan_attachments(db, keep_days, deadline)
 
 
 async def purge_sessions(db: AsyncSession) -> int:
@@ -440,7 +474,8 @@ async def retention_sweep(ctx: dict[str, Any]) -> dict[str, Any]:
     else:  # partman lỗi — vẫn tính hạn từ bảng chính sách (chỉ đọc)
         async with sm() as db:
             raw_keep = await effective_keep_days(db, "raw.events")
-    await part("raw.attachments", "batch", in_session(lambda db: purge_orphan_attachments(db, raw_keep, deadline)))
+    await part("raw.attachments", "batch",
+               in_session(lambda db: purge_attachments_and_media_texts(db, raw_keep, deadline)))
     await part("agent.gen_conversations", "batch", in_session(purge_gen))
     await part("core.notifications", "batch", in_session(purge_notifications))
     # Đổi dòng nhật ký MCP cũ chạy SAU các phần xoá quá hạn — lần đầu sau nâng cấp (bảng lớn) không ăn hết thời gian

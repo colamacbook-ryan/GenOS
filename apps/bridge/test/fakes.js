@@ -40,6 +40,10 @@ export class FakeBus {
 
   async isSupportGroup(channel, groupId) { return Boolean(this.support[channel]?.has(String(groupId))); }
 
+  async putMediaResult(requestId, result) {
+    (this.mediaResults ||= []).push({ requestId, result: JSON.parse(JSON.stringify(result)) });
+  }
+
   async claimNonce(nonce) {
     if (this.nonces.has(nonce)) return false;
     this.nonces.add(nonce);
@@ -206,7 +210,7 @@ export const BufferJSON = {
 export const ADV0 = Buffer.alloc(32, 1).toString('base64');
 
 export function makeBaileysLib() {
-  const ctrl = { sockets: [], qrTexts: [] };
+  const ctrl = { sockets: [], qrTexts: [], downloads: [], mediaBytes: Buffer.from('OggS-fake-voice'), downloadError: null };
   const makeWASocket = (config) => {
     const sock = {
       config,
@@ -254,6 +258,13 @@ export function makeBaileysLib() {
     proto: undefined,
     toDataURL: async (text) => { qrN += 1; ctrl.qrTexts.push(text); return `data:image/png;base64,${Buffer.from(`qr${qrN}:${text.length}`).toString('base64')}`; },
     logger: { level: 'silent' },
+    // Baileys: downloadContentFromMessage({mediaKey, directPath, url}, type, opts) → async-iterable các mảnh Buffer.
+    downloadContentFromMessage: async (desc, type, opts) => {
+      ctrl.downloads.push({ desc, type, opts });
+      if (ctrl.downloadError) throw ctrl.downloadError;
+      const bytes = ctrl.mediaBytes;
+      return (async function* gen() { for (let i = 0; i < bytes.length; i += 4) yield bytes.subarray(i, i + 4); }());
+    },
   };
   ctrl.last = () => ctrl.sockets[ctrl.sockets.length - 1];
   return { lib, ctrl };
