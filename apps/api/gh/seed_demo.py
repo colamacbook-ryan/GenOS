@@ -294,7 +294,7 @@ def _refs_texts(messages: list[Message]) -> list[tuple[str, str]]:
     body = messages[-1].content.split("Tin nhắn (mỗi dòng một JSON):\n", 1)[1]
     out = []
     for line in body.splitlines():
-        if line.strip():
+        if line.startswith("{"):  # bỏ dòng nhãn/dấu khối wrap_untrusted (L3) — chỉ dòng JSON là tin
             d = orjson.loads(line)
             out.append((d["ref"], d["text"]))
     return out
