@@ -35,7 +35,7 @@ from gh.gen import briefing, chat_pending, diplomat, envelope, proposals, store
 from gh.gen.coach import engine as coach_engine
 from gh.gen.coach import signals as coach_signals
 from gh.gen.coach import store as coach_store
-from gh.gen.engine import AGENT_KEY, TurnInput, digest, system_prompt, wrap_untrusted
+from gh.gen.engine import AGENT_KEY, BOX_NEEDED, TurnInput, box_unavailable, digest, system_prompt, wrap_untrusted
 from gh.hub_link import load_kho_label
 from gh.owner_cmd import text as otext
 from gh.providers.clients import Message
@@ -428,11 +428,14 @@ async def hoi(cmd: OwnerCommand, ctx: Context) -> Reply:
     now = datetime.now(UTC)
     context = await read_context(ctx, cmd.via)
     try:
+        # v0.1.75 (Nợ #45): `context` chép bản tin / việc / sự cố (tên khách, tiêu đề do người ngoài viết) ⇒ lượt có chữ
+        # người ngoài ⇒ agy chỉ được chạy qua hộp riêng (`external=True`).
         routed = await ctx.router.generate(
             ctx.org_id,
             agent_key=AGENT_KEY,
             purpose=purpose_of(cmd.via),
             json_mode=False,
+            external=True,
             messages=[
                 Message(
                     "system",
@@ -444,6 +447,8 @@ async def hoi(cmd: OwnerCommand, ctx: Context) -> Reply:
             ],
         )
     except ModelUnavailable as e:
+        if box_unavailable(e.reasons):
+            return Reply(BOX_NEEDED.format(addr=_addr(user)))
         return Reply(MODEL_DOWN if e.no_chain is False else NO_MODEL)
     await _log(ctx, cmd, "gen.answer", model=routed.model, provider=routed.provider)
     answer = routed.text.strip()

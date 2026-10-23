@@ -23,23 +23,88 @@ bộ đếm email của nhân viên đó.
 Mỗi khoá luôn có TTL: `SET NX EX` + `INCR` + `EXPIRE NX` trong một MULTI/EXEC (không thể hết hạn chen giữa, tiến
 trình chết giữa chừng không để lại khoá vĩnh viễn); khoá nào lỡ mất TTL (-1, bản cũ) thì `blocked()` đặt lại.
 
-Redis lỗi → fail-open (log một dòng, không kèm email, cho đăng nhập tiếp): app do Owner tự host; Redis chết thì api
-đã báo sức khoẻ, không nên khoá Owner ra ngoài vì hạ tầng.
+Redis lỗi → (v0.1.75) lớp lùi: bộ đếm trong bộ nhớ TIẾN TRÌNH (cùng ngưỡng/cửa sổ, mất khi khởi động lại, không chia
+sẻ giữa các worker — chỉ để dò mật khẩu không thành miễn phí khi Redis chết). Log một dòng, không kèm email.
+
+Thiết bị tin cậy (v0.1.75): đăng nhập đúng được cookie `gh_device` ký HMAC (khoá master, gắn với email, hạn 30 ngày).
+Email đang bị khoá nhưng trình duyệt có cookie hợp lệ của CHÍNH email đó → bỏ qua ngưỡng email (vẫn phải đúng mật khẩu,
+vẫn chịu ngưỡng IP) ⇒ người lạ biết email Owner không khoá được Owner ra ngoài.
+
+Tài khoản (v0.1.75): `/account/password`, `/account/pin` có cookie phiên cũng đếm sai theo user_id
+(`account_pw_fail_limit`, mặc định 5 / cửa sổ trên) — vượt ngưỡng thu hồi chính phiên đó.
 
 TOTP/2FA: để sau (chưa làm trong đợt này).
 """
 
 import hashlib
+import hmac
 import logging
+import time
+import uuid
 from typing import Any
 
 from redis.exceptions import RedisError
 
+from gh import crypto
 from gh.config import get_settings
 
 log = logging.getLogger("gh.auth.login_guard")
 
 _FAIL_OPEN = (RedisError, OSError)
+
+DEVICE_COOKIE = "gh_device"
+DEVICE_TTL_S = 30 * 24 * 3600
+
+# Lớp lùi khi Redis lỗi: khoá -> (số lần, hạn theo time.monotonic()).
+_mem: dict[str, tuple[int, float]] = {}
+_MEM_MAX = 20000
+
+
+def reset_memory() -> None:
+    _mem.clear()
+
+
+def _mem_get(k: str) -> tuple[int, int]:
+    """(số lần, giây còn lại) — hết hạn thì xoá."""
+    v = _mem.get(k)
+    if v is None:
+        return 0, 0
+    left = v[1] - time.monotonic()
+    if left <= 0:
+        _mem.pop(k, None)
+        return 0, 0
+    return v[0], max(1, int(left))
+
+
+def _mem_incr(k: str, window: int) -> int:
+    if len(_mem) >= _MEM_MAX:
+        now = time.monotonic()
+        for dead in [x for x, (_, exp) in _mem.items() if exp <= now]:
+            _mem.pop(dead, None)
+        if len(_mem) >= _MEM_MAX:  # vẫn đầy (bị dội) — bỏ hết còn hơn phình bộ nhớ
+            _mem.clear()
+    n, left = _mem_get(k)
+    _mem[k] = (n + 1, time.monotonic() + (left if n else window))
+    return n + 1
+
+
+def _device_sig(email: str, exp: int) -> str:
+    return crypto.keyed_digest(b"login-device", f"{_email_hash(email)}:{exp}".encode()).hex()
+
+
+def device_token(email: str) -> str:
+    exp = int(time.time()) + DEVICE_TTL_S
+    return f"{exp}.{_device_sig(email, exp)}"
+
+
+def device_ok(token: str | None, email: str) -> bool:
+    """Cookie thiết bị tin cậy còn hạn, đúng chữ ký và đúng email này."""
+    if not token or "." not in token:
+        return False
+    exp_s, _, sig = token.partition(".")
+    if not exp_s.isdigit() or int(exp_s) < time.time():
+        return False
+    return hmac.compare_digest(_device_sig(email, int(exp_s)), sig)
 
 
 def _email_hash(email: str) -> str:
@@ -68,12 +133,11 @@ def keys(ip: str | None, email: str) -> list[str]:
     return [k for k, _, _ in _limits(ip, email)]
 
 
-async def blocked(redis: Any, ip: str | None, email: str) -> tuple[int, str] | None:
-    """(số giây còn lại — tối thiểu 1, scope "ip" | "email") nếu IP hoặc email đã chạm ngưỡng; không thì None."""
+async def _blocked_limits(redis: Any, limits: list[tuple[str, str, int]]) -> tuple[int, str] | None:
     window = get_settings().login_fail_window_seconds
     try:
         worst: tuple[int, str] | None = None
-        for k, scope, limit in _limits(ip, email):
+        for k, scope, limit in limits:
             raw = await redis.get(k)
             if raw is not None and int(raw) >= limit:
                 ttl = int(await redis.ttl(k))
@@ -86,27 +150,102 @@ async def blocked(redis: Any, ip: str | None, email: str) -> tuple[int, str] | N
                     worst = (max(worst[0], left), worst[1])
         return worst
     except _FAIL_OPEN as e:
-        log.warning("Redis lỗi khi kiểm giới hạn đăng nhập — cho đăng nhập tiếp (%s)", type(e).__name__)
-        return None
+        log.warning("Redis lỗi khi kiểm giới hạn đăng nhập — dùng bộ đếm trong bộ nhớ (%s)", type(e).__name__)
+        worst = None
+        for k, scope, limit in limits:
+            n, left = _mem_get(k)
+            if n >= limit:
+                worst = (left, scope) if worst is None else (max(worst[0], left), worst[1])
+        return worst
 
 
-async def record_failure(redis: Any, ip: str | None, email: str) -> None:
+async def blocked(redis: Any, ip: str | None, email: str, *, trusted_device: bool = False) -> tuple[int, str] | None:
+    """(số giây còn lại — tối thiểu 1, scope "ip" | "email") nếu IP hoặc email đã chạm ngưỡng; không thì None.
+    `trusted_device=True` (cookie thiết bị hợp lệ): bỏ qua ngưỡng email, vẫn áp ngưỡng IP."""
+    limits = [x for x in _limits(ip, email) if not (trusted_device and x[1] == "email")]
+    return await _blocked_limits(redis, limits)
+
+
+async def _incr_keys(redis: Any, ks: list[str]) -> list[int]:
+    """Tăng các khoá (MULTI/EXEC) — trả số đếm mới theo thứ tự `ks`. Redis lỗi → đếm trong bộ nhớ."""
     window = get_settings().login_fail_window_seconds
     try:
         # Một MULTI/EXEC cho mọi khoá: SET NX EX + INCR + EXPIRE NX chạy liền khối — khoá không thể hết hạn giữa SET và
         # INCR (INCR tạo lại khoá KHÔNG TTL ⇒ đếm dồn nhiều ngày); EXPIRE NX (Redis ≥ 7) chốt lại TTL nếu vẫn thiếu.
         async with redis.pipeline(transaction=True) as pipe:
-            for k in keys(ip, email):
+            for k in ks:
                 pipe.set(k, 0, nx=True, ex=window)
                 pipe.incr(k)
                 pipe.expire(k, window, nx=True)
-            await pipe.execute()
+            res = await pipe.execute()
+        return [int(res[i * 3 + 1]) for i in range(len(ks))]
     except _FAIL_OPEN as e:
-        log.warning("Redis lỗi khi ghi lần đăng nhập sai (%s)", type(e).__name__)
+        log.warning("Redis lỗi khi ghi lần đăng nhập sai — dùng bộ đếm trong bộ nhớ (%s)", type(e).__name__)
+        return [_mem_incr(k, window) for k in ks]
+
+
+async def record_failure(redis: Any, ip: str | None, email: str) -> None:
+    await _incr_keys(redis, keys(ip, email))
+
+
+# ─── Đếm sai mật khẩu ở /account (cookie phiên) theo user_id ────────────────
+
+def user_key(user_id: uuid.UUID) -> str:
+    return "gh:account:fail:user:" + str(user_id)
+
+
+async def user_blocked(redis: Any, user_id: uuid.UUID) -> int | None:
+    """Số giây còn lại nếu user đã chạm ngưỡng sai mật khẩu ở /account; không thì None."""
+    hit = await _blocked_limits(redis, [(user_key(user_id), "user", get_settings().account_pw_fail_limit)])
+    return hit[0] if hit else None
+
+
+async def record_user_failure(redis: Any, user_id: uuid.UUID) -> int:
+    """Ghi một lần sai, trả số lần sai hiện tại trong cửa sổ."""
+    return (await _incr_keys(redis, [user_key(user_id)]))[0]
+
+
+async def clear_user(redis: Any, user_id: uuid.UUID) -> None:
+    _mem.pop(user_key(user_id), None)
+    try:
+        await redis.delete(user_key(user_id))
+    except _FAIL_OPEN as e:
+        log.warning("Redis lỗi khi xoá bộ đếm tài khoản (%s)", type(e).__name__)
+
+
+# ─── Khoá PIN tăng dần ──────────────────────────────────────────────────────
+
+PIN_LEVEL_TTL_S = 7 * 24 * 3600
+
+
+def pin_level_key(user_id: uuid.UUID) -> str:
+    return "gh:pin:lock-level:" + str(user_id)
+
+
+async def bump_pin_lock_level(redis: Any, user_id: uuid.UUID) -> int:
+    """Số lần PIN bị khoá liên tiếp (1, 2, 3…; hết sau 7 ngày không bị khoá lại hoặc khi nhập đúng PIN)."""
+    k = pin_level_key(user_id)
+    try:
+        n = int(await redis.incr(k))
+        await redis.expire(k, PIN_LEVEL_TTL_S)
+        return n
+    except _FAIL_OPEN as e:
+        log.warning("Redis lỗi khi đếm cấp khoá PIN — dùng bộ nhớ (%s)", type(e).__name__)
+        return _mem_incr(k, PIN_LEVEL_TTL_S)
+
+
+async def clear_pin_lock_level(redis: Any, user_id: uuid.UUID) -> None:
+    k = pin_level_key(user_id)
+    _mem.pop(k, None)
+    try:
+        await redis.delete(k)
+    except _FAIL_OPEN as e:
+        log.warning("Redis lỗi khi xoá cấp khoá PIN (%s)", type(e).__name__)
 
 
 async def clear_email(redis: Any, email: str) -> None:
     """Xoá bộ đếm theo email (KHÔNG xoá khoá IP). Redis lỗi chỉ log."""
+    _mem.pop(email_key(email), None)
     try:
         await redis.delete(email_key(email))
     except _FAIL_OPEN as e:
@@ -117,6 +256,8 @@ async def clear_for_owner_reset(redis: Any, email: str) -> None:
     """`genh reset-password` (chạy trên máy chủ ⇒ Owner thật): xoá bộ đếm email Owner và MỌI bộ đếm IP — sau
     Tailscale Serve/Docker rootless mọi người chung một IP nguồn, chỉ xoá email thì Owner vẫn bị khoá theo IP.
     Redis lỗi chỉ log."""
+    for k in [k for k in _mem if k.startswith("gh:login:fail:ip:")] + [email_key(email)]:
+        _mem.pop(k, None)
     try:
         doomed = [email_key(email)]
         async for k in redis.scan_iter(match="gh:login:fail:ip:*", count=500):

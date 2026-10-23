@@ -64,6 +64,9 @@ class Settings(BaseSettings):
     login_fail_limit: int = 10
     login_ip_fail_limit: int = 100
     login_fail_window_seconds: int = 900
+    # v0.1.75: sai mật khẩu hiện tại ở /account/password, /account/pin (có cookie phiên) quá ngần này lần trong cửa sổ
+    # trên → thu hồi chính phiên đó (gh/auth/login_guard.py::record_user_failure).
+    account_pw_fail_limit: int = 5
     # v0.1.46 (F-21): compose chuyển từ .env do genh ghi (cùng nguồn với cổng proxy). bind_addr="127.0.0.1" ⇒ chỉ tiến
     # trình trên máy chủ (cloudflared/tailscaled/trình duyệt tại máy) tới được Caddy, nên client_ip được tin
     # Cf-Connecting-IP (chỉ chế độ cloudflare) và IP do proxy cục bộ nối vào X-Forwarded-For (gh/auth/deps.py).
