@@ -2,7 +2,7 @@ name: Staging smoke (dựng từ mã nguồn)
 
 # Gen (AI làm việc từ xa, không có máy riêng) "vừa làm vừa test thật": dựng GenOS TỪ MÃ NGUỒN của commit/nhánh được chọn
 # trên ubuntu-24.04 bằng ĐÚNG đường dev của repo (`make up` = make secrets + docker compose build + up; không mock),
-# đợi các dịch vụ healthy, gọi health qua proxy, thiết lập lần đầu (tạo Sếp + PIN giả), đăng nhập, chụp ảnh Console ở 390 và
+# đợi các dịch vụ healthy, gọi health qua proxy, thiết lập lần đầu (tạo Sếp + PIN giả), đăng nhập, chụp ảnh Console ở khổ máy tính
 # 1440 px (scripts/staging-smoke/shots.mjs) rồi upload artifact `staging-smoke-<run_number>` cho Gen tải về xem.
 # CHỈ chạy tay (workflow_dispatch). Không đẩy ảnh lên GHCR, không tạo Release, không dùng secret thật: mọi khoá/mật khẩu
 # sinh ngẫu nhiên trong job như trình cài làm.
@@ -118,7 +118,7 @@ jobs:
         working-directory: apps/web
         run: npx playwright install --with-deps chromium
 
-      - name: Smoke + thiết lập lần đầu + chụp ảnh Console (390/1440)
+      - name: Smoke + thiết lập lần đầu + chụp ảnh Console (1440)
         run: node scripts/staging-smoke/shots.mjs
 
       - name: Thu trạng thái compose + log từng dịch vụ
