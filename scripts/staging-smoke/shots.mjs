@@ -109,7 +109,7 @@ async function visit(page, vp, name, path, { anonymous = false } = {}) {
 
 async function main() {
   // 1) Health/ready qua proxy thật (đường: Caddy → api / web). Đường dẫn lấy từ apps/api/gh/shell/routes.py + apps/web/nginx.conf.
-  const anon = await newCtx(VIEWPORTS[1]);
+  const anon = await newCtx(VIEWPORTS[0]);
   const get = async (path, okStatus = [200]) => {
     const r = await anon.request.get(path);
     if (!okStatus.includes(r.status())) throw new Error(`GET ${path} → ${r.status()}`);
