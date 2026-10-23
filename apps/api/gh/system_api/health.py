@@ -100,6 +100,44 @@ async def put_ai_budget(body: BudgetIn, db: AsyncSession = DB,
     return await ai_cost.summary(db, user.org_id)
 
 
+class IntelBudgetIn(BaseModel):
+    """Trần tình báo (spec §4D.5, CNS-100): khoá con `settings.ai_cost.intel_*`. Chỉ khoá gửi lên mới đổi;
+    `null` = về mặc định."""
+
+    model_config = {"extra": "forbid"}
+    intel_daily_call_cap: int | None = Field(default=None, ge=0, le=ai_cost.INTEL_MAX_CALLS)
+    intel_safety_call_cap: int | None = Field(default=None, ge=0, le=ai_cost.INTEL_MAX_CALLS)
+    intel_gate_call_cap: int | None = Field(default=None, ge=0, le=ai_cost.INTEL_MAX_CALLS)
+    intel_daily_budget_vnd: int | None = Field(default=None, ge=0, le=ai_cost.INTEL_MAX_VND)
+    intel_safety_budget_vnd: int | None = Field(default=None, ge=0, le=ai_cost.INTEL_MAX_VND)
+    intel_gate_budget_vnd: int | None = Field(default=None, ge=0, le=ai_cost.INTEL_MAX_VND)
+    intel_media_daily_budget_vnd: int | None = Field(default=None, ge=0, le=ai_cost.INTEL_MAX_VND)
+
+
+@router.get("/system/ai-cost/intel")
+async def get_ai_intel_budget(db: AsyncSession = DB,
+                              user: service.CurrentUser = Depends(require("system.read"))) -> dict[str, Any]:
+    """Trần tình báo hiện tại (đã điền mặc định) + mặc định, cho thẻ `AiBudgetCard`."""
+    return {"values": await ai_cost.get_intel(db, user.org_id), "defaults": ai_cost.INTEL_DEFAULTS}
+
+
+@router.put("/system/ai-cost/intel")
+async def put_ai_intel_budget(
+        body: IntelBudgetIn, db: AsyncSession = DB,
+        user: service.CurrentUser = Depends(require("system.manage", rbac.ALL))) -> dict[str, Any]:
+    """Đặt trần tình báo `intel_*` (lượt/ngày hoặc VND). Chỉ khoá có trong thân đổi; giá trị `null` ⇒ trả về mặc
+    định (chế độ gói thuê bao: 400 lượt/ngày, VND = 0). Ghi Action Log (khoá + giá trị cũ/mới, không dữ liệu khác)."""
+    sent = body.model_dump(exclude_unset=True)
+    before = await ai_cost.get_intel(db, user.org_id)
+    new = {k: (ai_cost.INTEL_DEFAULTS[k] if v is None else v) for k, v in sent.items()}
+    if new:
+        await ai_cost.set_intel(db, user.org_id, new)
+        await actionlog.record(db, org_id=user.org_id, actor_type="user", actor_id=user.actor_id,
+                               action="ai.intel_budget_changed", target_type="settings", target_id="ai_cost",
+                               detail={"from": {k: before[k] for k in new}, "to": new}, ip=user.ip)
+    return {"values": await ai_cost.get_intel(db, user.org_id), "defaults": ai_cost.INTEL_DEFAULTS}
+
+
 class PriceIn(BaseModel):
     in_vnd_per_mtok: float | None = Field(default=None, ge=0, le=ai_cost.MAX_PRICE_PER_MTOK)
     out_vnd_per_mtok: float | None = Field(default=None, ge=0, le=ai_cost.MAX_PRICE_PER_MTOK)

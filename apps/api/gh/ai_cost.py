@@ -227,3 +227,70 @@ async def summary(db: AsyncSession, org_id: uuid.UUID, d: date | None = None) ->
             "unpriced_calls": cost["unpriced_calls"], "agents": cost["agents"],
             "models": await models(db, org_id, d), "last_7_days": await daily_totals(db, org_id, d),
             "feedback_7d": await feedback_7d(db, org_id)}
+
+
+# ─── Trần tình báo `settings.ai_cost.intel_*` + gắn thẻ luồng (v0.1.76, gói L2, spec §4D.5, CNS-100) ───────────────
+# MỘT nguồn chi phí: không có bảng giá hay sổ riêng. Sổ vẫn là `agent.model_calls`; L2 chỉ gắn thêm
+# `thread_key`/`analysis_id` cho các dòng do lượt phân tích theo luồng ghi (cột có từ migration 0043). Trần là khoá
+# con của cùng đối tượng `ai_cost`.
+#: Mặc định theo spec: chạy bằng gói thuê bao (Q14) nên trần chính là SỐ LƯỢT; các khoá VND giữ 0 (không gọi model
+#: tính tiền theo token). Giá trị thiếu trong DB = dùng mặc định. Đây không phải bảng giá model (không bịa giá).
+INTEL_DEFAULTS: dict[str, int] = {
+    "intel_daily_call_cap": 400,           # trần chính (lượt/ngày VN, toàn tổ chức)
+    "intel_safety_call_cap": 60,           # trần lượt an toàn — vượt thì báo Ryan, KHÔNG cắt
+    "intel_gate_call_cap": 40,             # trần lượt chạy ngay của 4 cổng còn lại
+    "intel_daily_budget_vnd": 0,           # 0 ⇒ không gọi model tính tiền theo token
+    "intel_safety_budget_vnd": 0,
+    "intel_gate_budget_vnd": 0,
+    "intel_media_daily_budget_vnd": 26_000,
+}
+INTEL_KEYS = tuple(INTEL_DEFAULTS)
+#: Giới hạn nhận từ API (chặn số vô lý).
+INTEL_MAX_CALLS = 100_000
+INTEL_MAX_VND = MAX_BUDGET_VND
+
+
+async def get_intel(db: AsyncSession, org_id: uuid.UUID) -> dict[str, int]:
+    """Các khoá `intel_*` đã điền mặc định. Giá trị sai kiểu/âm trong DB bị bỏ (dùng mặc định)."""
+    raw = (await db.execute(text("SELECT settings->'ai_cost' FROM core.organizations WHERE id = :o"),
+                            {"o": org_id})).scalar_one_or_none()
+    cfg = raw if isinstance(raw, dict) else {}
+    out = dict(INTEL_DEFAULTS)
+    for k in INTEL_KEYS:
+        v = cfg.get(k)
+        if isinstance(v, int | float) and not isinstance(v, bool) and v >= 0:
+            out[k] = int(v)
+    return out
+
+
+def intel_limit(key: str) -> int:
+    return INTEL_MAX_CALLS if key.endswith("_call_cap") else INTEL_MAX_VND
+
+
+async def set_intel(db: AsyncSession, org_id: uuid.UUID, values: dict[str, int]) -> None:
+    """Đặt các khoá `intel_*` (chỉ khoá được phép; giá trị đã kiểm ở bên gọi). Giữ nguyên khoá `ai_cost` khác."""
+    bad = [k for k in values if k not in INTEL_DEFAULTS]
+    if bad:
+        raise ValueError(f"khoá intel không hợp lệ: {bad}")
+    for k, v in values.items():
+        if isinstance(v, bool) or not isinstance(v, int) or v < 0 or v > intel_limit(k):
+            raise ValueError(f"giá trị {k} ngoài khoảng cho phép")
+    await db.execute(text("""
+        UPDATE core.organizations
+        SET settings = jsonb_set(COALESCE(settings, '{}'::jsonb), '{ai_cost}',
+                                 COALESCE(settings->'ai_cost', '{}'::jsonb) || CAST(:v AS jsonb), true)
+        WHERE id = :o"""), {"o": org_id, "v": orjson.dumps(values).decode()})
+
+
+async def tag_calls(db: AsyncSession, org_id: uuid.UUID, *, thread_key: str, analysis_id: uuid.UUID | None,
+                    purpose: str, since: datetime, until: datetime | None = None) -> int:
+    """Gắn `thread_key`/`analysis_id` cho các dòng `agent.model_calls` MỚI (chưa có thẻ) của `purpose` trong
+    [since, until]. Router (ngoài phạm vi L2) ghi dòng; lượt phân tích theo luồng của một tổ chức chạy tuần tự nên
+    cửa sổ thời gian + `purpose` riêng của L2 đủ để không gắn nhầm. Trả số dòng đã gắn. Không đụng token/giá —
+    chi phí vẫn tính lúc đọc như cũ."""
+    r = await db.execute(text("""
+        UPDATE agent.model_calls SET thread_key = :t, analysis_id = :a
+        WHERE org_id = :o AND thread_key IS NULL AND purpose = :p AND at >= :s
+          AND (CAST(:u AS timestamptz) IS NULL OR at <= :u)"""),
+                         {"o": org_id, "t": thread_key, "a": analysis_id, "p": purpose, "s": since, "u": until})
+    return int(r.rowcount or 0)  # type: ignore[attr-defined]

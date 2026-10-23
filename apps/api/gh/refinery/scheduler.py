@@ -1,4 +1,9 @@
+# ruff: noqa: E501
 """Bộ kích hoạt sàng lọc trong worker: chu kỳ HOẶC ngưỡng (cái nào tới trước), đường nhanh, chạy ngay.
+
+v0.1.76 (L2, spec §4D.1/§4D.5): tổ chức chạy đường THEO LUỒNG (`Refinery.group_mode`) không dùng nhịp theo tổ chức nữa mà theo từng
+luồng (`_group_tick`): luồng có tin mới VÀ (tin chờ cũ nhất ≥ `intel.cadence_min` = 20 phút HOẶC ≥ 40 tin mới); ứng viên của 6 cổng
+INT-19 (luật (a)) chạy NGAY; giãn lên 60 phút khi luồng/tổ chức chạm 80% trần (`gh.refinery.budget`). Mọi giờ lấy ở `gh.refinery.clock`.
 
 - `LISTEN raw_ingested` đánh thức vòng lặp ngay khi có tin (đường nhanh ≤ vài giây).
 - Mỗi nhịp: phục hồi tin kẹt `processing` của lượt đã chết → lượt thủ công đang chờ → đường nhanh → ngưỡng → chu kỳ.
@@ -31,6 +36,7 @@ FAST_LIMIT = 20
 #: hết lượt vẫn nằm ở `error` và hiện số ở dải pipeline — không thử vô hạn, cũng không biến mất âm thầm.
 ERROR_RETRY_AFTER = timedelta(minutes=30)
 MAX_ERROR_RETRIES = 3
+SPAWN_GUARD_S = 10
 
 
 async def requeue_errors(db: AsyncSession, org_id: uuid.UUID) -> int:
@@ -161,6 +167,9 @@ class Scheduler:
                 await db.commit()
             if n:
                 await self._go(self.refinery.run(org_id, "manual", run_id=run_id), wait, results)
+        if await self.refinery.group_mode(org_id):
+            results.extend(await self._group_tick(org_id, wait))
+            return results
         if fast:
             await self._go(self.refinery.run(org_id, "fast", event_ids=list(fast), limit=FAST_LIMIT), wait, results)
             pending -= len(fast)
@@ -182,4 +191,22 @@ class Scheduler:
                 await self._go(self.refinery.run(org_id, trigger), wait, results)
         finally:
             await self.redis.delete(f"gh:refinery:lock:{org_id}")
+        return results
+
+    async def _group_tick(self, org_id: uuid.UUID, wait: bool) -> list[Any]:
+        """Một nhịp của đường theo luồng: quét luật (a) tin mới, lập kế hoạch (luồng nào đến hạn), rồi mở MỘT lượt chạy cho các luồng đó.
+        Đang có lượt theo luồng chạy cho tổ chức (khoá Redis) ⇒ không mở thêm lượt rỗng; luồng chờ tới nhịp sau."""
+        results: list[Any] = []
+        groups = self.refinery.groups
+        if await self.redis.exists(f"gh:refinery:groups:{org_id}"):
+            return results
+        await groups.ensure_scanned(org_id)
+        plan = await groups.plan(org_id)
+        if not plan:
+            return results
+        if not wait and not await self.redis.set(f"gh:refinery:groups:spawn:{org_id}", "1", nx=True, ex=SPAWN_GUARD_S):
+            return results                          # vừa mở một lượt ở nhịp trước nhưng nó chưa kịp giữ khoá: không mở lượt rỗng thứ hai
+        reasons = {r for _ts, r in plan}
+        trigger = "fast" if reasons & {"safety", "gate", "fast"} else ("threshold" if "count" in reasons else "schedule")
+        await self._go(self.refinery.run(org_id, trigger, threads=[ts.thread_key for ts, _r in plan]), wait, results)
         return results
