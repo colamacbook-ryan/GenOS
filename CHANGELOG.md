@@ -9,8 +9,9 @@ Việc sửa nóng không đổi số bản (PR #46, #48, #53, #55, #58, #59) gh
 
 ## v0.1.75 — GenOS bản đầu: tự đứng ở repo riêng, vá bảo mật đăng nhập/PIN, cách ly hộp AI (23/10/2026)
 - **GenOS bản đầu tiên** (trước đây là Gen-Harness): nguồn cập nhật + cài đặt (`install.sh`, `install.ps1`, `genh` tự cập nhật, `release_repo`) chuyển sang `colamacbook-ryan/GenOS`. Máy đang cài Gen-Harness cũ KHÔNG tự lên GenOS (xem `docs/releases/v0.1.75.md`).
-- **Vá bảo mật đăng nhập/PIN** (nhánh auth-guard) và **cách ly hộp AI + allowlist egress** (nhánh agy-isolation) — chi tiết ở ghi chú bản.
-- **Robot kiểm `staging-smoke`**: workflow kiểm nhanh môi trường staging.
+- **Vá bảo mật đăng nhập/PIN (auth-guard)**: khoá chống dò mật khẩu/PIN theo tài khoản + nguồn, nhãn Nhật ký kiểm toán mới; test `test_auth_guard_v0175.py`.
+- **Cách ly hộp AI (agy-isolation)**: allowlist egress hộp agy BẬT MẶC ĐỊNH (chỉ Google: `googleapis.com`, `accounts.google.com`, `antigravity-unleash.goog`; `GH_AGY_EGRESS_ALLOW` thêm, `*` = mở như cũ; Nợ #44), lượt Gen của Sếp có chữ người ngoài chạy agy QUA HỘP (Nợ #45).
+- **Robot `staging-smoke`** (kiểm nhanh staging) và sửa CI: test ws không còn flake vì `plugin.log` từ Redis dùng chung, timeout job web 30 → 45 phút.
 
 ## v0.1.74 — Bot quản trị Zalo/WhatsApp dùng chung bộ não Gen đầy đủ, nói bằng Agent ngoại giao (19/10/2026)
 - **Bản tính năng trên v0.1.73, không migration.** Sếp hỏi bot trên Zalo/WhatsApp (kênh quản trị 1-1) giờ chạy ĐÚNG động cơ Gen của Console: có **trí nhớ hội thoại** (một hội thoại riêng mỗi kênh), **công cụ đọc dữ liệu** áp quyền Owner, nói bằng **Agent ngoại giao** (không xưng Gen), văn bản thường; không còn giới hạn 6 dòng (quá dài thì tóm + mời hỏi tiếp).
