@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 CONTRACT_VERSION = "brain-out/1"
 
@@ -55,8 +55,9 @@ class Quote(_Strict):
 class PersonMention(_Strict):
     surface: Annotated[str, StringConstraints(min_length=1, max_length=200)]
     person_ref: PersonRef | None = None
+    # `nguoi_bi_mao_danh` hiểu rộng (§4F.1 #5): người bị mạo danh VÀ chủ tài khoản bị chiếm.
     role: Literal["nguoi_hua", "nguoi_duoc_hua", "nguoi_hoi", "nguoi_bi_anh_huong", "nguoi_gui", "nguoi_bi_mao_danh",
-                  "khac"] = "khac"
+                  "khac"] = Field(default="khac", description="nguoi_bi_mao_danh gồm người bị mạo danh VÀ chủ tài khoản bị chiếm")
 
 
 class Flags(_Strict):
@@ -73,6 +74,7 @@ class Flags(_Strict):
     credentials_entered: bool = False
     account_takeover: bool = False
     emergency: bool = False
+    ongoing: bool = False           # cờ thứ 14 (§4F.1 #1): sự việc còn tiếp diễn; đi cùng `Unit.ongoing_message_ids`
 
 
 class Harm(_Strict):
@@ -92,6 +94,14 @@ class Condition(_Strict):
     text: Text | None = None
     met: Literal["yes", "no", "unknown"] = "unknown"
     met_message_id: MessageId | None = None
+
+
+class EventTime(_Strict):
+    """Thời điểm sự việc xảy ra (§4F.1 #3). `text` là chuỗi con NGUYÊN VĂN của tin `anchor_message_id` (L3 kiểm với thân tin,
+    xem `check_event_time_text`); code tính `event_at` bằng `vi_time.parse_past`, null ⇒ `event_at = msg_at`."""
+
+    text: Text | None = None
+    anchor_message_id: MessageId | None = None
 
 
 class Conflict(_Strict):
@@ -135,14 +145,40 @@ class Unit(_Strict):
     amount_text: Text | None = None
     condition: Condition = Field(default_factory=Condition)
     status_hint: Literal["dang_mo", "sap_han", "qua_han", "da_xu_ly", "da_giu", "theo_doi"] = "dang_mo"
+    status_message_id: MessageId | None = None           # §4F.1 #4: tin chứng minh status_hint (phải nằm trong quotes)
+    ongoing_message_ids: list[MessageId] = Field(default_factory=list)   # §4F.1 #2: ⊆ quotes; rỗng ⇒ flags.ongoing = False
+    event_time: EventTime | None = None                  # §4F.1 #3
     evidence: Evidence = Field(default_factory=Evidence)
     owner_relevance: list[OwnerRelevance] = Field(default_factory=list)
     owner_basis: Literal["co_ho_so", "thieu_ho_so"] = "thieu_ho_so"
     gate_candidate: Literal["lua_dao_dang_dien_ra", "an_toan", "khach_che_cong_khai_doa_bo", "loi_hua_khach_sap_vo",
                             "co_hoi_lon_sap_troi", "su_co_cong_viec_gap"] | None = None
-    level_hint: Literal["red", "amber", "grey"] | None = None                # chỉ để đo; levels.py không đọc
+    level_hint: Literal["red", "amber", "grey", "off"] | None = None         # chỉ để đo (khớp Level.level); levels.py không đọc
     competing_hypothesis: Text | None = None                               # bắt buộc với người / lừa đảo / quan hệ
     action: Action | None = None
+
+    @model_validator(mode="after")
+    def _ids_inside_quotes(self) -> Unit:
+        """§4F.1: mọi id tham chiếu tin phải nằm trong `quotes` của CHÍNH đơn vị; `ongoing` cần ít nhất một id. (Việc
+        `sent_at ≥ now − 48h`, trích dẫn `verified`, `text` ⊂ tin anchor là của L3/`verify.py`.)"""
+        quoted = {q.message_id for q in self.quotes}
+        stray = [i for i in self.ongoing_message_ids if i not in quoted]
+        if stray:
+            raise ValueError(f"ongoing_message_ids phải nằm trong quotes: {stray}")
+        if self.status_message_id is not None and self.status_message_id not in quoted:
+            raise ValueError("status_message_id phải nằm trong quotes")
+        if self.flags.ongoing and not self.ongoing_message_ids:
+            raise ValueError("flags.ongoing = true cần ongoing_message_ids (danh sách rỗng thì ongoing phải là false)")
+        return self
+
+
+def check_event_time_text(unit: Unit, message_text_by_id: dict[str, str]) -> bool:
+    """`event_time.text` phải là chuỗi con nguyên văn của tin `anchor_message_id` (L3 gọi với thân tin thật). Không có
+    `event_time`/`text` ⇒ đúng (code dùng `msg_at`)."""
+    et = unit.event_time
+    if et is None or et.text is None:
+        return True
+    return et.anchor_message_id is not None and et.text in message_text_by_id.get(et.anchor_message_id, "")
 
 
 class FactObject(_Strict):

@@ -15,7 +15,7 @@ from gh.refinery import brain_contract as bc
 
 #: Vân tay JSON Schema. ĐỔI HỢP ĐỒNG ⇒ test này đỏ ⇒ phải tăng `CONTRACT_VERSION` ("brain-out/2"), cập nhật vân tay
 #: và chạy lại G-KB (spec §4F). Không sửa vân tay mà không tăng phiên bản.
-SCHEMA_SHA256 = "6e433091a67c87ea434745b0ab70439e4c18fc8e37024432cda5e170fa9ddd20"
+SCHEMA_SHA256 = "8e24c6e39f0bcac0f3fdbb155446a56218f05275b1c69c5fc70ff7175679e110"
 
 FULL: dict = {
     "contract_version": "brain-out/1",
@@ -27,7 +27,9 @@ FULL: dict = {
         "summary": "Chị Tư hứa giao 200 bao thứ 6 · chạm hợp đồng của Sếp · tiếng Việt",
         "flags": {"public": False, "nudged": False, "repeat_n": 2, "explicit_urgent": False, "needs_owner": True,
                   "blocks_work": False, "is_template": False, "conditional": False, "said_will_leave": False,
-                  "money_request": False, "credentials_entered": False, "account_takeover": False, "emergency": False},
+                  "money_request": False, "credentials_entered": False, "account_takeover": False, "emergency": False, "ongoing": True},
+        "ongoing_message_ids": ["m_123"], "event_time": {"text": "hôm qua", "anchor_message_id": "m_123"},
+        "status_message_id": "m_123",
         "harm": {"what": "trễ hàng 1 tuần", "amount_text": "50 triệu", "horizon_text": "trong tuần"},
         "deadline": {"text": "thứ 6", "anchor_message_id": "m_123", "lunar": False, "ambiguous": False},
         "amount_text": "200 bao",
@@ -67,10 +69,11 @@ def test_brain_contract_full_example_roundtrips_exactly() -> None:
 def test_brain_contract_unit_keys_and_flags_exactly_as_spec() -> None:
     assert set(bc.Unit.model_fields) == {"unit_ref", "event_ref", "kind", "quotes", "people", "summary", "flags", "harm", "deadline",
                                          "amount_text", "condition", "status_hint", "evidence", "owner_relevance", "owner_basis",
-                                         "gate_candidate", "level_hint", "competing_hypothesis", "action"}
+                                         "gate_candidate", "level_hint", "competing_hypothesis", "action", "status_message_id",
+                                         "ongoing_message_ids", "event_time"}
     assert list(bc.Flags.model_fields) == ["public", "nudged", "repeat_n", "explicit_urgent", "needs_owner", "blocks_work",
                                            "is_template", "conditional", "said_will_leave", "money_request", "credentials_entered",
-                                           "account_takeover", "emergency"]
+                                           "account_takeover", "emergency", "ongoing"]
     assert set(bc.BrainOut.model_fields) == {"contract_version", "thread_ref", "units", "facts_proposed", "memory_updates",
                                              "unreadable", "owner_question"}
     # model KHÔNG trả mức cuối / độ chắc / ngày tính sẵn / tiền tính sẵn (phân vai §4F)
@@ -95,6 +98,11 @@ def test_brain_contract_rejects_schema_violations() -> None:
     _bad(lambda d: d["units"][0]["action"].update(who="khach"))
     _bad(lambda d: d["units"][0].update(gate_candidate="co_hoi_nong"))
     _bad(lambda d: d["units"][0].update(level_hint="orange"))
+    _bad(lambda d: d["units"][0].update(ongoing_message_ids=["m_999"]))               # §4F.1: id phải nằm trong quotes
+    _bad(lambda d: d["units"][0].update(ongoing_message_ids=[]))                      # ongoing = true mà không có id
+    _bad(lambda d: d["units"][0].update(status_message_id="m_999"))
+    _bad(lambda d: d["units"][0]["event_time"].update(anchor_message_id="123"))
+    _bad(lambda d: d["units"][0]["event_time"].update(extra="x"))
     _bad(lambda d: d["units"][0].update(status_hint="xong"))
     _bad(lambda d: d["units"][0]["evidence"].update(modality="video"))
     _bad(lambda d: d["units"][0]["owner_relevance"][0].update(fact_id="77"))          # phải dạng f_…
@@ -188,3 +196,34 @@ def test_brain_contract_stub_is_valid_for_l2() -> None:
     assert out.units[0].kind is None and out.thread_ref == "dm:p1:a1"
     with pytest.raises(ValidationError):
         bc.stub("không hợp lệ")
+
+
+def test_brain_contract_r63_delta_defaults_and_rules() -> None:
+    d = copy.deepcopy(FULL)
+    u = d["units"][0]
+    u["flags"]["ongoing"] = False
+    u["ongoing_message_ids"] = []
+    u["event_time"] = None
+    u["status_message_id"] = None
+    out = bc.BrainOut.model_validate(d).units[0]
+    assert out.flags.ongoing is False and out.ongoing_message_ids == [] and out.event_time is None
+    bare = bc.stub("g:x").units[0]                                   # mọi trường mới có mặc định
+    assert (bare.flags.ongoing, bare.ongoing_message_ids, bare.event_time, bare.status_message_id) == (False, [], None, None)
+    # ongoing_message_ids có id nhưng cờ tắt: hợp lệ (code đặt ongoing theo bằng chứng)
+    u["ongoing_message_ids"] = ["m_123"]
+    assert bc.BrainOut.model_validate(d).units[0].ongoing_message_ids == ["m_123"]
+    for hint in ("red", "amber", "grey", "off", None):
+        u["level_hint"] = hint
+        bc.BrainOut.model_validate(d)
+
+
+def test_brain_contract_event_time_text_must_be_substring_of_anchor() -> None:
+    unit = bc.BrainOut.model_validate(FULL).units[0]
+    assert bc.check_event_time_text(unit, {"m_123": "hôm qua em đã gửi rồi"})
+    assert not bc.check_event_time_text(unit, {"m_123": "tuần trước em gửi"})
+    assert not bc.check_event_time_text(unit, {})                    # không có tin anchor
+    none = unit.model_copy(update={"event_time": None})
+    assert bc.check_event_time_text(none, {})
+    no_text = unit.model_copy(update={"event_time": bc.EventTime(text=None, anchor_message_id=None)})
+    assert bc.check_event_time_text(no_text, {})
+    assert not bc.check_event_time_text(unit.model_copy(update={"event_time": bc.EventTime(text="hôm qua", anchor_message_id=None)}), {})
