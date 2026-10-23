@@ -15,7 +15,7 @@ from gh.refinery import brain_contract as bc
 
 #: Vân tay JSON Schema. ĐỔI HỢP ĐỒNG ⇒ test này đỏ ⇒ phải tăng `CONTRACT_VERSION` ("brain-out/2"), cập nhật vân tay
 #: và chạy lại G-KB (spec §4F). Không sửa vân tay mà không tăng phiên bản.
-SCHEMA_SHA256 = "8e24c6e39f0bcac0f3fdbb155446a56218f05275b1c69c5fc70ff7175679e110"
+SCHEMA_SHA256 = "4423fce25941458f65822c3d63efedf7ef8049784f513a8f9b45b9b53c3b93f6"
 
 FULL: dict = {
     "contract_version": "brain-out/1",
@@ -30,7 +30,8 @@ FULL: dict = {
                   "money_request": False, "credentials_entered": False, "account_takeover": False, "emergency": False, "ongoing": True},
         "ongoing_message_ids": ["m_123"], "event_time": {"text": "hôm qua", "anchor_message_id": "m_123"},
         "status_message_id": "m_123",
-        "harm": {"what": "trễ hàng 1 tuần", "amount_text": "50 triệu", "horizon_text": "trong tuần"},
+        "harm": {"what": "trễ hàng 1 tuần", "amount_text": "50 triệu", "horizon_text": "trong tuần", "irreversible": False},
+        "delivery_form_hint": "direct", "txn": {"state_hint": "requested", "message_id": "m_123"},
         "deadline": {"text": "thứ 6", "anchor_message_id": "m_123", "lunar": False, "ambiguous": False},
         "amount_text": "200 bao",
         "condition": {"text": None, "met": "unknown", "met_message_id": None},
@@ -70,7 +71,7 @@ def test_brain_contract_unit_keys_and_flags_exactly_as_spec() -> None:
     assert set(bc.Unit.model_fields) == {"unit_ref", "event_ref", "kind", "quotes", "people", "summary", "flags", "harm", "deadline",
                                          "amount_text", "condition", "status_hint", "evidence", "owner_relevance", "owner_basis",
                                          "gate_candidate", "level_hint", "competing_hypothesis", "action", "status_message_id",
-                                         "ongoing_message_ids", "event_time"}
+                                         "ongoing_message_ids", "event_time", "delivery_form_hint", "txn"}
     assert list(bc.Flags.model_fields) == ["public", "nudged", "repeat_n", "explicit_urgent", "needs_owner", "blocks_work",
                                            "is_template", "conditional", "said_will_leave", "money_request", "credentials_entered",
                                            "account_takeover", "emergency", "ongoing"]
@@ -103,6 +104,10 @@ def test_brain_contract_rejects_schema_violations() -> None:
     _bad(lambda d: d["units"][0].update(status_message_id="m_999"))
     _bad(lambda d: d["units"][0]["event_time"].update(anchor_message_id="123"))
     _bad(lambda d: d["units"][0]["event_time"].update(extra="x"))
+    _bad(lambda d: d["units"][0].update(delivery_form_hint="forward"))
+    _bad(lambda d: d["units"][0].update(txn={"state_hint": "done", "message_id": None}))
+    _bad(lambda d: d["units"][0].update(txn={"state_hint": "transferred", "message_id": "m_999"}))   # phải nằm trong quotes
+    _bad(lambda d: d["units"][0]["harm"].update(irreversible="maybe"))
     _bad(lambda d: d["units"][0].update(status_hint="xong"))
     _bad(lambda d: d["units"][0]["evidence"].update(modality="video"))
     _bad(lambda d: d["units"][0]["owner_relevance"][0].update(fact_id="77"))          # phải dạng f_…
@@ -227,3 +232,22 @@ def test_brain_contract_event_time_text_must_be_substring_of_anchor() -> None:
     no_text = unit.model_copy(update={"event_time": bc.EventTime(text=None, anchor_message_id=None)})
     assert bc.check_event_time_text(no_text, {})
     assert not bc.check_event_time_text(unit.model_copy(update={"event_time": bc.EventTime(text="hôm qua", anchor_message_id=None)}), {})
+
+
+def test_brain_contract_r64_delta_defaults_roles_and_txn() -> None:
+    d = copy.deepcopy(FULL)
+    u = d["units"][0]
+    u["people"][0]["role"] = "nguoi_nhan_tien"
+    u["txn"] = {"state_hint": None, "message_id": None}
+    u["delivery_form_hint"] = "warning_story"
+    u["harm"]["irreversible"] = True
+    out = bc.BrainOut.model_validate(d).units[0]
+    assert out.people[0].role == "nguoi_nhan_tien" and out.delivery_form_hint == "warning_story" and out.harm.irreversible  # type: ignore[union-attr]
+    for st in ("requested", "transferred", None):
+        u["txn"] = {"state_hint": st, "message_id": "m_123" if st else None}
+        bc.BrainOut.model_validate(d)
+    u["txn"] = None
+    bare = bc.stub("g:x").units[0]
+    assert bare.delivery_form_hint == "direct" and bare.txn is None and bare.harm is None
+    assert bc.Harm(what="x").irreversible is False
+    assert "nguoi_nhan_tien" in bc.ROLES

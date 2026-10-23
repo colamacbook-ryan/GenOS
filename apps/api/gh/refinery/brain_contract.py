@@ -24,7 +24,8 @@ KINDS = ("nghia_vu_loi_hua", "viec_han", "cau_hoi_cho_xu_ly", "su_kien_dip", "su
 GATES = ("lua_dao_dang_dien_ra", "an_toan", "khach_che_cong_khai_doa_bo", "loi_hua_khach_sap_vo", "co_hoi_lon_sap_troi",
          "su_co_cong_viec_gap")
 QUOTE_FIELDS = ("body", "transcript", "ocr", "caption")
-ROLES = ("nguoi_hua", "nguoi_duoc_hua", "nguoi_hoi", "nguoi_bi_anh_huong", "nguoi_gui", "nguoi_bi_mao_danh", "khac")
+ROLES = ("nguoi_hua", "nguoi_duoc_hua", "nguoi_hoi", "nguoi_bi_anh_huong", "nguoi_gui", "nguoi_bi_mao_danh", "nguoi_nhan_tien",
+         "khac")
 STATUS_HINTS = ("dang_mo", "sap_han", "qua_han", "da_xu_ly", "da_giu", "theo_doi")
 MODALITIES = ("text", "voice_transcript", "ocr", "caption", "forward", "forward_suspected")
 RELEVANCE_HOW = ("goal", "resource", "limit_conflict", "key_relation", "rhythm")
@@ -57,7 +58,9 @@ class PersonMention(_Strict):
     person_ref: PersonRef | None = None
     # `nguoi_bi_mao_danh` hiểu rộng (§4F.1 #5): người bị mạo danh VÀ chủ tài khoản bị chiếm.
     role: Literal["nguoi_hua", "nguoi_duoc_hua", "nguoi_hoi", "nguoi_bi_anh_huong", "nguoi_gui", "nguoi_bi_mao_danh",
-                  "khac"] = Field(default="khac", description="nguoi_bi_mao_danh gồm người bị mạo danh VÀ chủ tài khoản bị chiếm")
+                  "nguoi_nhan_tien", "khac"] = Field(
+        default="khac", description="nguoi_bi_mao_danh gồm người bị mạo danh VÀ chủ tài khoản bị chiếm; "
+                                    "nguoi_nhan_tien = chủ STK / người nhận tiền (§4F.1 #12)")
 
 
 class Flags(_Strict):
@@ -81,6 +84,14 @@ class Harm(_Strict):
     what: Text
     amount_text: Text | None = None
     horizon_text: Text | None = None
+    irreversible: bool = False                    # §4F.1 #11: không cần kiểm thêm; code cộng luật số (tiền đã chuyển ≥ 24 giờ)
+
+
+class Txn(_Strict):
+    """Giao dịch tiền (§4F.1 #10). `message_id` phải nằm trong `quotes`; code suy `pending`/`just_done`/`done_cannot_stop`."""
+
+    state_hint: Literal["requested", "transferred"] | None = None
+    message_id: MessageId | None = None
 
 
 class Deadline(_Strict):
@@ -148,6 +159,8 @@ class Unit(_Strict):
     status_message_id: MessageId | None = None           # §4F.1 #4: tin chứng minh status_hint (phải nằm trong quotes)
     ongoing_message_ids: list[MessageId] = Field(default_factory=list)   # §4F.1 #2: ⊆ quotes; rỗng ⇒ flags.ongoing = False
     event_time: EventTime | None = None                  # §4F.1 #3
+    delivery_form_hint: Literal["direct", "warning_story"] = "direct"   # §4F.1 #9: code (chuyển tiếp/simhash) thắng ⇒ forwarded
+    txn: Txn | None = None                               # §4F.1 #10
     evidence: Evidence = Field(default_factory=Evidence)
     owner_relevance: list[OwnerRelevance] = Field(default_factory=list)
     owner_basis: Literal["co_ho_so", "thieu_ho_so"] = "thieu_ho_so"
@@ -167,6 +180,8 @@ class Unit(_Strict):
             raise ValueError(f"ongoing_message_ids phải nằm trong quotes: {stray}")
         if self.status_message_id is not None and self.status_message_id not in quoted:
             raise ValueError("status_message_id phải nằm trong quotes")
+        if self.txn is not None and self.txn.message_id is not None and self.txn.message_id not in quoted:
+            raise ValueError("txn.message_id phải nằm trong quotes")
         if self.flags.ongoing and not self.ongoing_message_ids:
             raise ValueError("flags.ongoing = true cần ongoing_message_ids (danh sách rỗng thì ongoing phải là false)")
         return self
