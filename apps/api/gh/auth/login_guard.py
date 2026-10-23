@@ -26,10 +26,10 @@ trình chết giữa chừng không để lại khoá vĩnh viễn); khoá nào 
 Redis lỗi → (v0.1.75) lớp lùi: bộ đếm trong bộ nhớ TIẾN TRÌNH (cùng ngưỡng/cửa sổ, mất khi khởi động lại, không chia
 sẻ giữa các worker — chỉ để dò mật khẩu không thành miễn phí khi Redis chết). Log một dòng, không kèm email.
 
-Thiết bị tin cậy (v0.1.75): đăng nhập đúng được cookie `gh_device` ký HMAC (khoá master, gắn với user id + băm password_hash
-hiện tại ⇒ đổi/đặt lại mật khẩu thu hồi mọi cookie cũ, hạn 30 ngày).
-Email đang bị khoá nhưng trình duyệt có cookie hợp lệ của CHÍNH email đó → được ngưỡng email nới (20 thay vì 10; vẫn phải đúng mật khẩu,
-vẫn chịu ngưỡng IP) ⇒ người lạ biết email Owner không khoá được Owner ra ngoài.
+Thiết bị tin cậy (v0.1.75): đăng nhập đúng được cookie `gh_device` ký HMAC (khoá master, gắn với user id +
+băm password_hash hiện tại ⇒ đổi/đặt lại mật khẩu thu hồi mọi cookie cũ, hạn 30 ngày).
+Email đang bị khoá nhưng trình duyệt có cookie hợp lệ của CHÍNH tài khoản đó → được ngưỡng email nới (20 thay vì
+10; vẫn phải đúng mật khẩu, vẫn chịu ngưỡng IP) ⇒ người lạ biết email Owner không khoá được Owner ra ngoài.
 
 Tài khoản (v0.1.75): `/account/password`, `/account/pin` có cookie phiên cũng đếm sai theo user_id
 (`account_pw_fail_limit`, mặc định 5 / cửa sổ trên) — vượt ngưỡng thu hồi chính phiên đó.
@@ -165,7 +165,8 @@ async def _blocked_limits(redis: Any, limits: list[tuple[str, str, int]]) -> tup
 
 async def blocked(redis: Any, ip: str | None, email: str, *, trusted_device: bool = False) -> tuple[int, str] | None:
     """(số giây còn lại — tối thiểu 1, scope "ip" | "email") nếu IP hoặc email đã chạm ngưỡng; không thì None.
-    `trusted_device=True` (cookie thiết bị hợp lệ): ngưỡng email nới lên `login_trusted_email_fail_limit`, vẫn áp ngưỡng IP."""
+    `trusted_device=True` (cookie thiết bị hợp lệ): ngưỡng email nới lên `login_trusted_email_fail_limit`, vẫn áp
+    ngưỡng IP."""
     limits = _limits(ip, email)
     if trusted_device:  # ngưỡng email nới ra (không bỏ): cookie bị lộ không thành đường dò mật khẩu vô hạn
         limits = [(k, sc, get_settings().login_trusted_email_fail_limit if sc == "email" else lim)
