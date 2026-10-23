@@ -1,19 +1,43 @@
+# ruff: noqa: E501
 """Bước 2 của sàng lọc: trích xuất bằng LLM có kiểm chứng chứng cứ (ARCHITECTURE §4.3, R7).
+
+v0.1.76 (L3, spec Bước 1 r6.6.1 §4D): thêm đường THEO LUỒNG `analyze_group(GroupWindow, ContextPack, ProfileSnapshot, Policy) -> BrainOut`
+(tầng (b)): kỹ năng v2.1 (`prompts/intel_v2_1.md`) làm system prompt, đầu ra đúng hợp đồng `brain-out/1`; sai schema ⇒ gọi lại MỘT lần kèm
+lỗi, vẫn sai ⇒ `ContractError` (lượt `contract_error`, tin quay lại hàng chờ). Q9 (CNS-081): chữ chat đi tới model NGUYÊN VĂN, không che —
+chỉ bí mật hệ thống (tham số `secrets`) bị thay. Đường lô cũ (`chunks`/`build_messages`/`validate`) giữ cho `runner` tới khi L2 chuyển sang
+`analyze_group`; nó cũng đã bỏ che theo Q9.
 
 Model chỉ thấy mã tham chiếu ngắn (E1, E2…) của lô hiện tại. Mọi kết luận phải trích ít nhất một mã; kết luận trích
 mã không có trong lô (bịa) bị loại toàn bộ. Đoạn trích hiển thị lấy từ bản ghi thô, không lấy từ model.
 """
 
+from __future__ import annotations
+
 import math
 import re
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from datetime import UTC, datetime
+from functools import lru_cache
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import orjson
+from pydantic import ValidationError
 
-from gh.chassis.masking import mask_for_prompt
+from gh.biz.mem import contexts, vi_time
 from gh.providers.clients import Message, parse_json_block
+from gh.refinery import brain_contract
+from gh.refinery.brain_contract import BrainOut
 from gh.refinery.rules import RuleDef
+from gh.refinery.verify import MediaText
+from gh.untrusted import wrap_untrusted
+
+if TYPE_CHECKING:
+    import uuid
+
+    from gh.biz.mem.profile_read import ProfileSnapshot
+    from gh.biz.mem.retrieve import ContextPack
 
 EVENT_TYPE_RE = re.compile(r"^[A-Z][A-Za-z]{2,40}$")
 MAX_CONCLUSION = 400
@@ -89,7 +113,18 @@ def chunks(events: list[EventIn]) -> list[list[EventIn]]:
     return out
 
 
-def build_messages(events: list[EventIn], rules: list[RuleDef], event_types: list[str]) -> list[Message]:
+def scrub_secrets(text: str | None, secrets: Sequence[str] = ()) -> str | None:
+    """Q9: KHÔNG che nội dung chat; chỉ thay chuỗi bí mật HỆ THỐNG (khoá API, token của GenOS) bằng `[đã che]`."""
+    if text is None:
+        return None
+    for sec in secrets:
+        if sec:
+            text = text.replace(sec, "[đã che]")
+    return text
+
+
+def build_messages(events: list[EventIn], rules: list[RuleDef], event_types: list[str], *,
+                   secrets: Sequence[str] = ()) -> list[Message]:
     rule_lines = []
     for r in rules:
         if not r.enabled or r.discards:
@@ -97,10 +132,9 @@ def build_messages(events: list[EventIn], rules: list[RuleDef], event_types: lis
         conds = "; ".join(c.get("hint") or c.get("label") or c.get("type", "") for c in r.conditions)
         rule_lines.append(f"- {r.code} {r.name} (ngưỡng {r.threshold:.2f}): {conds}"
                           + (f". Gợi ý: {r.prompt_hint}" if r.prompt_hint else ""))
-    # v0.1.71 (P2-3): tin nhắn của người ngoài vào prompt là bản đã che — OTP, mật khẩu, token, SĐT (giữ 3 số cuối), số
-    # tài khoản / thẻ, email; số tiền, ngày giờ, mã đối tượng giữ nguyên để model còn trích `value_vnd`.
-    lines = [orjson.dumps({"ref": e.ref, "group": mask_for_prompt(e.group), "sender": mask_for_prompt(e.sender),
-                           "time": e.time, "kind": e.kind, "text": mask_for_prompt((e.text or "")[:2000]),
+    # v0.1.76 (Q9, CNS-081): bỏ che nội dung chat khi gửi model (thay v0.1.71 P2-3); chỉ bí mật hệ thống (`secrets`) bị thay.
+    lines = [orjson.dumps({"ref": e.ref, "group": scrub_secrets(e.group, secrets), "sender": scrub_secrets(e.sender, secrets),
+                           "time": e.time, "kind": e.kind, "text": scrub_secrets((e.text or "")[:2000], secrets),
                            **({"rule_hints": e.hints} if e.hints else {})}).decode()
              for e in events]
     user = ("Quy tắc của tổ chức:\n" + ("\n".join(rule_lines) or "(không có)") +
@@ -162,3 +196,219 @@ def validate(raw_text: str, refs: set[str], rule_codes: set[str]) -> Extraction:
         units.append(Unit(list(dict.fromkeys(ev)), et, side, concl[:MAX_CONCLUSION], ents, conf, rules_conf, signals))
     noise = {x for x in (data.get("noise") or []) if isinstance(x, str) and x in refs}
     return Extraction(units, noise, rejected, reasons)
+
+
+# ═══ Đường theo luồng (L3, spec §4D.1–§4D.2 (b)) ═════════════════════════════════════════════════════════════════════════
+
+AGENT_KEY = "core.refinery"
+EXTRACTOR_VERSION = "intel-v2.1"
+PROMPT_PATH = Path(__file__).with_name("prompts") / "intel_v2_1.md"
+MAX_BODY_CHARS = 4000                 # một tin dài hơn bị cắt TRONG PROMPT (trích dẫn vẫn kiểm với bản gốc)
+MAX_SCHEMA_ERRORS = 12
+DEFAULT_TZ = vi_time.DEFAULT_TZ
+
+
+@dataclass
+class GroupEvent:
+    """Một tin trong lượt (mới hoặc cửa sổ gần). `message_id` là mã `m_…` model được trích; `verify.check` đọc cùng đối tượng này."""
+
+    message_id: str
+    sent_at: datetime
+    body: str | None = None
+    sender_person_id: uuid.UUID | None = None
+    sender_name: str | None = None
+    kind: str = "text"
+    reply_to: str | None = None
+    forwarded: bool = False
+    raw_event_id: uuid.UUID | None = None
+    received_at: datetime | None = None
+    context: bool = False             # tin cửa sổ gần (đã xử lý): hiện nhãn "ngữ cảnh"
+
+    @property
+    def person_ref(self) -> str | None:
+        return f"u_{self.sender_person_id}" if self.sender_person_id is not None else None
+
+
+@dataclass
+class GroupWindow:
+    """Đầu vào MỘT lượt của MỘT luồng (§4D.1). L2 dựng: tin mới (≤ 60 tin/12.000 ký tự), cửa sổ gần, chữ từ voice/ảnh."""
+
+    thread_ref: str
+    new_events: list[GroupEvent]
+    context_events: list[GroupEvent] = field(default_factory=list)
+    media_texts: Mapping[str, Sequence[MediaText]] = field(default_factory=dict)
+    unreadable: Mapping[str, int] = field(default_factory=lambda: {"voice": 0, "image": 0, "file": 0})
+    now: datetime | None = None
+    tz: str = DEFAULT_TZ
+    group_name: str | None = None
+    predicates: Sequence[tuple[str, str]] = ()      # (mã vị từ, mô tả) — danh mục `mem.predicates` đưa vào prompt
+
+    @property
+    def all_events(self) -> list[GroupEvent]:
+        return [*self.context_events, *self.new_events]
+
+
+@dataclass
+class ModelReply:
+    text: str
+    model: str = ""
+    tokens_in: int | None = None
+    tokens_out: int | None = None
+
+
+ModelCall = Callable[[list[Message]], Awaitable[ModelReply]]
+
+
+class ContractError(Exception):
+    """Sai schema hai lần liên tiếp ⇒ lượt `contract_error` (G-KB yêu cầu 0). `errors` chỉ chứa MÃ lỗi, không có nội dung tin."""
+
+    def __init__(self, errors: list[str], *, model: str = "", tokens_in: int | None = None, tokens_out: int | None = None):
+        super().__init__("contract_error: " + "; ".join(errors[:5]))
+        self.errors, self.model, self.tokens_in, self.tokens_out = errors, model, tokens_in, tokens_out
+
+
+@dataclass
+class Analysis:
+    out: BrainOut
+    model: str
+    tokens_in: int | None
+    tokens_out: int | None
+    attempts: int
+    prompt_chars: int
+
+
+def router_caller(router: Any, org_id: uuid.UUID, *, agent_key: str = AGENT_KEY, purpose: str = "refinery", tier: str | None = None,
+                  effort: str | None = None, temperature: float = 0.0) -> ModelCall:
+    """Bọc `ModelRouter.generate` thành `ModelCall`. Chi phí đi qua sổ `agent.model_calls` của router (đọc bằng `gh/ai_cost.py`);
+    nhà cung cấp CLI thuê bao tính 0 ₫ (Q14). Prompt có khối `wrap_untrusted` ⇒ router tự đưa agy qua hộp riêng."""
+    async def call(messages: list[Message]) -> ModelReply:
+        r = await router.generate(org_id, agent_key=agent_key, purpose=purpose, messages=messages, json_mode=True,
+                                  temperature=temperature, tier=tier, effort=effort)
+        return ModelReply(r.text, r.model, r.tokens_in, r.tokens_out)
+    return call
+
+
+@lru_cache(maxsize=1)
+def _skill_template() -> str:
+    return PROMPT_PATH.read_text(encoding="utf-8")
+
+
+def skill_prompt() -> str:
+    """Kỹ năng tình báo v2.1 làm system prompt (tĩnh ⇒ prompt cache theo tiền tố). Khối từ vựng "gấp" render từ `URGENT_LEXICON`."""
+    lex = ", ".join(f"“{t}”" for t in sorted(vi_time.URGENT_LEXICON))
+    return _skill_template().replace("{{URGENT_LEXICON}}", lex)
+
+
+def _local(dt: datetime, tz: str) -> str:
+    from zoneinfo import ZoneInfo
+    return dt.astimezone(ZoneInfo(tz)).strftime("%Y-%m-%dT%H:%M%z")
+
+
+def event_line(e: GroupEvent, media: Mapping[str, Sequence[MediaText]], tz: str, secrets: Sequence[str]) -> str:
+    d: dict[str, Any] = {"id": e.message_id, "at": _local(e.sent_at, tz)}
+    if e.sender_name:
+        d["from"] = scrub_secrets(e.sender_name, secrets)
+    if e.person_ref:
+        d["from_ref"] = e.person_ref
+    if e.reply_to:
+        d["reply_to"] = e.reply_to
+    if e.forwarded:
+        d["forwarded"] = True
+    if e.kind and e.kind != "text":
+        d["kind"] = e.kind
+    if e.body:
+        d["body"] = scrub_secrets(e.body[:MAX_BODY_CHARS], secrets)
+    for m in media.get(e.message_id, ()):
+        if m.status == "ok" and m.text:
+            d[{"transcript": "transcript", "ocr": "ocr"}.get(m.kind, "description")] = scrub_secrets(m.text[:MAX_BODY_CHARS], secrets)
+    return orjson.dumps(d).decode()
+
+
+def build_user_prompt(window: GroupWindow, pack: ContextPack, profile: ProfileSnapshot, policy: contexts.Policy, *,
+                      secrets: Sequence[str] = ()) -> str:
+    """Thứ tự (§4D.1 cache): Hồ sơ Sếp → gói nhóm (chính sách + sự thật + quan hệ + lịch sử) → tin cửa sổ gần → tin mới → chỉ dẫn lượt.
+    Tin nhắn là chữ NGƯỜI NGOÀI: bọc `wrap_untrusted`, KHÔNG che (Q9)."""
+    now = window.now or datetime.now(UTC)
+    parts: list[str] = [profile.render_for_prompt()]
+    pack_text = pack.render_for_prompt()
+    policy_text = contexts.render_for_prompt(policy)
+    parts.append(pack_text if policy_text in pack_text else policy_text + "\n\n" + pack_text)
+    if window.predicates:
+        parts.append("Danh mục vị từ (`facts_proposed[].predicate` chỉ dùng các mã này):\n" +
+                     "\n".join(f"- {c}: {d}" for c, d in window.predicates))
+    media = window.media_texts
+    if window.context_events:
+        body = "\n".join(event_line(e, media, window.tz, secrets) for e in window.context_events)
+        parts.append(wrap_untrusted("tin ngữ cảnh (đã xử lý, chỉ để hiểu; được trích khi chứng minh việc trước đó)", body))
+    body = "\n".join(event_line(e, media, window.tz, secrets) for e in window.new_events) or "(không có tin mới)"
+    parts.append(wrap_untrusted("tin mới của luồng", body))
+    unread = {k: int(v) for k, v in dict(window.unreadable).items() if v}
+    tail = [f"Luồng: thread_ref = {window.thread_ref}" + (f" · nhóm “{scrub_secrets(window.group_name, secrets)}”" if window.group_name else ""),
+            f"Bây giờ (chỉ để biết, KHÔNG tự tính ngày): {_local(now, window.tz)}"]
+    if unread:
+        tail.append("Tin không đọc được (đếm vào `unreadable`): " + ", ".join(f"{k} {v}" for k, v in unread.items()))
+    tail.append("Chỉ trả JSON `brain-out/1`, đúng khuôn trong kỹ năng. Trích dẫn sao chép từng chữ từ trường tương ứng.")
+    parts.append("\n".join(tail))
+    return "\n\n".join(parts)
+
+
+def build_group_messages(window: GroupWindow, pack: ContextPack, profile: ProfileSnapshot, policy: contexts.Policy, *,
+                         secrets: Sequence[str] = ()) -> list[Message]:
+    return [Message("system", skill_prompt()), Message("user", build_user_prompt(window, pack, profile, policy, secrets=secrets))]
+
+
+def _schema_errors(e: ValidationError) -> list[str]:
+    out = []
+    for err in e.errors()[:MAX_SCHEMA_ERRORS]:
+        loc = ".".join(str(x) for x in err["loc"])
+        out.append(f"{loc}: {err['type']}")
+    if len(e.errors()) > MAX_SCHEMA_ERRORS:
+        out.append(f"(+{len(e.errors()) - MAX_SCHEMA_ERRORS} lỗi nữa)")
+    return out
+
+
+def parse_brain_out(raw_text: str) -> BrainOut:
+    """Chuỗi trả lời của model → `BrainOut`. Ném `ValueError` (JSON hỏng) hoặc `ValidationError` (sai schema)."""
+    data = parse_json_block(raw_text)
+    if not isinstance(data, dict):
+        raise ValueError("Model phải trả một JSON object")
+    data.setdefault("contract_version", brain_contract.CONTRACT_VERSION)
+    return BrainOut.model_validate(data)
+
+
+async def analyze_group_detailed(window: GroupWindow, pack: ContextPack, profile: ProfileSnapshot, policy: contexts.Policy, *,
+                                 call: ModelCall, secrets: Sequence[str] = ()) -> Analysis:
+    """Tầng (b): một lượt model cho MỘT luồng; sai schema ⇒ gọi lại một lần kèm lỗi; vẫn sai ⇒ `ContractError`.
+    `ModelUnavailable` của bộ định tuyến truyền thẳng lên (L2 xử lý: tin giữ chờ)."""
+    messages = build_group_messages(window, pack, profile, policy, secrets=secrets)
+    chars = sum(len(m.content) for m in messages)
+    t_in = t_out = None
+    model = ""
+    errors: list[str] = []
+    for attempt in (1, 2):
+        reply = await call(messages)
+        model = reply.model or model
+        t_in = (t_in or 0) + reply.tokens_in if reply.tokens_in is not None else t_in
+        t_out = (t_out or 0) + reply.tokens_out if reply.tokens_out is not None else t_out
+        try:
+            out = parse_brain_out(reply.text)
+        except ValidationError as e:
+            errors = _schema_errors(e)
+            hint = "schema sai: " + "; ".join(errors)
+        except ValueError:
+            errors = ["json_invalid"]
+            hint = "không phải JSON hợp lệ"
+        else:
+            if out.thread_ref != window.thread_ref:
+                out = out.model_copy(update={"thread_ref": window.thread_ref})      # thread_ref do code cấp, không tin model
+            return Analysis(out, model, t_in, t_out, attempt, chars)
+        messages = [*messages, Message("assistant", reply.text[:20_000]),
+                    Message("user", f"Lần trả lời trước {hint}. Trả lại DUY NHẤT một JSON `brain-out/1` đúng khuôn.")]
+    raise ContractError(errors, model=model, tokens_in=t_in, tokens_out=t_out)
+
+
+async def analyze_group(window: GroupWindow, pack: ContextPack, profile: ProfileSnapshot, policy: contexts.Policy, *,
+                        call: ModelCall, secrets: Sequence[str] = ()) -> BrainOut:
+    """Hợp đồng L2 gọi (§11 L3): `analyze_group(GroupWindow, ContextPack, ProfileSnapshot, Policy) -> BrainOut`. `call` = `router_caller(...)`.
+    Cần model/token để ghi `refinery.analyses` ⇒ dùng `analyze_group_detailed`."""
+    return (await analyze_group_detailed(window, pack, profile, policy, call=call, secrets=secrets)).out

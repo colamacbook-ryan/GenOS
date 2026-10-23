@@ -16,8 +16,8 @@ Mỗi mục:
    1,5 s) và `use_jev` bật → Jev chọn một nhãn trong 4 mức; điểm = 60% Jev + 40% quy tắc. Jev lỗi/chậm/độ tin thấp
    → giữ kết quả quy tắc (không gọi model lớn cho từng mục — chi phí). Cả hai kết quả được lưu để đo độ khớp.
 
-v0.1.55 (G4, QD-12): văn bản gửi Jev LUÔN là bản đã che (`gh.chassis.masking.mask_for_model` — SĐT, số tài khoản,
-email, khoá) — `_ask_jev` che trước khi cắt, và `JevClient.choose` che thêm một lớp (lớp thứ hai không có cờ tắt).
+v0.1.55 (G4, QD-12) → v0.1.76 (Q9, CNS-081): bước tiền lọc KHÔNG che chữ chat khi gửi model nữa (Ryan chốt
+"gửi đầy đủ, không che"); `JevClient.masked` (gh/gen/jev.py) là lớp che riêng của máy khách Jev, ngoài phạm vi gói L3.
 `value_summary` = số đo giá trị lọc cho thẻ Jev / màn Hôm nay của Sếp (chỉ số lần, KHÔNG quy ra tiền).
 """
 
@@ -35,7 +35,6 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from gh.biz.hooks import CronJob, Hook, HookCtx
-from gh.chassis.masking import mask_for_model
 from gh.gen import decider as decmod
 from gh.textnorm import strip_accents  # F-38: bỏ dấu dùng chung (NFKD — giữ text_hash đã lưu)
 
@@ -60,7 +59,6 @@ NEAR_MIN_LEN = 24
 NORM_MAX = 600               # simhash không tin được trên chuỗi quá ngắn
 BROADCAST_MIN_LEN = 40
 JEV_TEXT_MAX = 800
-JEV_MASK_SRC = 4000             # che phần đầu này của tin RỒI mới cắt `JEV_TEXT_MAX` (không để nửa số ĐT lọt qua)
 JEV_PARALLEL = 4
 JEV_MAX_FAILS = 3               # lỗi liên tiếp → thôi gọi Jev cho phần còn lại của lượt
 
@@ -353,7 +351,7 @@ async def ask_jev_batch(dec: decmod.Decider, jobs: list[tuple[str, str]]) -> lis
     `JevDecider`), `JEV_MAX_FAILS` lỗi liên tiếp ngắt cả lượt (phần còn lại không hỏi nữa). Kết quả cùng thứ tự `jobs`;
     `None` = Jev không quyết định được (lỗi/chậm/độ tin < 0,5/bị ngắt) → bên gọi dùng quy tắc.
 
-    Chỉ gửi văn bản ĐÃ CHE (v0.1.55, QD-12): che phần đầu `JEV_MASK_SRC` ký tự rồi mới cắt `JEV_TEXT_MAX`."""
+    v0.1.76 (Q9): văn bản gửi nguyên văn (cắt `JEV_TEXT_MAX`), không che ở bước tiền lọc này."""
     sem = asyncio.Semaphore(JEV_PARALLEL)
     fails = 0
     out: list[decmod.Decision | None] = [None] * len(jobs)
@@ -365,8 +363,10 @@ async def ask_jev_batch(dec: decmod.Decider, jobs: list[tuple[str, str]]) -> lis
         async with sem:
             if fails >= JEV_MAX_FAILS:
                 return
-            safe = str(mask_for_model(raw[:JEV_MASK_SRC]))[:JEV_TEXT_MAX]
-            d = await dec.classify(safe, JEV_OPTIONS, jev_context(event_type))
+            # v0.1.76 (Q9, CNS-081): chữ chat tới model NGUYÊN VĂN (không che ở đây). Lưu ý: `JevClient.masked`
+            # (gh/gen/jev.py, ngoài phạm vi L3) vẫn che một lớp trước khi rời máy — xem báo cáo L3.
+            text_in = raw[:JEV_TEXT_MAX]
+            d = await dec.classify(text_in, JEV_OPTIONS, jev_context(event_type))
         if d is None:
             fails += 1
         else:
