@@ -9,8 +9,8 @@ Việc sửa nóng không đổi số bản (PR #46, #48, #53, #55, #58, #59) gh
 
 ## v0.1.75 — GenOS bản đầu: tự đứng ở repo riêng, vá bảo mật đăng nhập/PIN, cách ly hộp AI (23/10/2026)
 - **GenOS bản đầu tiên** (trước đây là Gen-Harness): nguồn cập nhật + cài đặt (`install.sh`, `install.ps1`, `genh` tự cập nhật, `release_repo`) chuyển sang `colamacbook-ryan/GenOS`. Máy đang cài Gen-Harness cũ KHÔNG tự lên GenOS (xem `docs/releases/v0.1.75.md`).
-- **Vá bảo mật đăng nhập/PIN (auth-guard)**: khoá chống dò mật khẩu/PIN theo tài khoản + nguồn, nhãn Nhật ký kiểm toán mới; test `test_auth_guard_v0175.py`.
-- **Cách ly hộp AI (agy-isolation)**: allowlist egress hộp agy BẬT MẶC ĐỊNH (chỉ Google: `googleapis.com`, `accounts.google.com`, `antigravity-unleash.goog`; `GH_AGY_EGRESS_ALLOW` thêm, `*` = mở như cũ; Nợ #44), lượt Gen của Sếp có chữ người ngoài chạy agy QUA HỘP (Nợ #45).
+- **Vá bảo mật đăng nhập/PIN (auth-guard)**: khoá chống dò mật khẩu/PIN theo tài khoản + nguồn, nhãn Nhật ký kiểm toán mới; cookie thiết bị tin cậy gắn với mật khẩu (đổi mật khẩu ⇒ cookie cũ hết hiệu lực, vẫn chịu ngưỡng riêng) và đếm sai nguyên tử chống request song song vượt ngưỡng; test `test_auth_guard_v0175.py`.
+- **Cách ly hộp AI (agy-isolation)**: allowlist egress hộp agy BẬT MẶC ĐỊNH và so khớp CHÍNH XÁC theo host (`antigravity-unleash.goog`, `play.googleapis.com`, `cloudcode-pa.googleapis.com`, `oauth2.googleapis.com`, `accounts.google.com`, `openidconnect.googleapis.com`). **Đổi hành vi**: không còn khớp hậu tố `googleapis.com`; `GH_AGY_EGRESS_ALLOW` thêm `host` (chính xác) hoặc `*.domain` (gồm tên miền con, trừ dịch vụ lưu trữ/chia sẻ như storage/firebase/drive), `*` = mở như cũ (Nợ #44). Cờ «chữ người ngoài» là MỘT nguồn sự thật (`gh/untrusted.py`): prompt có khối dữ liệu không tin cậy ⇒ agy chạy QUA HỘP (Nợ #45).
 - **Robot `staging-smoke`** (kiểm nhanh staging) và sửa CI: test ws không còn flake vì `plugin.log` từ Redis dùng chung, timeout job web 30 → 45 phút.
 
 ## v0.1.74 — Bot quản trị Zalo/WhatsApp dùng chung bộ não Gen đầy đủ, nói bằng Agent ngoại giao (19/10/2026)
