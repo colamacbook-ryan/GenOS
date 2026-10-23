@@ -1,9 +1,11 @@
 // Sổ phiên: xử lý lệnh gh.bridge.control / gh.bridge.outbound, nối sự kiện adapter → gh.bridge.status /
 // .inbound / .directory, heartbeat từng phiên, đồng bộ danh bạ định kỳ. Credential chỉ nằm trong RAM.
-import { STREAMS } from './envelope.js';
+import { createHash } from 'node:crypto';
+import { MEDIA_FETCH, STREAMS } from './envelope.js';
 import { PERMIT_ERRORS, checkPermit, checkPermitBasis } from './crypto.js';
 import { silentLogger } from './log.js';
 import { META, errorCode } from './util.js';
+import { MEDIA_ERRORS, MediaError, Semaphore, parseMediaRef, validRequestId } from './media.js';
 
 export const QR_MAX = 5;
 export const CREDENTIAL_COALESCE_MS = 5000;
@@ -49,6 +51,7 @@ export class SessionManager {
     credentialCoalesceMs = CREDENTIAL_COALESCE_MS, now = Date.now,
     discoverDelayMs = DISCOVER_DELAY_MS, discoverMinGapMs = DISCOVER_MIN_GAP_MS,
     manualMinGapMs = DIRECTORY_MANUAL_GAP_MS, typingMaxMs = TYPING_MAX_MS, typingRefreshMs = TYPING_REFRESH_MS,
+    mediaConcurrency = 3,
   }) {
     Object.assign(this, {
       bus, keyring, createAdapter, channels, log: logger, orgId, heartbeatMs, directoryMs, qrMax, credentialCoalesceMs, now,
@@ -57,6 +60,7 @@ export class SessionManager {
     this.sessions = new Map();
     this.controlChains = new Map();
     this.sendChains = new Map();
+    this.mediaGate = new Semaphore(mediaConcurrency); // tải media song song có trần
   }
 
   // ─── helpers ────────────────────────────────────────────────────────────────
@@ -105,6 +109,7 @@ export class SessionManager {
   // ─── gh.bridge.control ──────────────────────────────────────────────────────
 
   handleControl(evt) {
+    if (evt?.type === MEDIA_FETCH) return this.#mediaFetch(evt); // ngoài hàng đợi theo phiên: không chờ sau quét danh bạ
     const p = evt?.payload || {};
     const channel = p.channel;
     const sessionId = p.session_id ? String(p.session_id) : '';
@@ -129,6 +134,40 @@ export class SessionManager {
           return undefined;
       }
     });
+  }
+
+  /**
+   * `media.fetch{request_id, media_ref}` → kết quả vào danh sách Redis của `request_id` (lõi BLPOP). `media_ref` chỉ là
+   * khoá tra sổ RAM của adapter: sai khuôn / không có ⇒ `not_found`; không bao giờ coi là URL. Log chỉ có kênh, phiên, MÃ lỗi.
+   */
+  async #mediaFetch(evt) {
+    const p = evt.payload || {};
+    const requestId = p.request_id;
+    if (!validRequestId(requestId)) {
+      this.log.warn('media.fetch thiếu/ sai request_id');
+      return;
+    }
+    const reply = (extra) => this.bus.putMediaResult(requestId, { request_id: requestId, ...extra })
+      .catch((err) => this.log.error('không trả được kết quả media', { error: err.message }));
+    const ref = parseMediaRef(p.media_ref);
+    // Lõi phải nói rõ tin thuộc chat nào / ai gửi (lấy từ Kho thô): bridge đối chiếu với ràng buộc lúc đăng ký.
+    const expect = { chat: p.external_group_id ?? '', sender: p.sender_external_id };
+    if (!ref || typeof expect.chat !== 'string' || typeof expect.sender !== 'string' || !expect.sender) {
+      return reply({ ok: false, error: MEDIA_ERRORS.badRequest });
+    }
+    const s = this.sessions.get(keyOf(ref.channel, ref.sessionId));
+    if (!s || s.state !== 'active' || typeof s.adapter.fetchMedia !== 'function') {
+      return reply({ ok: false, error: s ? MEDIA_ERRORS.sessionInactive : MEDIA_ERRORS.notFound });
+    }
+    try {
+      const got = await this.mediaGate.run(() => s.adapter.fetchMedia(p.media_ref, expect));
+      const sha256 = createHash('sha256').update(got.bytes).digest('hex');
+      return reply({ ok: true, mime: got.mime || '', size: got.bytes.length, sha256, data_b64: got.bytes.toString('base64') });
+    } catch (err) {
+      const code = err instanceof MediaError ? err.code : MEDIA_ERRORS.downloadFailed;
+      this.log.warn('không tải được media', { channel: s.channel, session_id: s.sessionId, error: code });
+      return reply({ ok: false, error: code });
+    }
   }
 
   async #login(channel, sessionId, credentialBlob, ctx) {
@@ -284,6 +323,8 @@ export class SessionManager {
         return;
       }
       s.inbound += 1;
+      // Sổ media chỉ nhận tin đã qua bộ lọc tập nghe (tin nhóm không nghe không bao giờ vào sổ).
+      if (meta.media) s.adapter.registerMedia?.(meta.media);
       await this.bus.publish(STREAMS.inbound, 'message', payload, { actor: `bridge:${s.channel}`, orgId: s.orgId || this.orgId });
     } catch (err) {
       this.log.error('không đẩy được tin vào', { channel: s.channel, session_id: s.sessionId, error: err.message });

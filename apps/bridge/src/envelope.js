@@ -34,3 +34,11 @@ export function envelope(type, payload, { actor = 'bridge', orgId = '', correlat
     payload: JSON.stringify(payload),
   };
 }
+
+// ─── Đa phương tiện (L5): lệnh media.fetch{media_ref} → bytes ───────────────────────────────────────────────────────
+// Lõi gửi `media.fetch` lên gh.bridge.control; bridge trả kết quả qua một danh sách Redis ngắn hạn (không đẩy file lên
+// stream): RPUSH gh:media:res:<request_id> <JSON>, lõi BLPOP. JSON: {request_id, ok, mime, size, sha256, data_b64} hoặc
+// {request_id, ok:false, error:<mã>}. Mã lỗi: xem MEDIA_ERRORS trong media.js.
+export const MEDIA_FETCH = 'media.fetch';
+export const MEDIA_RESULT_TTL_S = 120;
+export const mediaResultKey = (requestId) => `gh:media:res:${requestId}`;

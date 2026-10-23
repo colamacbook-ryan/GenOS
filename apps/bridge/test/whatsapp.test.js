@@ -1,3 +1,4 @@
+import { META } from '../src/util.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
@@ -22,7 +23,7 @@ test('chuẩn hoá: tin văn bản trong nhóm (conversation)', () => {
     channel: 'whatsapp', session_id: 'w1', external_msg_id: 'ABCD1', external_group_id: '120363@g.us', group_name: 'Nhóm kho',
     sender_external_id: '84901111111@s.whatsapp.net', sender_name: 'Minh', sender_phone: '+84901111111',
     occurred_at: new Date(1758600000 * 1000).toISOString(), kind: 'text', body_text: 'chào cả nhà',
-    direction: 'inbound', mentions_self: false, replies_to_self: false, payload: undefined,
+    direction: 'inbound', mentions_self: false, replies_to_self: false, payload: undefined, forwarded: false,
   });
   assert.equal(p.payload.key.remoteJid, '120363@g.us');
   assert.equal(p.payload.message.conversation, 'chào cả nhà');
@@ -42,7 +43,7 @@ test('chuẩn hoá: ảnh, sticker, tệp, reaction, 1-1, tin của mình, bọc
   const a = adapter();
   const img = a.normalise(waMessage({ message: { imageMessage: { caption: 'hàng về', mimetype: 'image/jpeg', mediaKey: new Uint8Array([1, 2, 3]) } } }));
   assert.deepEqual([img.kind, img.body_text], ['image', 'hàng về']);
-  assert.equal(img.payload.message.imageMessage.mediaKey, 'AQID'); // Uint8Array → base64
+  assert.equal(img.payload.message.imageMessage.mediaKey, undefined); // khoá giải mã KHÔNG vào payload thô (L5)
   const noCap = a.normalise(waMessage({ message: { imageMessage: { mimetype: 'image/jpeg' } } }));
   assert.equal(noCap.body_text, null);
 
@@ -77,7 +78,8 @@ test('chuẩn hoá: ảnh, sticker, tệp, reaction, 1-1, tin của mình, bọc
 
   assert.equal(a.normalise(waMessage({ remoteJid: 'status@broadcast' })), null);
   assert.equal(a.normalise(waMessage({ message: { protocolMessage: { type: 3 } } })), null);
-  assert.equal(a.normalise(waMessage({ message: { protocolMessage: { type: 0, key: { id: 'x' } } } })).kind, 'system');
+  const rev = a.normalise(waMessage({ message: { protocolMessage: { type: 0, key: { id: 'x' } } } }));
+  assert.deepEqual([rev.kind, rev.revokes], ['system', 'x']); // thu hồi mang id tin bị thu hồi
   assert.equal(a.normalise({ ...waMessage({ message: null }), messageStubType: 27 }).kind, 'system');
 });
 
@@ -495,4 +497,220 @@ test('Baileys thật: ảnh QR WhatsApp đủ lớn để đọc được khi th
   assert.ok(modules <= 61, `mã quá dày: ${modules} module`);
   assert.ok(width / (modules + 8) >= 8, `ảnh ${width}px cho ${modules}+8 module: dưới 8px/module`);
   assert.ok(png.length < 40000, 'ảnh quá nặng cho Redis/WebSocket');
+});
+
+
+// ─── L5: voice / ảnh / chuyển tiếp / tải file an toàn ─────────────────────────────────────────────────────────────
+
+const norm = (a, m) => { const p = a.normalise(m); a.registerMedia(p[META]?.media); return p; };
+const fm = (a, p, over) => a.fetchMedia(p.media_ref, { chat: p.external_group_id ?? '', sender: p.sender_external_id, ...over });
+
+
+const voiceMsg = (over = {}) => waMessage({
+  id: 'VOICE1',
+  message: { audioMessage: { mimetype: 'audio/ogg; codecs=opus', fileLength: 2048, seconds: 12, ptt: true, url: 'https://evil.example/x?sig=SECRET',
+    directPath: '/v/t62.7117-24/abc_def?ccb=11-4&oh=01_X&oe=ABC', mediaKey: new Uint8Array([1, 2, 3]), contextInfo: { isForwarded: true, forwardingScore: 2 } } },
+});
+
+function activeAdapter() {
+  const wa = makeBaileysLib();
+  const a = new WhatsAppAdapter({ lib: wa.lib, sessionId: 'w1' });
+  a.own = { jid: '84909999999@s.whatsapp.net', lid: '7777@lid', name: 'Kho Gen' };
+  a.state = 'active';
+  a.sock = {};
+  return { a, wa };
+}
+
+test('L5 chuẩn hoá: voice → kind voice + media_ref + mô tả khai báo; không rò url/khoá vào payload; cờ chuyển tiếp thật', () => {
+  const a = adapter();
+  const p = norm(a, voiceMsg());
+  assert.equal(p.kind, 'voice');
+  assert.equal(p.body_text, null);
+  assert.match(p.media_ref, /^whatsapp:w1:[0-9a-f]{32}$/);
+  assert.deepEqual(p.media, { kind: 'voice', mime: 'audio/ogg', size: 2048, seconds: 12, ptt: true });
+  assert.equal(p.forwarded, true);
+  const raw = JSON.stringify(p);
+  for (const bad of ['evil.example', 'SECRET', 'directPath', 'mediaKey', 'ccb=11']) assert.equal(raw.includes(bad), false, bad);
+  assert.equal(a.media.size, 1); // chỉ sổ RAM giữ khoá để tải (norm đã đăng ký; normalise thuần KHÔNG ghi sổ — xem test riêng)
+});
+
+test('L5 chuẩn hoá: ảnh có media_ref; ảnh không khai mime/size vẫn có ref', () => {
+  const a = adapter();
+  const p = norm(a, waMessage({ id: 'IMG1', message: { imageMessage: { caption: 'hoá đơn', mimetype: 'image/jpeg', fileLength: '4000', mediaKey: new Uint8Array([1]), directPath: '/v/x' } } }));
+  assert.deepEqual([p.kind, p.body_text, p.media_ref, p.media.size], ['image', 'hoá đơn', p.media_ref, 4000]);
+});
+
+test('L5 fetchMedia: tải qua phiên, ép host mặc định, KHÔNG chuyển url của người gửi', async () => {
+  const { a, wa } = activeAdapter();
+  const p = norm(a, voiceMsg());
+  const got = await fm(a, p);
+  assert.equal(got.bytes.toString(), 'OggS-fake-voice');
+  assert.equal(got.mime, 'audio/ogg');
+  const call = wa.ctrl.downloads[0];
+  assert.deepEqual(Object.keys(call.desc).sort(), ['directPath', 'mediaKey']); // không có `url`
+  assert.equal(call.opts.host, 'mmg.whatsapp.net');
+  assert.equal(call.type, 'audio');
+});
+
+test('L5 fetchMedia: ref lạ / hết hạn → not_found; quá lớn khai báo → too_large (không tải); mime lạ; vượt trần khi tải; directPath bẩn', async () => {
+  const { a, wa } = activeAdapter();
+  await assert.rejects(a.fetchMedia('whatsapp:w1:NOPE'), { code: 'not_found' });
+  await assert.rejects(a.fetchMedia('https://evil.example/x'), { code: 'not_found' }); // URL không bao giờ là ref hợp lệ
+
+  const big = norm(a, waMessage({ id: 'BIG', message: { audioMessage: { mimetype: 'audio/ogg', fileLength: 6 * 1024 * 1024, seconds: 5, directPath: '/v/x', mediaKey: new Uint8Array([1]) } } }));
+  await assert.rejects(fm(a, big), { code: 'too_large' });
+  const long = norm(a, waMessage({ id: 'LONG', message: { audioMessage: { mimetype: 'audio/ogg', fileLength: 100, seconds: 601, directPath: '/v/x', mediaKey: new Uint8Array([1]) } } }));
+  await assert.rejects(fm(a, long), { code: 'too_large' });
+  const exe = norm(a, waMessage({ id: 'EXE', message: { audioMessage: { mimetype: 'application/x-msdownload', fileLength: 10, directPath: '/v/x', mediaKey: new Uint8Array([1]) } } }));
+  await assert.rejects(fm(a, exe), { code: 'mime_not_allowed' });
+  assert.equal(wa.ctrl.downloads.length, 0); // ba ca trên không chạm mạng
+
+  const lying = norm(a, waMessage({ id: 'LIE', message: { imageMessage: { mimetype: 'image/png', fileLength: 10, directPath: '/v/x', mediaKey: new Uint8Array([1]) } } }));
+  wa.ctrl.mediaBytes = Buffer.alloc(8 * 1024 * 1024 + 1);
+  await assert.rejects(fm(a, lying), { code: 'too_large' }); // khai 10 byte nhưng thực tế vượt trần ⇒ cắt
+
+  wa.ctrl.mediaBytes = Buffer.from('x');
+  const evil = norm(a, waMessage({ id: 'EV', message: { audioMessage: { mimetype: 'audio/ogg', directPath: '//evil.example/../x', mediaKey: new Uint8Array([1]) } } }));
+  const bad = norm(a, waMessage({ id: 'EV2', message: { audioMessage: { mimetype: 'audio/ogg', directPath: 'https://evil.example/x', mediaKey: new Uint8Array([1]) } } }));
+  await assert.rejects(fm(a, bad), { code: 'bad_request' }); // directPath phải bắt đầu bằng "/"
+  void evil;
+
+  wa.ctrl.downloadError = new Error('403 https://mmg.whatsapp.net/secret?oh=TOKEN');
+  const ok = norm(a, voiceMsg());
+  await assert.rejects(fm(a, ok), (e) => e.code === 'download_failed' && !String(e.message).includes('TOKEN'));
+});
+
+test('L5 fetchMedia: phiên chưa hoạt động → session_inactive', async () => {
+  const { a } = activeAdapter();
+  const p = norm(a, voiceMsg());
+  a.state = 'connecting';
+  await assert.rejects(fm(a, p), { code: 'session_inactive' });
+});
+
+test('L5 media.fetch qua SessionManager: trả bytes + sha256 vào danh sách kết quả; ref lạ/URL/request_id sai không chạm mạng', async () => {
+  const { createHash } = await import('node:crypto');
+  const { bus, mgr, keyring, wa } = await setup();
+  const { lib } = makeBaileysLib();
+  const st = memoryAuthState(lib, null);
+  st.state.creds.me = { id: '84909999999:3@s.whatsapp.net', name: 'Kho Gen' };
+  await mgr.handleControl(ctl('session.login', { channel: 'whatsapp', session_id: 'w1',
+    credential: keyring.encryptTransport(JSON.stringify(st.serialize()), 'whatsapp:w1') }));
+  const sock = await waitFor(() => wa.ctrl.last());
+  sock.open();
+  await waitFor(() => bus.of(STREAMS.status, 'session.active')[0]);
+  bus.listen.whatsapp = new Set(['120363@g.us']);
+  sock.ev.emit('messages.upsert', { type: 'notify', messages: [voiceMsg()] });
+  const inb = await waitFor(() => bus.of(STREAMS.inbound, 'message')[0]);
+  assert.match(inb.payload.media_ref, /^whatsapp:w1:[0-9a-f]{32}$/);
+  const who = { external_group_id: inb.payload.external_group_id, sender_external_id: inb.payload.sender_external_id };
+
+  const rid = '0199b2c4-0000-7000-8000-000000000001';
+  await mgr.handleControl(ctl('media.fetch', { request_id: rid, media_ref: inb.payload.media_ref, ...who }));
+  const r = bus.mediaResults.find((x) => x.requestId === rid).result;
+  assert.deepEqual([r.ok, r.size, r.mime, r.request_id], [true, 15, 'audio/ogg', rid]);
+  assert.equal(Buffer.from(r.data_b64, 'base64').toString(), 'OggS-fake-voice');
+  assert.equal(r.sha256, createHash('sha256').update('OggS-fake-voice').digest('hex'));
+
+  const rid2 = '0199b2c4-0000-7000-8000-000000000002';
+  await mgr.handleControl(ctl('media.fetch', { request_id: rid2, media_ref: 'https://evil.example/x', ...who }));
+  assert.deepEqual(bus.mediaResults.find((x) => x.requestId === rid2).result, { request_id: rid2, ok: false, error: 'bad_request' });
+  const rid3 = '0199b2c4-0000-7000-8000-000000000003';
+  await mgr.handleControl(ctl('media.fetch', { request_id: rid3, media_ref: 'whatsapp:w1:KHONGCO', ...who }));
+  assert.equal(bus.mediaResults.find((x) => x.requestId === rid3).result.error, 'not_found');
+  const before = bus.mediaResults.length;
+  await mgr.handleControl(ctl('media.fetch', { request_id: 'a:b', media_ref: inb.payload.media_ref, ...who }));
+  assert.equal(bus.mediaResults.length, before); // request_id sai khuôn bị bỏ, không tạo khoá Redis
+  assert.equal(wa.ctrl.downloads.length, 1);
+  mgr.shutdown();
+});
+
+// ─── L5 (review bảo mật): khoá sổ media theo chat + người gửi, đăng ký sau bộ lọc, ràng buộc khi tải ─────────────────
+
+test('L5 sổ media: cùng id tin ở HAI chat khác nhau ⇒ hai ref khác nhau, không tráo được media', async () => {
+  const { a, wa } = activeAdapter();
+  const real = norm(a, waMessage({ id: 'SAMEID', remoteJid: '120363@g.us', participant: '84901111111@s.whatsapp.net',
+    message: { imageMessage: { mimetype: 'image/png', fileLength: 10, directPath: '/v/anh-STK-that', mediaKey: new Uint8Array([1]) } } }));
+  const evil = norm(a, waMessage({ id: 'SAMEID', remoteJid: '120999@g.us', participant: '84902222222@s.whatsapp.net',
+    message: { imageMessage: { mimetype: 'image/png', fileLength: 10, directPath: '/v/anh-gia', mediaKey: new Uint8Array([2]) } } }));
+  assert.notEqual(real.media_ref, evil.media_ref);
+  wa.ctrl.mediaBytes = Buffer.from('PNG-that');
+  await fm(a, real);
+  assert.equal(wa.ctrl.downloads[0].desc.directPath, '/v/anh-STK-that'); // ref thật luôn ra media thật
+  await fm(a, evil);
+  assert.equal(wa.ctrl.downloads[1].desc.directPath, '/v/anh-gia');
+});
+
+test('L5 sổ media: normalise KHÔNG tự ghi sổ — tin chưa qua bộ lọc tập nghe không tải được', async () => {
+  const { a } = activeAdapter();
+  const p = a.normalise(voiceMsg());
+  assert.equal(a.media.size, 0);
+  await assert.rejects(fm(a, p), { code: 'not_found' });
+  assert.equal(a.registerMedia(p[META].media), true);
+  assert.equal(a.media.size, 1);
+});
+
+test('L5 sổ media: không ghi đè mục cũ khi chat/người gửi khác (đầu độc sổ); tải sai ràng buộc ⇒ not_found', async () => {
+  const { a, wa } = activeAdapter();
+  const p = norm(a, voiceMsg());
+  // kẻ gian dựng mục cùng ref nhưng chat/sender khác ⇒ bị từ chối
+  const poisoned = { ref: p.media_ref, entry: { kind: 'voice', mime: 'audio/ogg', size: 1, seconds: 1, type: 'audio',
+    bind: { chat: '120999@g.us', sender: 'ke-gian' }, download: { mediaKey: new Uint8Array([9]), directPath: '/v/doc-hai' } } };
+  assert.equal(a.registerMedia(poisoned), false);
+  await fm(a, p);
+  assert.equal(wa.ctrl.downloads[0].desc.directPath, '/v/t62.7117-24/abc_def?ccb=11-4&oh=01_X&oe=ABC');
+  // đúng ref nhưng lõi khai sai nhóm / sai người gửi / thiếu ⇒ như không có
+  await assert.rejects(fm(a, p, { chat: '120999@g.us' }), { code: 'not_found' });
+  await assert.rejects(fm(a, p, { sender: 'ke-gian' }), { code: 'not_found' });
+  await assert.rejects(a.fetchMedia(p.media_ref), { code: 'not_found' });
+  await assert.rejects(a.fetchMedia(p.media_ref, { chat: p.external_group_id }), { code: 'not_found' });
+  assert.equal(wa.ctrl.downloads.length, 1);
+});
+
+test('L5 media.fetch qua SessionManager: nhóm KHÔNG nghe không vào sổ; sai nhóm/người gửi ⇒ not_found; thiếu ⇒ bad_request', async () => {
+  const { bus, mgr, keyring, wa } = await setup();
+  const { lib } = makeBaileysLib();
+  const st = memoryAuthState(lib, null);
+  st.state.creds.me = { id: '84909999999:3@s.whatsapp.net', name: 'Kho Gen' };
+  await mgr.handleControl(ctl('session.login', { channel: 'whatsapp', session_id: 'w1',
+    credential: keyring.encryptTransport(JSON.stringify(st.serialize()), 'whatsapp:w1') }));
+  const sock = await waitFor(() => wa.ctrl.last());
+  sock.open();
+  await waitFor(() => bus.of(STREAMS.status, 'session.active')[0]);
+  bus.listen.whatsapp = new Set(['120363@g.us']);
+  const muted = voiceMsg();
+  const quiet = waMessage({ ...{}, id: 'QUIET1', remoteJid: '555@g.us', message: muted.message });
+  sock.ev.emit('messages.upsert', { type: 'notify', messages: [quiet, muted] });
+  const inb = await waitFor(() => bus.of(STREAMS.inbound, 'message')[0]);
+  const adapter = mgr.sessions.get('whatsapp:w1').adapter;
+  assert.equal(adapter.media.size, 1); // chỉ tin của nhóm đang nghe được đăng ký
+  const who = { external_group_id: inb.payload.external_group_id, sender_external_id: inb.payload.sender_external_id };
+  const run = async (n, extra) => {
+    const rid = `0199b2c4-0000-7000-8000-00000000010${n}`;
+    await mgr.handleControl(ctl('media.fetch', { request_id: rid, media_ref: inb.payload.media_ref, ...extra }));
+    return bus.mediaResults.find((x) => x.requestId === rid).result;
+  };
+  assert.equal((await run(1, who)).ok, true);
+  assert.equal((await run(2, { ...who, external_group_id: '555@g.us' })).error, 'not_found');
+  assert.equal((await run(3, { ...who, sender_external_id: 'x@s.whatsapp.net' })).error, 'not_found');
+  assert.equal((await run(4, {})).error, 'bad_request');
+  assert.equal(wa.ctrl.downloads.length, 1);
+  mgr.shutdown();
+});
+
+test('L5 tải WhatsApp quá 20 giây (ở đây 30ms) ⇒ timeout, huỷ yêu cầu và đóng dòng chảy; cấu hình sổ media đọc từ tuỳ chọn', async () => {
+  const { a, wa } = activeAdapter();
+  a.mediaTimeoutMs = 30;
+  let aborted = false;
+  let destroyed = false;
+  wa.lib.downloadContentFromMessage = async (desc, type, opts) => {
+    opts.options.signal.addEventListener('abort', () => { aborted = true; });
+    return { destroy() { destroyed = true; }, [Symbol.asyncIterator]() { return { next: () => new Promise(() => {}) }; } }; // treo mãi
+  };
+  const p = norm(a, voiceMsg());
+  const t0 = Date.now();
+  await assert.rejects(fm(a, p), { code: 'timeout' });
+  assert.ok(Date.now() - t0 < 2000);
+  assert.deepEqual([aborted, destroyed], [true, true]);
+  const small = new WhatsAppAdapter({ lib: wa.lib, sessionId: 'w1', mediaCacheMax: 2, mediaCacheTtlMs: 5 });
+  assert.deepEqual([small.media.max, small.media.ttlMs], [2, 5]);
 });
