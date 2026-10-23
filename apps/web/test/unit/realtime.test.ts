@@ -266,7 +266,7 @@ describe('applyEvent', () => {
 });
 
 describe('onSocketStatus', () => {
-  it('ổ cắm mở (lần đầu / nối lại) ⇒ chuông thông báo bị đánh dấu cũ để tải lại; trạng thái khác thì không', () => {
+  it('ổ cắm mở (lần đầu / nối lại) ⇒ chuông thông báo bị đánh dấu cũ để tải lại; trạng thái khác thì không', async () => {
     const qc = new QueryClient();
     qc.setQueryData(qk.notifications, { items: [], unread: 0 });
     for (const st of ['connecting', 'reconnecting', 'stopped', 'idle'] as const) {
@@ -274,6 +274,6 @@ describe('onSocketStatus', () => {
       expect(qc.getQueryState(qk.notifications)?.isInvalidated).toBe(false);
     }
     onSocketStatus(qc, 'open');
-    expect(qc.getQueryState(qk.notifications)?.isInvalidated).toBe(true);
+    await vi.waitFor(() => expect(qc.getQueryState(qk.notifications)?.isInvalidated).toBe(true)); // huỷ lần tải đang bay rồi mới đánh dấu cũ
   });
 });

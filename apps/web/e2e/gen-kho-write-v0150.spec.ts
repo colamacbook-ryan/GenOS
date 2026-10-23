@@ -247,6 +247,26 @@ test('Chuông không mất thông báo khi phản hồi danh sách (đã chụp 
   await expect(page.getByRole('dialog', { name: 'Thông báo' }).locator('.nt-item', { hasText: 'Gen đề xuất ghi Kho · Phiên v0.1.50' })).toBeVisible({ timeout: 15_000 });
 });
 
+test('Chuông không mất thông báo khi ổ cắm mở muộn trong lúc lần tải danh sách (chụp trước thông báo) còn bay', async ({ page }) => {
+  test.setTimeout(90_000);
+  // Danh sách do máy chủ trả TRƯỚC khi thông báo tạo ra nhưng về trình duyệt chậm 3 giây; ổ cắm mở sau thông báo (không có tin
+  // `notification.new`) và mở đúng lúc lần tải cũ còn bay ⇒ việc tải lại khi ổ cắm mở không được nhập vào lần tải cũ.
+  await page.route(/\/api\/v1\/notifications\?limit=20/, async (route) => {
+    const res = await route.fetch();
+    await new Promise((r) => setTimeout(r, 3000));
+    await route.fulfill({ response: res });
+  });
+  await page.routeWebSocket(/\/api\/v1\/ws/, async (ws) => {
+    await new Promise((r) => setTimeout(r, 1500));
+    ws.connectToServer();
+  });
+  await page.goto('/overview');
+  await page.waitForTimeout(300); // lần tải đầu đã tới máy chủ, ổ cắm chưa mở
+  await p3Hook(page.request, 'gen', 'khoRelease', { version: 'v0.1.50' });
+  await page.getByRole('button', { name: /^Thông báo/ }).click();
+  await expect(page.getByRole('dialog', { name: 'Thông báo' }).locator('.nt-item', { hasText: 'Gen đề xuất ghi Kho · Phiên v0.1.50' })).toBeVisible({ timeout: 15_000 });
+});
+
 test('Kho từ chối (HUB_WRITE_REJECTED) ⇒ câu nêu ĐÚNG lý do Kho + "Bấm Sửa"; "Chi tiết kỹ thuật" có mã + lý do; thẻ còn chờ, không ghi', async ({ page }) => {
   test.setTimeout(90_000);
   await hubSim(page.request, { kho: 'rejected' });
