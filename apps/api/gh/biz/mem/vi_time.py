@@ -302,6 +302,9 @@ def _numberize(t: str) -> str:
 
 
 # ─── cấu trúc trung gian ─────────────────────────────────────────────────────────────────────────────────────────────────
+MAX_SPAN_DAYS = 36_600                                   # trần ~100 năm cho mọi độ lệch tương đối (chống số khổng lồ do người ngoài gõ)
+MIN_YEAR, MAX_YEAR = 1900, 2200                          # năm tường minh ngoài khoảng này ⇒ không phân giải
+_UNIT_DAYS = {"minute": 1 / 1440, "hour": 1 / 24, "day": 1.0, "week": 7.0, "month": 31.0, "year": 366.0}
 PART_WINDOWS: dict[str, tuple[time, time]] = {          # [bắt đầu, cuối buổi]; 24:00 ⇒ time.max ở bước dựng
     "rang_sang": (time(3), time(6)), "sang_som": (time(5), time(8)), "sang": (time(6), time(12)), "trua": (time(11), time(13)),
     "chieu": (time(13), time(18)), "chieu_toi": (time(17), time(20)), "toi": (time(18), time(22)), "dem": (time(21), time(23, 59, 59)),
@@ -404,6 +407,8 @@ def _scan(text: str) -> _P | None:
     f = re.sub(r"\s+", " ", f).strip()
     if not f:
         return None
+    if re.search(r"[/.-]\d{5,}", f) or any(len(m.group(1)) != 4 for m in re.finditer(r"(?<![a-z0-9])nam (\d+)(?![0-9])", f)):
+        return None                                  # năm viết dở/khổng lồ ("1/1/10000", "năm 0"): không đoán
     p = _P()
     hit = False
 
@@ -505,7 +510,7 @@ def _scan(text: str) -> _P | None:
         m = eat(r"(?<![0-9/.-])(\d{1,2})[/.-](\d{1,2})[/.-](\d{4}|\d{2})(?![0-9])")
         if m:
             y = int(m.group(3))
-            p.dm, hit = (int(m.group(1)), int(m.group(2)), y + 2000 if y < 100 else y), True
+            p.dm, hit = (int(m.group(1)), int(m.group(2)), y + 2000 if len(m.group(3)) == 2 else y), True
         else:
             m = eat(r"(?<![0-9/.-])ngay (\d{1,2}) thang (\d{1,2})(?: nam (\d{4}))?(?![0-9])")
             if m:
@@ -570,6 +575,8 @@ def _scan(text: str) -> _P | None:
             qty = float(m.group(1).replace(",", "."))
             if m.group(3):
                 qty += 0.5
+            if not qty < MAX_SPAN_DAYS / _UNIT_DAYS[unit]:         # vượt ~100 năm (kể cả inf/nan) ⇒ không phân giải
+                return None
             lead = re.match(r"(?:trong vong|trong|sau|cach|con)", m.group(0).strip())
             tail = m.group(4) or ""
             neg = tail in ("truoc", "qua", "vua roi", "vua qua", "truoc day")
@@ -668,6 +675,10 @@ def _scan(text: str) -> _P | None:
     if re.search(r"(?<![a-z0-9])(?:mai mot|sang nam|nam sau|nam toi|nam ngoai|nam truoc)(?![a-z0-9])", f):
         return None
     _ = leftover
+    years = [y for y in ((p.dm[2] if p.dm else None), (p.month_only[1] if p.month_only else None),
+                         (p.lunar[2] if p.lunar else None)) if y is not None]
+    if any(not MIN_YEAR <= y <= MAX_YEAR for y in years):
+        return None
     return p
 
 
@@ -977,6 +988,14 @@ def _recurrence_due(p: _P, a: datetime, tz: tzinfo) -> Due | None:
 
 # ─── API công khai ───────────────────────────────────────────────────────────────────────────────────────────────────────
 def parse(text: str, anchor: datetime, tz: str | tzinfo | None = DEFAULT_TZ) -> Due:
+    """Cụm thời gian (hạn, hẹn) → `Due`; lỗi số học/ngày (cụm do người ngoài gõ) ⇒ `Due(at=None)`, không bao giờ ném."""
+    try:
+        return _parse(text, anchor, tz)
+    except (OverflowError, ValueError, ArithmeticError, IndexError, KeyError):
+        return Due(at=None)
+
+
+def _parse(text: str, anchor: datetime, tz: str | tzinfo | None) -> Due:
     """Cụm thời gian (hạn, hẹn) → `Due`. `anchor` = giờ gửi tin (có múi giờ; naive ⇒ coi là giờ `tz`)."""
     zone = _tzinfo(tz)
     a = anchor.replace(tzinfo=zone) if anchor.tzinfo is None else anchor.astimezone(zone)
@@ -993,6 +1012,14 @@ def parse(text: str, anchor: datetime, tz: str | tzinfo | None = DEFAULT_TZ) -> 
 
 
 def parse_past(text: str, anchor: datetime, tz: str | tzinfo | None = DEFAULT_TZ) -> Instant | None:
+    """Lỗi số học/ngày ⇒ None (nhánh `event_time_unparsed` của spec), không bao giờ ném."""
+    try:
+        return _parse_past(text, anchor, tz)
+    except (OverflowError, ValueError, ArithmeticError, IndexError, KeyError):
+        return None
+
+
+def _parse_past(text: str, anchor: datetime, tz: str | tzinfo | None) -> Instant | None:
     """Cụm thời gian của sự việc ĐÃ xảy ra → `Instant{earliest, latest, granularity}`; không bao giờ sau `anchor`; None nếu không đọc được."""
     zone = _tzinfo(tz)
     a = anchor.replace(tzinfo=zone) if anchor.tzinfo is None else anchor.astimezone(zone)
