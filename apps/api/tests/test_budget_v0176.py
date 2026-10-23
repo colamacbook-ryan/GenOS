@@ -83,6 +83,13 @@ def test_safety_over_soft_cap_still_runs_and_only_flags_the_alert() -> None:
     assert over.allow and over.over_safety_cap and over.reasons == ("safety_cap_exceeded",)
 
 
+def test_absolute_safety_cap_hard_only_for_everyone_including_known_senders() -> None:
+    ok = decide(KIND_SAFETY, TK, CAPS, usage(safety=599))
+    assert ok.allow
+    d = decide(KIND_SAFETY, TK, CAPS, usage(safety=600))                       # 10 × 60: chốt chặn hạn mức gói thuê bao
+    assert not d.allow and d.mode == budget.MODE_HARD_ONLY and d.reasons == ("safety_absolute_cap",) and d.over_safety_cap
+
+
 def test_safety_hard_only_depends_on_sender_not_on_thread_or_normal_turn_ratio() -> None:
     """[Gen chọn] chống lạm dụng: chỉ `sender_over` (mọi người gửi tin ứng viên đã vượt trần riêng) mới đẩy sang luật cứng. Trần luồng/ngày,
     trần cứng 3 × safety_call_cap và thread_ratio (đếm lượt thường) KHÔNG chặn nạn nhân thật cùng luồng."""
@@ -430,3 +437,26 @@ async def test_capped_or_free_mode_creates_no_empty_runs_over_five_ticks(app, db
     assert (await db.execute(text("SELECT count(*) FROM refinery.runs"))).scalar_one() == 1
     held = (await db.execute(text("SELECT detail ->> 'hold_until' FROM refinery.event_state WHERE state = 'pending'"))).scalars().all()
     assert held and all(h is not None for h in held)
+
+
+async def test_absolute_cap_blocks_known_sender_too_but_hard_rules_still_catch(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    sm = sessionmaker()
+    org = await org_id(db)
+    await listen(db, org, "g1")
+    await enable_groups(db, org)
+    await set_ai_cost(db, org, intel_safety_call_cap=1)                        # trần tuyệt đối = 10 lượt
+    m = await mk_model(db, org)
+    for _ in range(10):
+        await add_call(db, org, m, "refinery.safety")
+    old = msg("Chào cả nhà, em về rồi nhé nhé nhé", sender="known", name="Người quen")
+    old["occurred_at"] = (datetime.now(UTC) - timedelta(days=30)).isoformat()
+    await put(sm, org, old)
+    await db.execute(text("UPDATE refinery.event_state SET state = 'clean'"))
+    await db.commit()
+    await put(sm, org, msg("Em lỡ nhập mã OTP vào link đó rồi", sender="known", name="Người quen"))
+    an = Analyzer()
+    await refinery(sm, redis, an, LoggingRouter(sm, m)).run(org, "schedule")
+    assert an.windows == []                                                    # người quen cũng bị chặn ở chốt tuyệt đối
+    cand = (await db.execute(text("SELECT detail -> 'cands' -> 0 ->> 'flag' AS f, detail ->> 'gate_class' AS g FROM refinery.event_state WHERE state = 'pending'"))).one()
+    assert (cand.f, cand.g) == ("credentials_entered", "hard")                 # luật cứng vẫn tạo ứng viên
+    assert "intel_safety_abuse" in [a.alert_type for a in (await db.execute(text("SELECT alert_type FROM biz.alerts"))).all()]

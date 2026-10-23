@@ -281,9 +281,11 @@ def _gap(lo: int, hi: int) -> str:
 
 
 _SECRET = (r"(?:ma otp|otp|ma xac (?:thuc|minh|nhan)(?!\s+(?:don|hang|giao|dat|van))|mat khau|password|passwd|"
-           r"pass (?:ngan hang|the|vi|zalo|fb|facebook|email|momo|tai khoan|dang nhap)|so the|"
+           r"pass(?!\s+(?:wifi|wi-fi|mang|phong|cua|do|lai|hang|tu|ghe|ban|xe|nha|dien thoai|bai|mon))|tai khoan va mat khau|so the|"
            r"ma the|the (?:atm|ngan hang|tin dung|visa|master|ghi no)|cvv|cvc|ma pin|pin|thong tin the|"
            r"thong tin (?:ngan hang|dang nhap)|ma bao mat|ma bi mat|mat ma|ma 6 so|ma gom 6 so)")
+# [Gen chốt] `pass` trần là bí mật, trừ ngữ cảnh vô hại ngay sau nó (pass wifi/mạng/phòng/cửa, pass đồ/lại hàng). "tài khoản và mật khẩu"
+# có "mật khẩu" nên đúng là thông tin đăng nhập; "thông tin tài khoản" chỉ khi có ngữ cảnh nhập/điền vào link (xem `cred_info_login`).
 # STK để NHẬN tiền, `pass` trần (pass wifi) không phải bí mật đăng nhập: không đưa vào _SECRET
 _LOGIN = r"(?:dang nhap|login|log in)"
 _NUM_AMT = rf"(?:{_MONEY_AMT}|\d{{1,3}}(?:[.,]\d{{3}})+\b)"
@@ -296,6 +298,8 @@ _NEG_TAIL = re.compile(r"^[\s,]*(?:chua|hay chua|chua a|chua ha)\b")
 _CRED: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("cred_enter", re.compile(rf"\b{_PAST}\b{_gap(0, 5)}{_SEP}{_VERB}\b{_gap(0, 6)}{_SEP}{_SECRET}\b")),
     ("cred_enter_done", re.compile(rf"\b{_VERB}\b{_gap(0, 5)}{_SEP}{_SECRET}\b{_gap(0, 7)}{_SEP}(?:roi|xong|luon|r|mat roi)\b")),
+    ("cred_info_login", re.compile(rf"\b{_PAST}\b{_gap(0, 5)}{_SEP}{_VERB}\b{_gap(0, 3)}{_SEP}thong tin (?:tai khoan|dang nhap)"
+                                   rf"{_gap(0, 3)}{_SEP}(?:link|duong dan|trang|web|app)\b")),
     ("cred_enter_luon", re.compile(rf"\b(?:nhap|dien|go|gui|doc|cho|dua){_SEP}luon\b{_gap(0, 3)}{_SEP}{_SECRET}\b")),
     ("cred_enter_done2", re.compile(rf"\b{_VERB}{_SEP}xong{_SEP}(?:\w+{_SEP}){{0,3}}{_SECRET}\b")),
     ("cred_secret_sent", re.compile(rf"\b{_SECRET}\b{_gap(0, 4)}{_SEP}(?:da|vua|lo|trot){_SEP}{_VERB}\b")),

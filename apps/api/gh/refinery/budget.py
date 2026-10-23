@@ -52,6 +52,8 @@ MODE_HARD_ONLY = "hard_rules_only"
 SAFETY_PER_SENDER_HOUR = 6
 SAFETY_PER_THREAD_DAY = 20
 SAFETY_HARD_FACTOR = 3
+#: [Gen chọn] chốt chặn tuyệt đối hạn mức gói thuê bao: 10 × `intel_safety_call_cap` áp cho MỌI người gửi (kể cả người quen) ⇒ chỉ luật cứng.
+SAFETY_ABSOLUTE_FACTOR = 10
 
 
 @dataclass(frozen=True)
@@ -166,6 +168,9 @@ def decide(kind: str, thread_key: str, caps: Caps, usage: Usage, *, sender_over:
         # người gửi khác cùng luồng vẫn được gọi model). Trần theo luồng/ngày và trần cứng 3 × `intel_safety_call_cap` toàn tổ chức chỉ
         # BÁO P1 ở đây; bên gọi áp trần cứng lên người LẠ (người đã có lịch sử vẫn được gọi). Không dùng `thread_ratio` (đếm lượt thường).
         flags: tuple[str, ...] = ()
+        # Trần theo LUỒNG/ngày chỉ để BÁO P1, tuyệt đối không chặn: chặn theo luồng thì kẻ spam làm hại được nạn nhân thật cùng luồng.
+        if usage.calls.get(KIND_SAFETY, 0) >= SAFETY_ABSOLUTE_FACTOR * max(caps.safety_call_cap, 1):
+            return Decision(False, MODE_HARD_ONLY, kind, over_safety_cap=True, reasons=("safety_absolute_cap",), **common)
         if usage.thread_safety.get(thread_key, 0) >= SAFETY_PER_THREAD_DAY:
             flags += ("thread_safety_cap",)
         if usage.calls.get(KIND_SAFETY, 0) >= SAFETY_HARD_FACTOR * max(caps.safety_call_cap, 1):

@@ -1209,7 +1209,7 @@ class GroupTurns:
                                   title="Tình báo đang ở chế độ miễn phí",
                                   summary="Có thể rơi vào nguồn AI tính tiền theo token trong khi trần VND = 0; chỉ quét luật.",
                                   suggested="Kiểm tra nguồn AI của core.refinery: chỉ dùng gói thuê bao (CLI).")
-        abuse = [r for r in dec.reasons if r in ("sender_cap", "thread_safety_cap", "safety_hard_cap")]
+        abuse = [r for r in dec.reasons if r in ("sender_cap", "thread_safety_cap", "safety_hard_cap", "safety_absolute_cap")]
         if dec.kind == budget.KIND_SAFETY and abuse:
             await self.alert_once(org_id, "safety_hard_cap", alert_type="intel_safety_abuse", priority="P1",
                                   title="Lượt an toàn vượt trần chống lạm dụng",
@@ -1264,6 +1264,8 @@ class GroupTurns:
                 hard = usage.calls.get(budget.KIND_SAFETY, 0) >= budget.SAFETY_HARD_FACTOR * max(caps.safety_call_cap, 1)
                 ok, blocked = await self._safety_gate_senders(db, org_id, tk, hard)
                 sender_over = bool(blocked) and not ok
+                if usage.calls.get(budget.KIND_SAFETY, 0) >= budget.SAFETY_ABSOLUTE_FACTOR * max(caps.safety_call_cap, 1):
+                    ok, blocked = [], ok + blocked                       # chốt chặn tuyệt đối: hạ MỌI người gửi (luật cứng vẫn tạo ứng viên)
             dec = budget.decide(kind0, tk, caps, usage, sender_over=sender_over, paid_route=paid)
             await budget.sync_thread_state(db, org_id, tk, dec, group_id=ts.group_id)
             if blocked:
