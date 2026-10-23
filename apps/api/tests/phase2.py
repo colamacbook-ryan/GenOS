@@ -39,12 +39,13 @@ class FakeRouter:
 def refs_in(messages: list[Message]) -> list[str]:
     """Các mã E… của lô gửi cho model (mỗi dòng JSON sau phần "Tin nhắn")."""
     body = messages[-1].content.split("Tin nhắn (mỗi dòng một JSON):\n", 1)[1]
-    return [orjson.loads(line)["ref"] for line in body.splitlines() if line.strip()]
+    # bỏ dòng nhãn/dấu khối wrap_untrusted
+    return [orjson.loads(line)["ref"] for line in body.splitlines() if line.startswith("{")]
 
 
 def texts_in(messages: list[Message]) -> dict[str, str]:
     body = messages[-1].content.split("Tin nhắn (mỗi dòng một JSON):\n", 1)[1]
-    return {d["ref"]: d["text"] for d in (orjson.loads(line) for line in body.splitlines() if line.strip())}
+    return {d["ref"]: d["text"] for d in (orjson.loads(line) for line in body.splitlines() if line.startswith("{"))}
 
 
 async def install_presets(db: AsyncSession, org: uuid.UUID, codes: list[str] | None = None) -> None:

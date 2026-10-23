@@ -77,7 +77,8 @@ def test_mask_for_prompt_hides_secrets_and_phones_but_keeps_money_dates_and_ids(
     assert nested == {"password": "[đã che]", "n": 5, "rows": [{"text": "gọi •••••••321"}]}
 
 
-async def test_refinery_prompt_masks_outsider_text(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+async def test_refinery_prompt_unmasked_q9(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """v0.1.76 (Q9, CNS-081): chữ chat tới model NGUYÊN VĂN (thay P2-3 che prompt); tiền vẫn đọc được."""
     org = await org_id(db)
     await install_presets(db, org)
     await listen(db, org, "g1")
@@ -86,8 +87,10 @@ async def test_refinery_prompt_masks_outsider_text(app, db, redis) -> None:  # t
     await Refinery(sessionmaker(), redis, router).run(org, "manual")  # type: ignore[arg-type]
     assert router.calls, "phải có lượt gọi model"
     prompt = "\n".join(m.content for m in router.calls[0])
-    _no_secret(prompt)
-    assert "0988777666" not in prompt and "25.000.000" in prompt
+    for kept in ("0912 345 678", "1234 5678 9012 3456", "25.000.000"):
+        assert kept in prompt, kept
+    # ngoại lệ Q9: thông tin đăng nhập
+    assert "482913" not in prompt and "abc12345xyz" not in prompt and "[OTP 6 số]" in prompt
 
 
 async def test_duty_context_line_masks_outsider_text() -> None:
