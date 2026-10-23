@@ -11,7 +11,7 @@ from sqlalchemy import text
 
 from gh import ai_cost
 from gh.db import sessionmaker
-from tests.conftest import Api
+from tests.conftest import Api, verify_pin
 from tests.phase2 import org_id
 from tests.refinery_group_helpers import add_call, mk_model, set_ai_cost
 from tests.test_rbac_api import login_as
@@ -55,6 +55,9 @@ async def test_put_intel_route_sets_resets_and_audits(owner_api: Api, db) -> Non
     org = await org_id(db)
     r = await owner_api.send("GET", "/system/ai-cost/intel")
     assert r.status_code == 200 and r.json()["values"] == ai_cost.INTEL_DEFAULTS and r.json()["defaults"] == ai_cost.INTEL_DEFAULTS
+    r = await owner_api.send("PUT", "/system/ai-cost/intel", {"intel_daily_call_cap": 250})
+    assert r.status_code == 423, r.text                                                                   # cần phiên PIN như các route nhạy cảm cùng file
+    await verify_pin(owner_api)
     r = await owner_api.send("PUT", "/system/ai-cost/intel", {"intel_daily_call_cap": 250, "intel_safety_call_cap": 30})
     assert r.status_code == 200, r.text
     assert r.json()["values"]["intel_daily_call_cap"] == 250 and r.json()["values"]["intel_gate_call_cap"] == 40
@@ -69,6 +72,7 @@ async def test_put_intel_route_sets_resets_and_audits(owner_api: Api, db) -> Non
 
 
 async def test_put_intel_route_validation_and_permissions(owner_api: Api, client: Any, db: Any) -> None:
+    await verify_pin(owner_api)
     for body in ({"intel_daily_call_cap": -1}, {"intel_daily_call_cap": 100_001}, {"intel_daily_budget_vnd": 10_000_000_001},
                  {"khong_co_khoa": 1}, {"intel_gate_call_cap": "abc"}):
         assert (await owner_api.send("PUT", "/system/ai-cost/intel", body)).status_code == 422, body

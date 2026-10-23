@@ -137,42 +137,44 @@ def org_ratio(caps: Caps, usage: Usage) -> float:
     return r
 
 
-def free_mode(caps: Caps, usage: Usage) -> bool:
-    """`intel_daily_budget_vnd = 0` (chế độ gói thuê bao) mà sổ ngày đã ghi chi phí > 0 ⇒ có model TÍNH TIỀN theo token đã lọt vào
-    chuỗi: không gọi tiếp (Q14, "không chi tiền theo token"). Có trần VND > 0 ⇒ không dùng chế độ này."""
-    return caps.budget_vnd <= 0 and usage.total_vnd > 0.0
+def free_mode(caps: Caps, usage: Usage, paid_route: bool = False) -> bool:
+    """Chế độ miễn phí (Q14, "không chi tiền theo token"): `intel_daily_budget_vnd = 0` mà (a) tuyến `core.refinery` có thể rơi vào nguồn
+    KHÔNG phải CLI thuê bao (`paid_route`, kiểm TRƯỚC khi gọi — `paid_route_possible`) hoặc (b) sổ ngày đã ghi chi phí > 0 (model tính
+    tiền theo token đã lọt vào). Có trần VND > 0 ⇒ không dùng chế độ này."""
+    return caps.budget_vnd <= 0 and (paid_route or usage.total_vnd > 0.0)
 
 
 def cadence_minutes(base: int, stretched: bool) -> int:
     return max(base, STRETCHED_CADENCE_MIN) if stretched else base
 
 
-def decide(kind: str, thread_key: str, caps: Caps, usage: Usage, *, sender_over: bool = False) -> Decision:
+def decide(kind: str, thread_key: str, caps: Caps, usage: Usage, *, sender_over: bool = False, paid_route: bool = False) -> Decision:
     """Quyết định cho MỘT lượt sắp chạy của `thread_key` thuộc lớp `kind` (hàm thuần)."""
     if kind not in PURPOSE:
         raise ValueError(f"lớp lượt không hợp lệ: {kind!r}")
     o, t = org_ratio(caps, usage), thread_ratio(thread_key, caps, usage)
     stretch_org, stretch_thread, capped = o >= STRETCH_AT, t >= STRETCH_AT, o >= 1.0
     common: dict[str, Any] = {"stretch_thread": stretch_thread, "stretch_org": stretch_org, "capped": capped}
-    if free_mode(caps, usage):
+    if free_mode(caps, usage, paid_route):
         return Decision(False, MODE_FREE, kind, reasons=("free_mode",), **common)
     if kind == KIND_SAFETY:
         over = caps.safety_call_cap <= 0 or usage.calls.get(KIND_SAFETY, 0) >= caps.safety_call_cap
         if caps.safety_budget_vnd > 0 and usage.vnd.get(KIND_SAFETY, 0.0) >= caps.safety_budget_vnd:
             over = True
-        # Vượt trần an toàn "mềm" ⇒ báo Ryan, vẫn chạy (fail-high). NHƯNG có trần chống lạm dụng: theo luồng (cả tỉ lệ trần luồng và
-        # ≤ 20 lượt/ngày), theo người gửi (≤ 6 lượt/giờ, bên gọi đếm) và trần cứng tổng 3 × `intel_safety_call_cap`. Vượt ⇒ chỉ luật cứng.
-        abuse: tuple[str, ...] = ("sender_cap",) if sender_over else ()
+        # [Gen chọn] chống lạm dụng — trong phạm vi `safety_call_cap` lượt an toàn KHÔNG bị cắt. `hard_only` (không gọi model, luật cứng vẫn
+        # tạo ứng viên và báo) CHỈ khi MỌI người gửi tin ứng viên của lượt đã vượt trần RIÊNG của họ (`sender_over`, bên gọi đếm cả lượt lỗi;
+        # người gửi khác cùng luồng vẫn được gọi model). Trần theo luồng/ngày và trần cứng 3 × `intel_safety_call_cap` toàn tổ chức chỉ
+        # BÁO P1 ở đây; bên gọi áp trần cứng lên người LẠ (người đã có lịch sử vẫn được gọi). Không dùng `thread_ratio` (đếm lượt thường).
+        flags: tuple[str, ...] = ()
         if usage.thread_safety.get(thread_key, 0) >= SAFETY_PER_THREAD_DAY:
-            abuse += ("thread_safety_cap",)
-        if thread_ratio(thread_key, caps, usage) >= 1.0:
-            abuse += ("thread_cap",)
+            flags += ("thread_safety_cap",)
         if usage.calls.get(KIND_SAFETY, 0) >= SAFETY_HARD_FACTOR * max(caps.safety_call_cap, 1):
-            abuse += ("safety_hard_cap",)
-        if abuse:
-            return Decision(False, MODE_HARD_ONLY, kind, over_safety_cap=True, reasons=abuse, **common)
+            flags += ("safety_hard_cap",)
+        if sender_over:
+            return Decision(False, MODE_HARD_ONLY, kind, over_safety_cap=True, reasons=("sender_cap", *flags), **common)
         return Decision(True, MODE_STRETCHED if (stretch_thread or stretch_org) else MODE_NORMAL, kind,
-                        over_safety_cap=over, reasons=("safety_cap_exceeded",) if over else (), **common)
+                        over_safety_cap=over or bool(flags),
+                        reasons=(("safety_cap_exceeded",) if over else ()) + flags, **common)
     if kind == KIND_GATE:
         gate_used = usage.calls.get(KIND_GATE, 0)
         gate_ok = gate_used < caps.gate_call_cap and (caps.gate_budget_vnd <= 0
@@ -186,6 +188,19 @@ def decide(kind: str, thread_key: str, caps: Caps, usage: Usage, *, sender_over:
     if capped or t >= 1.0:
         return Decision(False, MODE_RULES_ONLY, kind, reasons=("org_cap" if capped else "thread_cap",), **common)
     return Decision(True, MODE_STRETCHED if (stretch_thread or stretch_org) else MODE_NORMAL, kind, **common)
+
+
+async def paid_route_possible(db: AsyncSession, org_id: uuid.UUID) -> bool:
+    """Chuỗi nguồn của `core.refinery` có thể gồm nguồn KHÔNG phải CLI thuê bao không? Phần đuôi chuỗi của router gồm MỌI nguồn đang bật
+    có model, nên bất kỳ nguồn bật có model mà không thuộc `CLI_KINDS` đều là đường lui TÍNH TIỀN theo token (kể cả khi chưa có giá)."""
+    return bool((await db.execute(text("""
+        SELECT EXISTS (SELECT 1 FROM agent.providers p WHERE p.org_id = :o AND p.is_enabled AND NOT (p.kind = ANY(:cli))
+                         AND EXISTS (SELECT 1 FROM agent.models m WHERE m.provider_id = p.id))"""),
+                                {"o": org_id, "cli": list(CLI_KINDS)})).scalar_one())
+
+
+def next_vn_midnight(now: datetime | None = None) -> datetime:
+    return day_start(now)[1]
 
 
 # ─── đọc sổ ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -262,7 +277,7 @@ async def coverage_notes(db: AsyncSession, org_id: uuid.UUID, now: datetime | No
     now = now or clock.now()
     caps, usage = await load_caps(db, org_id), await load_usage(db, org_id, now)
     notes: list[str] = []
-    if free_mode(caps, usage):
+    if free_mode(caps, usage, caps.budget_vnd <= 0 and await paid_route_possible(db, org_id)):
         notes.append("đang chạy chế độ miễn phí: chỉ quét luật")
     elif org_ratio(caps, usage) >= 1.0:
         notes.append("đã hết lượt phân tích hôm nay: chỉ quét luật (lừa đảo/an toàn vẫn chạy)")

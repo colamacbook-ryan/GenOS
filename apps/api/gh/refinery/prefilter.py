@@ -252,6 +252,7 @@ class SenderCtx:
     joined_days: float | None = None
     display_name_changed_recent: bool = False
     known_stk_digests: frozenset[str] = frozenset()  # STK đã biết của người này (digest có khoá)
+    known_entity: bool = False                       # người này đã là thực thể/có lịch sử tin ≥ 7 ngày (người gọi tra `raw.events`)
 
 
 # ─── chuẩn hoá hai bản: `fold` (bỏ dấu, chữ thường) và `lc` (chữ thường, GIỮ dấu — phân biệt cháy/chạy, gấp/gặp) ───────────
@@ -279,13 +280,16 @@ def _gap(lo: int, hi: int) -> str:
     return rf"{_GAP}{{{lo},{hi}}}?"
 
 
-_SECRET = (r"(?:ma otp|otp|ma xac (?:thuc|minh|nhan)(?!\s+(?:don|hang|giao|dat|van))|mat khau|password|passwd|pass|so the|"
-           r"ma the|the (?:atm|ngan hang|tin dung|visa|master|ghi no)|cvv|cvc|ma pin|pin|so tai khoan|thong tin the|"
-           r"thong tin (?:ngan hang|dang nhap|tai khoan)|ma bao mat|ma bi mat|mat ma|ma 6 so|ma gom 6 so|"
-           r"tai khoan va mat khau|tai khoan mat khau)")
+_SECRET = (r"(?:ma otp|otp|ma xac (?:thuc|minh|nhan)(?!\s+(?:don|hang|giao|dat|van))|mat khau|password|passwd|"
+           r"pass (?:ngan hang|the|vi|zalo|fb|facebook|email|momo|tai khoan|dang nhap)|so the|"
+           r"ma the|the (?:atm|ngan hang|tin dung|visa|master|ghi no)|cvv|cvc|ma pin|pin|thong tin the|"
+           r"thong tin (?:ngan hang|dang nhap)|ma bao mat|ma bi mat|mat ma|ma 6 so|ma gom 6 so)")
+# STK để NHẬN tiền, `pass` trần (pass wifi) không phải bí mật đăng nhập: không đưa vào _SECRET
+_LOGIN = r"(?:dang nhap|login|log in)"
+_NUM_AMT = rf"(?:{_MONEY_AMT}|\d{{1,3}}(?:[.,]\d{{3}})+\b)"
 _VERB = r"(?:nhap|dien|go|cung cap|dua|gui|doc|cho|chia se|khai bao|bam|bao)"
 _PAST = r"(?:da|vua|lo|trot|moi|lam xong|nhap xong)"
-_NEG = re.compile(r"\b(?:chua|khong|chang|dung|ko|dung co|chua bao gio|dam)\b")
+_NEG = re.compile(r"\b(?:chua|khong|chang|(?<!tu )dung|ko|(?<!tu )dung co|chua bao gio|dam)\b")
 _NEG_TAIL = re.compile(r"^[\s,]*(?:chua|hay chua|chua a|chua ha)\b")
 
 # Mỗi mục: (mã luật, regex trên `fold`). Tất cả cùng cờ `credentials_entered`.
@@ -297,16 +301,19 @@ _CRED: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("cred_secret_sent", re.compile(rf"\b{_SECRET}\b{_gap(0, 4)}{_SEP}(?:da|vua|lo|trot){_SEP}{_VERB}\b")),
     ("cred_secret_gave", re.compile(rf"\b{_SECRET}\b{_gap(0, 4)}{_SEP}(?:em|toi|minh|anh|chi|con|chau|bac|co|chu){_SEP}"
                                      rf"(?:da |vua |lo |trot )?{_VERB}\b{_gap(0, 4)}{_SEP}(?:roi|xong|luon|r)\b")),
-    ("login_link", re.compile(rf"\b(?:da|vua|lo|trot|moi)\b{_gap(0, 4)}{_SEP}dang nhap\b{_gap(0, 6)}{_SEP}(?:link|duong dan)\b")),
-    ("login_page", re.compile(rf"\b(?:da|vua|lo|trot|moi)\b{_gap(0, 4)}{_SEP}dang nhap\b{_gap(0, 5)}{_SEP}"
+    ("login_link", re.compile(rf"\b(?:da|vua|lo|trot|moi)\b{_gap(0, 4)}{_SEP}{_LOGIN}\b{_gap(0, 6)}{_SEP}(?:link|duong dan)\b")),
+    ("login_page", re.compile(rf"\b(?:da|vua|lo|trot|moi)\b{_gap(0, 4)}{_SEP}{_LOGIN}\b{_gap(0, 5)}{_SEP}"
                               rf"(?:trang|web|website|app|ung dung|giao dien){_gap(0, 4)}{_SEP}"
                               rf"(?:gia|la|do|nay|kia|ho gui|nguoi la|lua dao|phishing|nhan duoc)\b")),
-    ("login_after_link", re.compile(rf"\b(?:link|duong dan|trang gia|web gia|trang la|web la)\b{_gap(0, 6)}{_SEP}dang nhap\b"
+    ("login_after_link", re.compile(rf"\b(?:link|duong dan|trang gia|web gia|trang la|web la)\b{_gap(0, 6)}{_SEP}{_LOGIN}\b"
                                     rf"{_gap(0, 4)}{_SEP}(?:roi|xong|luon|r)\b")),
-    ("login_done_link", re.compile(rf"\bdang nhap\b{_gap(0, 3)}{_SEP}(?:vao )?(?:link|duong dan|trang gia|web gia|trang la|web la)"
+    ("login_done_link", re.compile(rf"\b{_LOGIN}\b{_gap(0, 3)}{_SEP}(?:vao )?(?:link|duong dan|trang gia|web gia|trang la|web la)"
                                    rf"\b{_gap(0, 4)}{_SEP}(?:roi|xong|luon|r)\b")),
     ("charged_bi", re.compile(rf"\b(?:bi|da bi|vua bi|dang bi)\s+(?:tru|rut|lay)(?:\s+(?:het|sach|oan|mat))?\s+"
-                              rf"(?:tien|{_MONEY_AMT}|tai khoan|the\b|het\b|sach\b)")),
+                              rf"(?:tien|{_NUM_AMT}|tai khoan|the\b|het\b|sach\b)")),
+    ("charged_acc2", re.compile(rf"\b(?:tk|tai khoan)\b{_gap(0, 5)}{_SEP}(?:(?:vua|da|bi|tu dung|tu nhien|dang)\s+)*(?:mat|tru|rut)\s+{_NUM_AMT}")),
+    ("charged_bank_report", re.compile(rf"\b(?:ngan hang|bank|app|momo)\s+(?:bao|thong bao)\s+(?:da\s+)?(?:tru|rut)\s+(?:tien\b|{_NUM_AMT})")),
+    ("charged_bao_tru", re.compile(rf"\bbao tru\s+{_NUM_AMT}")),
     ("charged_acc", re.compile(rf"\btai khoan\b{_gap(0, 3)}{_SEP}(?:bi|vua bi|da bi)\s+(?:tru|rut|mat|lay)\b")),
     ("charged_sms", re.compile(rf"\b(?:tin nhan|thong bao|sms|bien dong so du)\b{_gap(0, 2)}{_SEP}(?:tru|rut)\s+(?:tien|\d)")),
     ("charged_lost", re.compile(rf"\b(?:bi lua|bi mat|bi lay)\b{_gap(0, 3)}{_SEP}(?:\d[\d.,]*\s*(?:tr|trieu|k|nghin|ngan|ty|d|dong|vnd)\b|"
@@ -378,8 +385,13 @@ _LINK = re.compile(r"(?:https?://\S+|www\.\S+|\b[a-z0-9-]+\.(?:com|vn|net|org|xy
 _PHONE = re.compile(r"(?<!\d)(?:\+?84|0)[\s.-]?(?:3|5|7|8|9)(?:[\s.-]?\d){8}(?!\d)")
 _ACCOUNT = re.compile(r"(?:\b(?:stk|so tai khoan|so tk|tai khoan|tk)\b[\s:.-]*|(?<=\s)|^)(\d(?:[\s.-]?\d){7,15})(?!\d)")
 _AMOUNT = re.compile(r"(?<![\d.,])(\d{1,3}(?:[.,]\d{3})+|\d+(?:[.,]\d+)?)\s*(ty|ti|tr|trieu|nghin|ngan|k|d|dong|vnd)\b")
+# Ngôi thứ ba CHỈ khi từ chỉ người đứng làm CHỦ NGỮ ngay trước động từ ("mẹ em đã nhập OTP", "bạn tôi bị trừ tiền"). KHÔNG tính: cách
+# gọi ("mẹ ơi", "khách ơi", "bạn ơi") và tân ngữ/định ngữ sau cho|vào|của ("link bạn gửi", "nhà mình hay dùng").
 _THIRD = re.compile(r"\b(?:me|ba|bo|cha|ong|vo|chong|con trai|con gai|anh trai|chi gai|em trai|em gai|nguoi than|ban|khach|"
-                    r"nhan vien|ho|ay|hang xom|co ay|chu ay|nha)\b")
+                    r"nhan vien|hang xom|co ay|chu ay|anh ay|chi ay|ho)\s+(?:cua\s+)?(?:em|toi|minh|anh|chi|nha|tao|tui)?\s*"
+                    r"(?:da|vua|lo|trot|bi|moi|dang|nhap|dien|doc|dua|cung cap|dang nhap|login)\b")
+_ACCT_BEFORE = re.compile(r"(?:\bvao|\bqua|\bsang|\bchuyen(?: khoan| tien)?|\bck|\bstk|\btk)\s*(?:so\s+|tai khoan\s+|cho\s+)?[:.-]?\s*$")
+_ORDER_BEFORE = re.compile(r"(?:ma don|don hang|so don|ma van don|van don|mvd|ngay|don|ma)\s*(?:hang|so)?\s*[:#.-]?\s*$")
 _CLAUSE_SPLIT = re.compile(r"[.!?\n;]")
 
 
@@ -547,8 +559,12 @@ def scan_text(text: str, source_field: str = "body") -> list[Candidate]:
     for m in _ACCOUNT.finditer(fold):
         digits = re.sub(r"\D", "", m.group(1))
         has_label = bool(re.search(r"(?:stk|so tai khoan|so tk|tai khoan|tk)\b", fold[max(0, m.start() - 2):m.start(1)]))
-        if not has_label and any(s <= m.start(1) and m.end(1) <= e for s, e in phone_spans):
-            continue                        # số trông như SĐT mà không có nhãn STK ⇒ SĐT (nhiều ngân hàng dùng SĐT làm STK)
+        if not has_label:
+            if any(s <= m.start(1) and m.end(1) <= e for s, e in phone_spans):
+                continue                    # số trông như SĐT mà không có nhãn STK ⇒ SĐT (T7: SĐT dùng làm STK hiện bị bỏ — chỉ nhận khi có nhãn)
+            before = fold[max(0, m.start(1) - 24):m.start(1)]
+            if _ORDER_BEFORE.search(before) or not _ACCT_BEFORE.search(before):
+                continue                    # STK không nhãn chỉ nhận khi sát vao/qua/chuyen/ck; loại mã đơn/ngày/mã vận đơn
         if len(digits) >= 8 and (has_label or any(c.flag == "money_request" for c in out)):
             accts.append(digits)
             first_acct = first_acct or m
@@ -564,7 +580,8 @@ def _impersonated(ctx: SenderCtx) -> tuple[str, ...]:
     là thực thể đã biết (`joined_days` None = chưa biết gì về ID này). Thành viên lâu năm trùng tên không phải mạo danh (CNS-149)."""
     if ctx.name_collision_with is None:
         return ()
-    fresh = (ctx.joined_days is None or ctx.joined_days < STRANGER_DAYS or ctx.display_name_changed_recent)
+    fresh = ((ctx.joined_days is not None and ctx.joined_days < STRANGER_DAYS) or ctx.display_name_changed_recent
+             or not ctx.known_entity)
     return (ctx.name_collision_with,) if fresh else ()
 
 

@@ -22,7 +22,7 @@ ENTERED = [
     "Em đã điền thông tin thẻ vào trang đó rồi",
     "Cháu vừa gõ mật khẩu vào trang đăng nhập giả",
     "Mình đã đưa số CVV cho họ rồi",
-    "em lo nhap pass vao link la",
+    "em lo nhap pass zalo vao link la",
     "Bác đã đọc OTP cho họ nghe rồi con ơi",
     "Em vừa nhập mã PIN vào link ngân hàng gửi qua tin nhắn",
     "Anh đã khai báo số thẻ và mã OTP vào form đó",
@@ -38,6 +38,7 @@ ENTERED = [
 # ─── nhóm 2: ĐÃ ĐĂNG NHẬP vào link / trang lạ ───────────────────────────────────────────────────────────────────────
 LOGGED_IN = [
     "Em đã đăng nhập vào link đó rồi",
+    "em đã login vào link đó",
     "Chị vừa đăng nhập vào trang web ngân hàng giả",
     "Anh lỡ bấm vào link rồi đăng nhập luôn",
     "Mình đã đăng nhập vào đường dẫn họ gửi",
@@ -61,6 +62,9 @@ CHARGED = [
     "Mẹ em bị trừ tiền sau khi nhập OTP",
     "Có thông báo trừ tiền 8 triệu mà em không giao dịch",
     "Tiền bị rút sạch trong thẻ rồi",
+    "tài khoản em tự dưng mất 10 triệu",
+    "ngân hàng báo trừ 5tr",
+    "TK em vừa bị trừ 2.500.000",
     "Em bị lừa tiền rồi anh chị ơi",
 ]
 # ─── nhóm 4: câu soạn SAU khi viết luật (lần đầu bắt 12/15 = 80%; 3 câu sót đã được tổng quát hoá rồi đưa vào đây) ──────────────
@@ -112,6 +116,10 @@ NEGATIVES = [
     "Em đã nhập số lượng vào bảng rồi",
     "Đã nhận được tiền trong tài khoản rồi cảm ơn chị",
     "Mất điện cả khu từ sáng",
+    "đã gửi số tài khoản cho khách rồi",
+    "đã gửi pass wifi rồi",
+    "Em đã cho khách số tài khoản công ty rồi",
+    "Em bị trừ phí ship 30k",
     "Chào mọi người, hôm nay shop mở cửa sớm",
 ]
 
@@ -248,10 +256,12 @@ def test_impersonation_only_when_new_renamed_or_unknown() -> None:
         out = pf.enrich(cands, pf.SenderCtx(sender_ref="u_n", name_collision_with="u_real", **kw))  # type: ignore[arg-type]
         return next(c for c in out if c.flag == "money_request").impersonated
 
-    assert imp(joined_days=2) == ("u_real",)                                   # ID mới
-    assert imp(joined_days=900, display_name_changed_recent=True) == ("u_real",)  # vừa đổi tên
-    assert imp(joined_days=None) == ("u_real",)                                # chưa là thực thể đã biết
-    assert imp(joined_days=900) == ()                                          # thành viên lâu năm trùng tên (CNS-149)
+    assert imp(joined_days=2, known_entity=True) == ("u_real",)                # ID mới
+    assert imp(joined_days=900, display_name_changed_recent=True, known_entity=True) == ("u_real",)  # vừa đổi tên
+    assert imp(joined_days=900, known_entity=False) == ("u_real",)             # chưa là thực thể đã biết
+    assert imp(joined_days=None, known_entity=False) == ("u_real",)
+    assert imp(joined_days=None, known_entity=True) == ()                      # hai "Lan" lâu năm: `joined_days=None` KHÔNG phải "mới"
+    assert imp(joined_days=900, known_entity=True) == ()                       # thành viên lâu năm trùng tên (CNS-149)
 
 
 def test_threat_and_public_candidates_open_customer_gate() -> None:
@@ -314,3 +324,33 @@ def test_no_model_messages() -> None:
     long = "Kính gửi quý khách, bảng giá thép cuộn tháng 10 đã cập nhật, vui lòng xem file đính kèm"
     assert pf.no_model_reason("text", long, template_n=2) is None
     assert pf.no_model_reason("text", long, template_n=3) == "template"
+
+
+FIRST_PERSON = ["Mẹ ơi con đã nhập OTP rồi", "em đã nhập OTP vào link bạn gửi", "chị ơi em lỡ đọc mã OTP cho họ rồi",
+                "anh ơi em vừa nhập mật khẩu vào trang ngân hàng nhà mình hay dùng, giờ bị trừ tiền", "khách ơi em đã gửi OTP",
+                "em bị trừ 5 triệu ạ, bạn ơi giúp em", "con bị trừ hết tiền rồi bố ơi"]
+
+
+@pytest.mark.parametrize("text", FIRST_PERSON)
+def test_first_person_ignores_vocatives_and_objects(text: str) -> None:
+    c = next(x for x in pf.enrich(pf.scan_text(text), pf.SenderCtx(sender_ref="u_me")) if x.flag == "credentials_entered")
+    assert c.first_person and c.victims == ("u_me",)
+
+
+@pytest.mark.parametrize("text", ["mẹ em đã nhập OTP rồi", "bạn tôi bị trừ tiền 5 triệu", "khách đã nhập mật khẩu vào link đó"])
+def test_third_person_only_when_person_word_is_the_subject(text: str) -> None:
+    c = next(x for x in pf.enrich(pf.scan_text(text), pf.SenderCtx(sender_ref="u_me")) if x.flag == "credentials_entered")
+    assert not c.first_person and c.victims == ()
+
+
+@pytest.mark.parametrize("text", ["chuyển khoản 500k nhé, mã đơn 2024102312345", "ck cho em 2tr, đơn hàng số 88812345678 nha",
+                                  "chuyển tiền cho shop 1tr, ngày 20241023", "Đơn #DH2024102312345 giao hôm nay, mã vận đơn 8881234567890"])
+def test_unlabelled_digits_after_order_codes_are_not_accounts(text: str) -> None:
+    assert "account_number" not in flags(text)
+    out = pf.enrich(pf.scan_text(text), pf.SenderCtx(sender_ref="u_x", known_stk_digests=frozenset({"zzz"})))
+    assert next((c for c in out if c.flag == "money_request"), None) is None or next(c for c in out if c.flag == "money_request").kind is None
+
+
+def test_unlabelled_account_needs_adjacent_transfer_word_and_login_secrets_exclude_stk() -> None:
+    assert flags("anh chuyển khoản giúp em 3tr vào 1903654321012 nhé")["account_number"].details["account_numbers"] == ("1903654321012",)
+    assert "account_number" not in flags("Chuyển khoản 3tr nhé, em gọi lại sau, 1903654321012")

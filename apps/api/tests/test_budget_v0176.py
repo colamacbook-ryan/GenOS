@@ -83,22 +83,26 @@ def test_safety_over_soft_cap_still_runs_and_only_flags_the_alert() -> None:
     assert over.allow and over.over_safety_cap and over.reasons == ("safety_cap_exceeded",)
 
 
-def test_safety_abuse_caps_fall_back_to_hard_rules_only() -> None:
+def test_safety_hard_only_depends_on_sender_not_on_thread_or_normal_turn_ratio() -> None:
+    """[Gen chọn] chống lạm dụng: chỉ `sender_over` (mọi người gửi tin ứng viên đã vượt trần riêng) mới đẩy sang luật cứng. Trần luồng/ngày,
+    trần cứng 3 × safety_call_cap và thread_ratio (đếm lượt thường) KHÔNG chặn nạn nhân thật cùng luồng."""
     u = usage(safety=10, thread=5)
     u.thread_safety[TK] = budget.SAFETY_PER_THREAD_DAY
     d = decide(KIND_SAFETY, TK, CAPS, u)
-    assert not d.allow and d.mode == budget.MODE_HARD_ONLY and d.reasons == ("thread_safety_cap",)
-    assert not decide(KIND_SAFETY, TK, CAPS, usage(safety=10), sender_over=True).allow                  # ≤ 6 lượt/giờ/người gửi
-    assert decide(KIND_SAFETY, TK, CAPS, usage(safety=179)).allow
-    hard = decide(KIND_SAFETY, TK, CAPS, usage(safety=180))                                             # trần cứng 3 × 60
-    assert not hard.allow and hard.reasons == ("safety_hard_cap",) and hard.over_safety_cap
-    assert not decide(KIND_SAFETY, TK, CAPS, usage(thread=40)).allow                                    # không bỏ qua thread_ratio
-    assert not decide(KIND_SAFETY, TK, Caps(0, 60, 40, 0, 0, 0), usage()).allow                         # trần luồng = 0 ⇒ chỉ luật
+    assert d.allow and d.over_safety_cap and d.reasons == ("thread_safety_cap",)                       # chỉ báo P1
+    hard = decide(KIND_SAFETY, TK, CAPS, usage(safety=180))                                            # chạm trần cứng: bên gọi áp lên người LẠ
+    assert hard.allow and hard.reasons == ("safety_cap_exceeded", "safety_hard_cap") and hard.over_safety_cap
+    assert decide(KIND_SAFETY, TK, CAPS, usage(thread=40, normal=400)).allow                           # thread_ratio/trần chính không chặn an toàn
+    assert decide(KIND_SAFETY, TK, Caps(0, 60, 40, 0, 0, 0), usage()).allow
+    over = decide(KIND_SAFETY, TK, CAPS, usage(safety=10), sender_over=True)                           # ≤ 6 lượt/giờ/người gửi (mọi người gửi đã vượt)
+    assert not over.allow and over.mode == budget.MODE_HARD_ONLY and over.reasons == ("sender_cap",) and over.over_safety_cap
 
 
 def test_free_mode_blocks_every_class_when_paid_calls_appear_with_zero_vnd_budget() -> None:
     u = usage(normal=3, vnd=12.5)
     assert budget.free_mode(CAPS, u)
+    assert budget.free_mode(CAPS, usage(), paid_route=True) and decide(KIND_SAFETY, TK, CAPS, usage(), paid_route=True).mode == budget.MODE_FREE
+    assert not budget.free_mode(Caps(400, 60, 40, 1_000_000, 0, 0), usage(), paid_route=True)
     for kind in (KIND_NORMAL, KIND_GATE, KIND_SAFETY):
         d = decide(kind, TK, CAPS, u)
         assert not d.allow and d.mode == budget.MODE_FREE and d.reasons == ("free_mode",)
@@ -313,3 +317,116 @@ async def test_spam_of_safety_keywords_burns_at_most_six_model_calls_per_sender_
     await put(sm, org, msg("Em cũng lỡ nhập OTP vào link đó rồi", sender="real", name="Nạn nhân"))
     await r.run(org, "schedule")
     assert router.purposes.count("refinery.safety") == budget.SAFETY_PER_SENDER_HOUR + 1
+
+
+async def test_failed_safety_turns_still_count_toward_the_sender_cap(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    from gh.refinery import _l3_stub as l3
+
+    sm = sessionmaker()
+    org = await org_id(db)
+    await listen(db, org, "g1")
+    await enable_groups(db, org)
+    m = await mk_model(db, org)
+    bad = Analyzer(raises=l3.ContractError(["json_invalid"], model="fake"))                      # lượt model LỖI liên tục
+    router = LoggingRouter(sm, m)
+    r = refinery(sm, redis, bad, router)
+    for i in range(12):
+        await put(sm, org, msg(f"Em lỡ nhập mã OTP vào link đó rồi {i}", sender="spam", name="Kẻ spam"))
+        await db.execute(text("UPDATE refinery.event_state SET detail = detail - 'next_try_at'"))   # bỏ lùi nhịp để thử lại ngay
+        await db.commit()
+        await r.run(org, "schedule")
+    assert router.purposes.count("refinery.safety") == budget.SAFETY_PER_SENDER_HOUR                 # lượt lỗi vẫn tăng bộ đếm: không thoát trần
+
+
+async def test_spammer_over_cap_does_not_push_a_real_victim_in_the_same_thread_to_hard_only(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    sm = sessionmaker()
+    org = await org_id(db)
+    await listen(db, org, "g1")
+    await enable_groups(db, org)
+    m = await mk_model(db, org)
+    an = Analyzer()
+    router = LoggingRouter(sm, m)
+    r = refinery(sm, redis, an, router)
+    for i in range(100):                                                       # 100 tin spam, mỗi tin một lượt chạy ngay
+        await put(sm, org, msg(f"Em lỡ nhập mã OTP vào link đó rồi {i}", sender="spam", name="Kẻ spam"))
+        await r.run(org, "schedule")
+    assert router.purposes.count("refinery.safety") == budget.SAFETY_PER_SENDER_HOUR
+    spam_calls = router.purposes.count("refinery.safety")
+    await put(sm, org, msg("Em cũng lỡ nhập OTP vào link đó rồi", sender="real", name="Nạn nhân"))
+    await r.run(org, "schedule")
+    assert router.purposes.count("refinery.safety") == spam_calls + 1                                  # người gửi khác cùng luồng VẪN được gọi model
+    assert any("cũng lỡ nhập OTP" in (e.body or "") for e in an.windows[-1].new_events)
+    gc = {x[0]: x[1] for x in (await db.execute(text("""SELECT e.body_text LIKE '%cũng lỡ%' AS victim, count(*) FROM refinery.event_state s
+                       JOIN raw.events e ON e.id = s.event_id AND e.received_at = s.event_received_at
+                       WHERE s.detail ->> 'gate_class' = 'hard' GROUP BY 1"""))).all()}
+    assert gc == {False: gc[False]} and True not in gc                                                  # chỉ tin của người đã vượt trần bị hạ
+
+
+async def test_at_hard_cap_known_senders_still_reach_the_model_but_strangers_are_hard_only(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    sm = sessionmaker()
+    org = await org_id(db)
+    await listen(db, org, "g1")
+    await enable_groups(db, org)
+    await set_ai_cost(db, org, intel_safety_call_cap=1)                      # trần cứng = 3 lượt
+    m = await mk_model(db, org)
+    for _ in range(3):
+        await add_call(db, org, m, "refinery.safety")
+    old = msg("Chào cả nhà, em về rồi nhé nhé nhé", sender="known", name="Người quen")
+    old["occurred_at"] = (datetime.now(UTC) - timedelta(days=30)).isoformat()
+    await put(sm, org, old)
+    await db.execute(text("UPDATE refinery.event_state SET state = 'clean'"))                      # lịch sử đã xử lý
+    await db.commit()
+    await put(sm, org, msg("Em lỡ nhập mã OTP vào link đó rồi", sender="known", name="Người quen"),
+              msg("Em cũng lỡ nhập OTP vào link khác rồi", sender="stranger", name="Người lạ"))
+    an = Analyzer()
+    router = LoggingRouter(sm, m)
+    await refinery(sm, redis, an, router).run(org, "schedule")
+    assert router.purposes == ["refinery.safety"]
+    bodies = [e.body for e in an.windows[0].new_events]
+    assert any("nhập mã OTP" in b for b in bodies) and not any("cũng lỡ" in b for b in bodies)
+    st = (await db.execute(text("""SELECT s.state FROM refinery.event_state s JOIN raw.events e ON e.id = s.event_id
+                                   AND e.received_at = s.event_received_at WHERE e.body_text LIKE '%cũng lỡ%'"""))).scalar_one()
+    assert st == "pending"                                                                             # người lạ: chỉ luật cứng, tin ở lại (ứng viên vẫn có)
+    assert "intel_safety_abuse" in [a.alert_type for a in (await db.execute(text("SELECT alert_type FROM biz.alerts"))).all()]
+
+
+async def test_non_cli_route_with_zero_vnd_budget_is_free_mode_before_any_call(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    sm = sessionmaker()
+    org = await org_id(db)
+    await listen(db, org, "g1")
+    await enable_groups(db, org)
+    await mk_model(db, org, kind="openrouter")                                # nguồn tính tiền theo token, CHƯA có giá, chưa có lượt gọi nào
+    await put(sm, org, msg("Em lỡ nhập mã OTP vào link đó rồi", sender="u1"), msg("Cần báo giá thép nhé anh", sender="u2", name="Anh Tư"))
+    an = Analyzer()
+    await refinery(sm, redis, an).run(org, "schedule")
+    assert an.windows == [] and await pending_n(db, org) == 2
+    assert [a.alert_type for a in (await db.execute(text("SELECT alert_type FROM biz.alerts"))).all()] == ["intel_free_mode"]
+    assert any("chế độ miễn phí" in n for n in await budget.coverage_notes(db, org))
+    await set_ai_cost(db, org, intel_daily_budget_vnd=1_000_000)               # Sếp đặt trần VND > 0 ⇒ thoát chế độ miễn phí
+    await refinery(sm, redis, an).run(org, "manual")
+    assert len(an.windows) >= 1
+
+
+async def test_capped_or_free_mode_creates_no_empty_runs_over_five_ticks(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    from gh.refinery.scheduler import Scheduler
+
+    sm = sessionmaker()
+    org = await org_id(db)
+    await listen(db, org, "g1")
+    await listen(db, org, "g2")
+    await enable_groups(db, org)
+    await set_ai_cost(db, org, intel_daily_call_cap=3)
+    m = await mk_model(db, org)
+    for _ in range(3):
+        await add_call(db, org, m, "refinery.group")
+    await put(sm, org, msg("Em lỡ nhập mã OTP vào link đó rồi", sender="u1"), msg("Em sẽ huỷ hợp đồng nếu hôm nay không xử lý xong", group="g2", sender="u2", name="Anh Tư"))
+    an = Analyzer()
+    s = Scheduler(sm, redis, Refinery(sm, redis, FakeRouter(), analyzer=an))
+    await set_ai_cost(db, org, intel_gate_call_cap=0)                          # cổng cũng hết ⇒ chỉ lượt an toàn được phép
+    n_runs = []
+    for _ in range(5):
+        n_runs.append(len(await s.tick(wait=True)))
+    assert n_runs[0] == 1 and sum(n_runs[1:]) == 0                             # tin an toàn chạy 1 lần; tin cổng bị giữ — không còn run rỗng
+    assert (await db.execute(text("SELECT count(*) FROM refinery.runs"))).scalar_one() == 1
+    held = (await db.execute(text("SELECT detail ->> 'hold_until' FROM refinery.event_state WHERE state = 'pending'"))).scalars().all()
+    assert held and all(h is not None for h in held)

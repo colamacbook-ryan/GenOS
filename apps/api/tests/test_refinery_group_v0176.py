@@ -108,9 +108,11 @@ async def test_group_mode_defaults_off_while_l3_is_stub_and_setting_wins(app, db
     r = Refinery(sm, redis, FakeRouter())
     assert l3.IS_STUB and await r.group_mode(org) is False             # stub không trích gì ⇒ không bật mặc định (giữ đường cũ)
     await enable_groups(db, org)
-    assert await r.group_mode(org) is True
+    assert await r.group_mode(org) is False                            # 'on' khi còn stub mà KHÔNG tiêm bộ phân tích ⇒ bị chặn (sẽ mất việc trích)
+    injected = Refinery(sm, redis, FakeRouter(), analyzer=Analyzer())
+    assert await injected.group_mode(org) is True                      # test/L6 tiêm bộ phân tích thật ⇒ bật được
     await enable_groups(db, org, group_pipeline="off")
-    assert await r.group_mode(org) is False
+    assert await injected.group_mode(org) is False
 
 
 # ─── một lượt = một luồng ───────────────────────────────────────────────────────────────────────────────────────────
@@ -493,3 +495,47 @@ async def test_template_count_is_per_thread_and_sender_and_risky_messages_are_ne
     g1 = (await db.execute(text("""SELECT s.state FROM refinery.event_state s JOIN raw.events e ON e.id = s.event_id AND e.received_at = s.event_received_at
                                    JOIN core.groups g ON g.id = e.group_id WHERE g.external_id = 'g1' AND e.body_text = :b"""), {"b": tpl})).scalar_one()
     assert g1 == "pending"
+
+
+# ─── vòng review: lượt an toàn nhận tin ứng viên trước; độc thoại; khoá có chủ ───────────────────────────────────────────
+
+async def test_safety_turn_claims_the_candidate_first_not_the_oldest_backlog(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    sm = sessionmaker()
+    org, _ = await setup(db, sm)
+    base = datetime.now(UTC) - timedelta(hours=5)
+    for i in range(130):
+        p = msg(f"Tin thường số {i} về hàng nhé", sender=f"n{i}", name=f"Người {i}")
+        p["occurred_at"] = (base + timedelta(minutes=i)).isoformat()
+        await put(sm, org, p)
+    otp = msg("Em lỡ nhập mã OTP vào link đó rồi", sender="victim", name="Nạn nhân")
+    otp["occurred_at"] = (base + timedelta(minutes=200)).isoformat()
+    await put(sm, org, otp)
+    model = await mk_model(db, org)
+    an = Analyzer()
+    router = LoggingRouter(sm, model)
+    await refinery(sm, redis, an, router).run(org, "schedule")
+    w = an.windows[0]
+    assert any("nhập mã OTP" in (e.body or "") for e in w.new_events) and len(w.new_events) <= 5       # nằm ngay ở lượt đầu, không đợi sau 130 tin tồn
+    assert router.purposes == ["refinery.safety"]
+    assert await pending_n(db, org) >= 125                                                              # tin tồn KHÔNG bị lượt an toàn nuốt (là lượt thường)
+
+
+def test_take_window_monologue_of_130_messages_keeps_60() -> None:
+    evs = [ev(i, f"SP {i}", who="Admin", at=T0 + timedelta(seconds=100 * i)) for i in range(130)]       # cùng người, mỗi tin cách 100 giây
+    assert len(take_window(evs)) == 60
+    mixed = [ev(i, "x", who=f"p{i}") for i in range(58)] + [ev(58 + k, "y", who="chain", at=T0 + timedelta(seconds=300 * 58 + 30 * k)) for k in range(4)]
+    assert len(take_window(mixed)) == 58                                                                # chuỗi thật vẫn không bị cắt đôi
+
+
+async def test_group_lock_has_an_owner_token(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    key = "gh:refinery:test-lock"
+    await redis.set(key, "chu-A", ex=60)
+    assert await redis.eval(runner._UNLOCK_LUA, 1, key, "chu-B") == 0 and await redis.get(key) == b"chu-A"      # không xoá khoá của lượt khác
+    assert await redis.eval(runner._RENEW_LUA, 1, key, "chu-B", "100") == 0
+    assert await redis.eval(runner._RENEW_LUA, 1, key, "chu-A", "100") == 1 and 90 < await redis.ttl(key) <= 100
+    assert await redis.eval(runner._UNLOCK_LUA, 1, key, "chu-A") == 1 and await redis.get(key) is None
+    sm = sessionmaker()
+    org, _ = await setup(db, sm)
+    await put(sm, org, msg("Cần báo giá thép nhé anh", sender="u1"))
+    await refinery(sm, redis, Analyzer()).run(org, "manual")
+    assert await redis.get(f"gh:refinery:groups:{org}") is None                                          # chủ xoá khi xong

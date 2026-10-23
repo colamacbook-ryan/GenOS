@@ -124,7 +124,8 @@ async def get_ai_intel_budget(db: AsyncSession = DB,
 @router.put("/system/ai-cost/intel")
 async def put_ai_intel_budget(
         body: IntelBudgetIn, db: AsyncSession = DB,
-        user: service.CurrentUser = Depends(require("system.manage", rbac.ALL))) -> dict[str, Any]:
+        user: service.CurrentUser = Depends(require("system.manage", rbac.ALL)),
+        _pin: Any = Depends(require_pin("ai.route_change"))) -> dict[str, Any]:
     """Đặt trần tình báo `intel_*` (lượt/ngày hoặc VND). Chỉ khoá có trong thân đổi; giá trị `null` ⇒ trả về mặc
     định (chế độ gói thuê bao: 400 lượt/ngày, VND = 0). Ghi Action Log (khoá + giá trị cũ/mới, không dữ liệu khác)."""
     sent = body.model_dump(exclude_unset=True)
