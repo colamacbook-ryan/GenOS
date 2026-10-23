@@ -338,7 +338,7 @@ class Refinery:
 
     async def run(self, org_id: uuid.UUID, trigger: str, *, run_id: uuid.UUID | None = None,
                   event_ids: list[uuid.UUID] | None = None, limit: int | None = None,
-                  threads: list[str] | None = None) -> RunStats:
+                  threads: list[str] | None = None, legacy: bool = False) -> RunStats:
         if run_id is None:
             run_id = await self.start_run(org_id, trigger)
         else:
@@ -348,7 +348,7 @@ class Refinery:
                 await db.commit()
         st = RunStats(run_id, trigger)
         try:
-            if await self.group_mode(org_id):
+            if not legacy and await self.group_mode(org_id):
                 await self.groups.run(org_id, st, trigger=trigger, threads=threads)
             else:
                 await self._run(org_id, st, event_ids, limit)
@@ -930,6 +930,24 @@ def _payload_get(payload: Any, *keys: str) -> Any:
     return None
 
 
+async def system_secrets(db: AsyncSession, org_id: uuid.UUID) -> tuple[str, ...]:
+    """Bí mật HỆ THỐNG cần thay `[đã che]` trong prompt (Q9: chữ chat đi nguyên văn, chỉ bí mật hệ thống bị che): khoá/token của GenOS
+    (cấu hình) và khoá API nhà cung cấp AI của tổ chức (giải mã tại chỗ, không ghi ra đâu). Chỉ lấy chuỗi ≥ 8 ký tự."""
+    from gh import crypto
+    from gh.config import get_settings
+    from gh.providers.router import KEY_AAD
+
+    st = get_settings()
+    out = {getattr(st, n, "") for n in ("master_key", "setup_token", "bridge_key", "browser_key", "backup_key")}
+    for r in (await db.execute(text("""SELECT k.secret_enc FROM agent.provider_keys k JOIN agent.providers p ON p.id = k.provider_id
+                                       WHERE p.org_id = :o"""), {"o": org_id})).all():
+        try:
+            out.add(crypto.decrypt(bytes(r.secret_enc), KEY_AAD).decode())
+        except Exception:  # noqa: BLE001 — khoá hỏng/khoá master đổi: bỏ khoá đó
+            continue
+    return tuple(sorted(x for x in out if isinstance(x, str) and len(x) >= 8))
+
+
 _UNLOCK_LUA = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end"
 _RENEW_LUA = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('expire', KEYS[1], ARGV[2]) else return 0 end"
 
@@ -1297,9 +1315,11 @@ class GroupTurns:
             await self._release(evs, st, f"dựng ngữ cảnh lỗi: {type(exc).__name__}", backoff=True)
             return
         since = datetime.now(UTC) - timedelta(seconds=2)
+        async with self.r.sm() as db:
+            secrets = await system_secrets(db, org_id)
         try:
             analysis = await asyncio.wait_for(
-                self.analyze(window, pack, profile, pack.policy, call=self._call(org_id, kind)),
+                self.analyze(window, pack, profile, pack.policy, call=self._call(org_id, kind), secrets=secrets),
                 timeout=max(30.0, 2 * AGY_BACKGROUND_TIMEOUT_S + 30))
         except (ModelUnavailable, TimeoutError) as exc:
             # Lừa đảo/an toàn: nếu gói thuê bao từ chối thì ứng viên luật cứng đã nằm ở event_state.detail.cands (T1 đọc); tin giữ chờ, lùi nhịp.
@@ -1313,7 +1333,7 @@ class GroupTurns:
                                       kind=kind, since=since)
             return
         try:
-            await self._write(org_id, st, tk, aid, kind, claimed, window, pack, profile, analysis, since)
+            await self._write(org_id, st, tk, aid, kind, claimed, window, pack, profile, analysis, since, secrets)
         except Exception as exc:  # noqa: BLE001 — ghi lỗi ⇒ rollback cả giao dịch, tin về pending
             log.exception("Ghi lượt phân tích %s lỗi", tk)
             await self._release(evs, st, f"ghi lượt lỗi: {type(exc).__name__}", backoff=True)
@@ -1527,7 +1547,7 @@ class GroupTurns:
     # ─── ghi: MỘT giao dịch ngắn ───────────────────────────────────────────────────────────────────────────────────
 
     async def _write(self, org_id: uuid.UUID, st: RunStats, tk: str, aid: uuid.UUID, kind: str, blocks: list[GEv], window: Any,
-                     pack: Any, profile: Any, analysis: Any, since: datetime) -> None:
+                     pack: Any, profile: Any, analysis: Any, since: datetime, secrets: tuple[str, ...] = ()) -> None:
         from gh.biz.mem import predicates
 
         evs = [m for b in blocks for m in b.all_events]
@@ -1536,7 +1556,7 @@ class GroupTurns:
             known_preds = await predicates.codes(db)
         verified = self.verify(analysis.out, window.all_events, window.media_texts, now=clock.now(), tz=window.tz, thread_ref=tk,
                                profile_fact_ids=profile.fact_ids(), known_person_refs={f"u_{p}" for p in persons},
-                               known_predicates=known_preds)
+                               known_predicates=known_preds, secrets=secrets)
         block_of = {m.event_id: b for b in blocks for m in b.all_events}
         cited: dict[uuid.UUID, str] = {}                          # event_id → nhãn (kind) của đơn vị đầu tiên trích tin đó
         unit_rows: list[tuple[uuid.UUID, datetime, str]] = []

@@ -102,17 +102,23 @@ def test_thread_key_helpers() -> None:
 
 # ─── bật/tắt đường theo luồng ───────────────────────────────────────────────────────────────────────────────────────
 
-async def test_group_mode_defaults_off_while_l3_is_stub_and_setting_wins(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+async def test_group_mode_defaults_on_with_real_l3_and_setting_wins(app, db, redis, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     sm = sessionmaker()
     org = await org_id(db)
+    await db.execute(text("UPDATE core.organizations SET settings = settings - 'intel'"))
+    await db.commit()
     r = Refinery(sm, redis, FakeRouter())
-    assert l3.IS_STUB and await r.group_mode(org) is False             # stub không trích gì ⇒ không bật mặc định (giữ đường cũ)
-    await enable_groups(db, org)
-    assert await r.group_mode(org) is False                            # 'on' khi còn stub mà KHÔNG tiêm bộ phân tích ⇒ bị chặn (sẽ mất việc trích)
-    injected = Refinery(sm, redis, FakeRouter(), analyzer=Analyzer())
-    assert await injected.group_mode(org) is True                      # test/L6 tiêm bộ phân tích thật ⇒ bật được
+    assert not l3.IS_STUB and await r.group_mode(org) is True          # L3 thật đã cắm ⇒ bật mặc định
     await enable_groups(db, org, group_pipeline="off")
-    assert await injected.group_mode(org) is False
+    assert await r.group_mode(org) is False                            # tổ chức tắt tường minh ⇒ đường cũ
+    await enable_groups(db, org)
+    assert await r.group_mode(org) is True
+    monkeypatch.setattr(l3, "IS_STUB", True)                            # nếu quay về stub: 'on' không tiêm bộ phân tích bị chặn, mặc định tắt
+    assert await r.group_mode(org) is False
+    assert await Refinery(sm, redis, FakeRouter(), analyzer=Analyzer()).group_mode(org) is True
+    await db.execute(text("UPDATE core.organizations SET settings = settings - 'intel'"))
+    await db.commit()
+    assert await r.group_mode(org) is False
 
 
 # ─── một lượt = một luồng ───────────────────────────────────────────────────────────────────────────────────────────

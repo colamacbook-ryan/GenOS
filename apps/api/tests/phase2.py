@@ -73,6 +73,11 @@ async def listen(db: AsyncSession, org: uuid.UUID, external_group_id: str, mode:
     gid = (await db.execute(text("""UPDATE core.groups SET listen_mode = :m, view_scope = 'all_members'
                                     WHERE external_id = :x RETURNING id"""),
                             {"m": mode, "x": external_group_id})).scalar_one()
+    # v0.1.76: L3 đã cắm ⇒ đường theo luồng bật mặc định; test cũ dùng model giả trả định dạng LÔ CŨ nên ghim đường cũ ở đây
+    # (test đường theo luồng gọi `refinery_group_helpers.enable_groups` SAU `listen` để bật lại).
+    await db.execute(text("""
+        UPDATE core.organizations SET settings = jsonb_set(COALESCE(settings, '{}'::jsonb), '{intel}',
+            COALESCE(settings->'intel', '{}'::jsonb) || '{"group_pipeline": "off"}'::jsonb, true) WHERE id = :o"""), {"o": org})
     await db.commit()
     return gid  # type: ignore[no-any-return]
 
