@@ -24,7 +24,6 @@ from sqlalchemy import text
 
 from gh import crypto
 from gh.chassis import actionlog
-from gh.chassis.masking import mask_for_prompt
 from gh.db import sessionmaker
 from gh.gen import decider as decmod
 from gh.gen import jev, jev_bench
@@ -152,7 +151,8 @@ async def test_j1_ask_jev_sends_masked_text_only(app: Any, db: Any, owner_api: A
     assert_clean(spy.wire)
     mark = (await db.execute(text("SELECT source, is_spam FROM refinery.item_marks"))).one()
     assert mark.source == "jev" and not mark.is_spam
-    # lớp 1 (triage) che trước khi giao cho Decider — kiểm bằng Decider giả ghi lại đúng thứ nhận được
+    # v0.1.76 (Q9): lớp 1 (triage) KHÔNG che nữa (chỉ OTP/mật khẩu/thẻ/token bị thay nhãn); lớp 2
+    # (`JevClient.masked`) vẫn che trên dây (kiểm ở `assert_clean(spy.wire)` ở trên)
     seen: list[str] = []
 
     class Rec:
@@ -162,7 +162,7 @@ async def test_j1_ask_jev_sends_masked_text_only(app: Any, db: Any, owner_api: A
             seen.append(question + context)
 
     got = await triage.ask_jev_batch(Rec(), [(raw, "AskedPrice")])  # type: ignore[arg-type]
-    assert got == [None] and seen and all(p not in seen[0] for p in PII)
+    assert got == [None] and seen and all(p in seen[0] for p in PII)
 
 
 async def test_j1_three_consecutive_failures_stop_the_pass(app: Any, db: Any, owner_api: Api) -> None:
@@ -413,8 +413,8 @@ async def test_jev_error_keeps_old_flow_and_loses_nothing(app: Any, db: Any, red
         spam_c = f"{SPAM} container {fail} {PHONE}"             # quy tắc chấm rác nhưng Jev lỗi ⇒ KHÔNG bỏ
         await put(sm, org, msg(spam_c), msg(LONG_BUY + fail, sender="u2"), msg(LONG_BUY + fail, sender="u2"))
         st = await Refinery(sm, redis, router_taking(seen), jev_transport=spy.transport).run(org, "manual")  # type: ignore[arg-type]
-        # prompt gửi model là bản đã che SĐT (v0.1.71, P2-3) nên so với bản đã che
-        assert mask_for_prompt(spam_c) in seen and seen.count(LONG_BUY + fail) == 1       # chỉ trùng hẳn mới bị bỏ
+        # v0.1.76 (Q9): prompt gửi model giữ nguyên SĐT (chỉ thông tin đăng nhập bị thay nhãn)
+        assert spam_c in seen and seen.count(LONG_BUY + fail) == 1       # chỉ trùng hẳn mới bị bỏ
         assert st.prefilter_skipped == 1 and st.status == "done"
         assert (await states_detail(db))[spam_c]["state"] == "clean"
         assert_clean(spy.wire)
