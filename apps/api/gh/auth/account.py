@@ -67,24 +67,28 @@ async def _check_password(db: AsyncSession, user: service.CurrentUser, password:
 
     v0.1.75: đếm sai theo user_id (login_guard, `account_pw_fail_limit` lần / cửa sổ) — kẻ cầm cookie phiên không dò
     mật khẩu không giới hạn được. Chạm ngưỡng → thu hồi CHÍNH phiên này + 429; đang bị khoá thì không kiểm nữa."""
-    retry = await login_guard.user_blocked(redis, user.id)
-    if retry is not None:
+    # Đặt chỗ nguyên tử TRƯỚC khi verify (chống TOCTOU: kiểm-rồi-verify-rồi-đếm cho request song song vượt ngưỡng).
+    limit = get_settings().account_pw_fail_limit
+    attempt = await login_guard.reserve_user_attempt(redis, user.id)
+    if attempt > limit:
+        retry = await login_guard.user_blocked(redis, user.id) or get_settings().login_fail_window_seconds
         await _lock_out(db, user, purpose=purpose, retry=retry)
     h = (await db.execute(text("SELECT password_hash FROM core.users WHERE id = :u"), {"u": user.id})).scalar()
     if password and h is not None and verify_secret(h, password):
         await login_guard.clear_user(redis, user.id)
         return
-    fails = await login_guard.record_user_failure(redis, user.id)
     await _log(db, user, "account.password_check_failed", result="failed", detail={"purpose": purpose})
-    if fails >= get_settings().account_pw_fail_limit:
+    if attempt >= limit:
         await _lock_out(db, user, purpose=purpose, retry=get_settings().login_fail_window_seconds)
     await db.commit()
     raise field_errors({"current_password": WRONG_PASSWORD})
 
 
 async def _lock_out(db: AsyncSession, user: service.CurrentUser, *, purpose: str, retry: int) -> None:
-    await service.revoke_session(db, user.session_id)
+    # Thứ tự khoá cố định: nhật ký (advisory lock chuỗi băm) TRƯỚC, hàng phiên SAU — cùng thứ tự với nhánh sai mật khẩu,
+    # nếu không các request song song bị deadlock.
     await _log(db, user, "account.password_check_locked", result="blocked", detail={"purpose": purpose})
+    await service.revoke_session(db, user.session_id)
     await db.commit()
     minutes = max(1, -(-retry // 60))
     raise ApiError(429, "ACCOUNT_RATE_LIMITED",
