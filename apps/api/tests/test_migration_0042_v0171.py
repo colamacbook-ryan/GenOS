@@ -78,7 +78,7 @@ def _auto_send(c: psycopg.Connection[Any], org: uuid.UUID, ref: str = "r1", basi
 # ─── cây migration ──────────────────────────────────────────────────────────
 
 
-def test_migration_0042_follows_0041_and_is_the_single_head() -> None:
+def test_migration_0042_follows_0041_and_the_tree_has_a_single_head() -> None:
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
@@ -88,7 +88,9 @@ def test_migration_0042_follows_0041_and_is_the_single_head() -> None:
     script = ScriptDirectory.from_config(cfg)
     rev = script.get_revision("0042")
     assert rev is not None and rev.down_revision == "0041"
-    assert script.get_heads() == ["0042"]
+    # v0.1.76: 0043 nối sau 0042 — chỉ còn đúng một head (test_migrations_heads giữ phần "một head").
+    assert len(script.get_heads()) == 1
+    assert "0042" in {r.revision for r in script.walk_revisions()}
     assert SQL_0042.is_file()
 
 
