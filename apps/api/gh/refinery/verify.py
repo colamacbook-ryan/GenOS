@@ -160,7 +160,7 @@ class Verified:
 _UNITS_VND = {"ty": 1_000_000_000, "ti": 1_000_000_000, "trieu": 1_000_000, "tr": 1_000_000, "cu": 1_000_000, "nghin": 1_000,
               "ngan": 1_000, "k": 1_000}
 _MONEY_RE = re.compile(
-    r"(?<![\w.,])(?P<num>\d{1,3}(?:[.,]\d{3})+|\d+(?:[.,]\d+)?)\s*(?P<unit>ty|ti|trieu|tr|cu|nghin|ngan|k)\b\s*(?P<half>ruoi)?\s*(?P<tail>\d{1,3})?(?!\d)")
+    r"(?<![\w.,])(?P<num>\d{1,3}(?:[.,]\d{3})+|\d+(?:[.,]\d+)?)\s*(?P<unit>ty|ti|trieu|tr|cu|nghin|ngan|k)(?![a-z])(?:\s*(?P<half>ruoi)|(?P<tail0>\d{1,3})|\s+(?P<tail1>\d{3}))?(?!\d)")
 _PLAIN_RE = re.compile(r"(?<![\w.,])(?P<num>\d{1,3}(?:[.,]\d{3})+|\d{4,})\s*(?:dong|vnd|vnđ|d|đ)\b")
 
 
@@ -187,8 +187,8 @@ def parse_money_vnd(text: str | None) -> int | None:
         val = _to_float(m.group("num")) * unit
         if m.group("half"):
             val += unit / 2
-        elif m.group("tail"):
-            tail = m.group("tail")
+        elif m.group("tail0") or m.group("tail1"):
+            tail = m.group("tail0") or m.group("tail1")
             val += int(tail) / (10 ** len(tail)) * unit
         return int(round(val))
     m = _PLAIN_RE.search(f)
