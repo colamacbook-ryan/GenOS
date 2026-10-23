@@ -74,6 +74,7 @@ class PendingEvent:
     media_ref: str
     media: dict[str, Any]
     group_id: uuid.UUID | None = None
+    bind: dict[str, Any] = field(default_factory=dict)   # {chat, sender} bridge đã ràng buộc với media_ref
 
 
 BudgetOk = Callable[[AsyncSession, uuid.UUID], Awaitable[bool]]
@@ -114,7 +115,8 @@ async def pending_events(db: AsyncSession, org_id: uuid.UUID, *, limit: int = SW
     """Tin media chưa có kết quả CHUNG CUỘC: chữ chính `ok`, hoặc `too_large`, hoặc `failed` với mã cố định."""
     rows = (await db.execute(text("""
         SELECT e.id, e.received_at, e.org_id, e.kind, e.payload->>'media_ref' AS media_ref,
-               coalesce(e.payload->'media', '{}'::jsonb) AS media, e.group_id
+               coalesce(e.payload->'media', '{}'::jsonb) AS media, e.group_id,
+               coalesce(e.payload->'media_bind', '{}'::jsonb) AS bind
           FROM raw.events e
          WHERE e.org_id = :o AND e.kind IN ('voice', 'image') AND e.payload->>'media_ref' IS NOT NULL
            AND e.received_at > now() - make_interval(hours => :h)
@@ -127,7 +129,8 @@ async def pending_events(db: AsyncSession, org_id: uuid.UUID, *, limit: int = SW
         {"o": org_id, "h": since_hours, "n": limit, "final": sorted(mfetch.FINAL_ERRORS)})).mappings().all()
     return [PendingEvent(id=r["id"], received_at=r["received_at"], org_id=r["org_id"], kind=r["kind"],
                          media_ref=r["media_ref"], media=r["media"] if isinstance(r["media"], dict) else {},
-                         group_id=r["group_id"]) for r in rows]
+                         group_id=r["group_id"], bind=r["bind"] if isinstance(r["bind"], dict) else {})
+            for r in rows]
 
 
 # ─── ghi kết quả ───────────────────────────────────────────────────────────────────────────────────────────────────
@@ -221,7 +224,8 @@ async def process_event(d: Deps, ev: PendingEvent) -> str:
 
 
 async def _process(d: Deps, ev: PendingEvent) -> str:
-    problem = mfetch.declared_problem(ev.kind, ev.media) if mfetch.valid_ref(ev.media_ref) else "bad_request"
+    bound = isinstance(ev.bind.get("chat"), str) and isinstance(ev.bind.get("sender"), str) and bool(ev.bind.get("sender"))
+    problem = mfetch.declared_problem(ev.kind, ev.media) if mfetch.valid_ref(ev.media_ref) and bound else "bad_request"
     if problem:                      # quá lớn / MIME lạ / ref sai: chốt ngay, KHÔNG chạm mạng
         return await _record_failure(d, ev, problem)
 
@@ -256,7 +260,8 @@ async def _process(d: Deps, ev: PendingEvent) -> str:
             data = None
     if data is None:
         try:
-            got = await d.fetcher(d.bus, ev.org_id, kind=ev.kind, media_ref=ev.media_ref, timeout=d.fetch_timeout_s)
+            got = await d.fetcher(d.bus, ev.org_id, kind=ev.kind, media_ref=ev.media_ref, chat=ev.bind["chat"],
+                                  sender=ev.bind["sender"], timeout=d.fetch_timeout_s)
         except mfetch.MediaFetchError as e:
             return await _record_failure(d, ev, e.code)
         data, mime = got.data, got.mime

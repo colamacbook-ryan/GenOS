@@ -7,7 +7,7 @@ import { VERSION } from '../config.js';
 import { silentLogger } from '../log.js';
 import { RecentIds, errorCode, toIso, toPlain, withMeta } from '../util.js';
 import {
-  MEDIA_ERRORS, MediaCache, MediaError, checkDeclared, collectCapped, baseMime, capBytes, mediaRef,
+  MEDIA_ERRORS, MediaCache, MediaError, bindingOk, checkDeclared, collectCapped, baseMime, capBytes, mediaKey, mediaRef, registerMedia,
 } from '../media.js';
 
 export const WA_FIRST_QR_TTL_MS = 60000; // Baileys: QR đầu sống 60 giây, các QR sau 20 giây
@@ -644,16 +644,20 @@ export class WhatsAppAdapter extends EventEmitter {
       payload: stripMediaSecrets(toPlain(m)),
     };
     if (cls.revokes) out.revokes = cls.revokes;
+    let mediaMeta = null;
     if (cls.media) {
       const c = cls.media.content;
       const kind = cls.kind;
-      const ref = mediaRef('whatsapp', this.sessionId, String(key.id || ''));
+      const chat = isGroup ? remote : '';
+      const ref = mediaRef('whatsapp', this.sessionId, mediaKey(remote, sender, key.id));
       const desc = {
         kind, mime: baseMime(c.mimetype), size: asNumber(c.fileLength), seconds: asNumber(c.seconds), ptt: Boolean(c.ptt),
       };
       if (ref) {
-        // Sổ RAM giữ thứ cần để tải (khoá giải mã, directPath); chỉ mô tả KHAI BÁO (không bí mật) đi theo tin.
-        this.media.set(ref, { ...desc, type: cls.media.type, download: { mediaKey: c.mediaKey, directPath: c.directPath } });
+        // Mục sổ RAM (khoá giải mã, directPath) CHƯA được ghi ở đây: SessionManager gọi `registerMedia` sau khi bộ lọc tập nghe
+        // nhận tin. Chỉ mô tả KHAI BÁO (không bí mật) đi theo tin.
+        mediaMeta = { ref, entry: { ...desc, type: cls.media.type, bind: { chat, sender },
+          download: { mediaKey: c.mediaKey, directPath: c.directPath } } };
         out.media_ref = ref;
         out.media = desc;
       }
@@ -669,6 +673,7 @@ export class WhatsAppAdapter extends EventEmitter {
       // Lõi ghi tập Owner ở dạng chuẩn hoá (bỏ hậu tố thiết bị) ⇒ so thêm dạng đó.
       sender_ids: fromMe ? [] : [sender, senderAlt].map(bareJid).filter(Boolean),
       forwarded,
+      media: mediaMeta,
       read_ref: isGroup || fromMe ? null : { remoteJid: remote, id: String(key.id || ''), fromMe: false },
     });
   }
@@ -677,9 +682,12 @@ export class WhatsAppAdapter extends EventEmitter {
    * `media.fetch`: tải file của một tin ĐÃ thấy (theo `media_ref` trong sổ RAM) bằng phiên đang có. Không nhận URL.
    * @returns {Promise<{bytes: Buffer, mime: string}>}; lỗi = MediaError (chỉ mã).
    */
-  async fetchMedia(ref) {
+  registerMedia(m) { return registerMedia(this.media, m); }
+
+  async fetchMedia(ref, expect) {
     const d = this.media.get(ref);
-    if (!d) throw new MediaError(MEDIA_ERRORS.notFound);
+    // Không khớp chat/người gửi ⇒ trả y như không có (không lộ ref có tồn tại hay không).
+    if (!d || !bindingOk(d, expect)) throw new MediaError(MEDIA_ERRORS.notFound);
     const bad = checkDeclared(d);
     if (bad) throw new MediaError(bad);
     if (this.state !== 'active' || !this.sock) throw new MediaError(MEDIA_ERRORS.sessionInactive);

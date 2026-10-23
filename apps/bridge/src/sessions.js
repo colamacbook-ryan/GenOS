@@ -150,13 +150,17 @@ export class SessionManager {
     const reply = (extra) => this.bus.putMediaResult(requestId, { request_id: requestId, ...extra })
       .catch((err) => this.log.error('không trả được kết quả media', { error: err.message }));
     const ref = parseMediaRef(p.media_ref);
-    if (!ref) return reply({ ok: false, error: MEDIA_ERRORS.badRequest });
+    // Lõi phải nói rõ tin thuộc chat nào / ai gửi (lấy từ Kho thô): bridge đối chiếu với ràng buộc lúc đăng ký.
+    const expect = { chat: p.external_group_id ?? '', sender: p.sender_external_id };
+    if (!ref || typeof expect.chat !== 'string' || typeof expect.sender !== 'string' || !expect.sender) {
+      return reply({ ok: false, error: MEDIA_ERRORS.badRequest });
+    }
     const s = this.sessions.get(keyOf(ref.channel, ref.sessionId));
     if (!s || s.state !== 'active' || typeof s.adapter.fetchMedia !== 'function') {
       return reply({ ok: false, error: s ? MEDIA_ERRORS.sessionInactive : MEDIA_ERRORS.notFound });
     }
     try {
-      const got = await this.mediaGate.run(() => s.adapter.fetchMedia(p.media_ref));
+      const got = await this.mediaGate.run(() => s.adapter.fetchMedia(p.media_ref, expect));
       const sha256 = createHash('sha256').update(got.bytes).digest('hex');
       return reply({ ok: true, mime: got.mime || '', size: got.bytes.length, sha256, data_b64: got.bytes.toString('base64') });
     } catch (err) {
@@ -319,6 +323,8 @@ export class SessionManager {
         return;
       }
       s.inbound += 1;
+      // Sổ media chỉ nhận tin đã qua bộ lọc tập nghe (tin nhóm không nghe không bao giờ vào sổ).
+      if (meta.media) s.adapter.registerMedia?.(meta.media);
       await this.bus.publish(STREAMS.inbound, 'message', payload, { actor: `bridge:${s.channel}`, orgId: s.orgId || this.orgId });
     } catch (err) {
       this.log.error('không đẩy được tin vào', { channel: s.channel, session_id: s.sessionId, error: err.message });

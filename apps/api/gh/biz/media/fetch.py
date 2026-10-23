@@ -168,15 +168,17 @@ def result_key(request_id: str) -> str:
     return f"gh:media:res:{request_id}"
 
 
-async def fetch(bus: EventBus, org_id: uuid.UUID, *, kind: str, media_ref: str, timeout: float = FETCH_TIMEOUT_S,  # noqa: ASYNC109 — hạn BLPOP phía Redis
+async def fetch(bus: EventBus, org_id: uuid.UUID, *, kind: str, media_ref: str, chat: str, sender: str, timeout: float = FETCH_TIMEOUT_S,  # noqa: ASYNC109 — hạn BLPOP phía Redis
                 request_id: str | None = None) -> Fetched:
     """`media.fetch{media_ref} -> bytes` qua bus. Ném `MediaFetchError(mã)`; mọi kiểm tra chạy LẠI ở phía lõi."""
-    if kind not in KINDS or not valid_ref(media_ref):
+    # `chat` ('' = tin 1-1) + `sender` = ràng buộc ghi lúc nhận tin; bridge đối chiếu với mục sổ của ref (chống tráo media).
+    if kind not in KINDS or not valid_ref(media_ref) or not isinstance(chat, str) or not isinstance(sender, str) or not sender:
         raise MediaFetchError("bad_request")
     rid = request_id or str(uuid.uuid4())
     channel, session_id, _ = media_ref.split(":", 2)
     await bus.publish(BRIDGE_CONTROL, "media.fetch",
-                      {"channel": channel, "session_id": session_id, "request_id": rid, "media_ref": media_ref},
+                      {"channel": channel, "session_id": session_id, "request_id": rid, "media_ref": media_ref,
+                       "external_group_id": chat, "sender_external_id": sender},
                       actor="media", org_id=org_id, correlation_id=rid)
     key = result_key(rid)
     try:

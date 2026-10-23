@@ -16,6 +16,7 @@ from gh.biz.media.providers import fake_image_bytes, fake_voice_bytes
 from gh.chassis.bus import BRIDGE_CONTROL, EventBus
 
 REF = "zalo:s1:5001"
+WHO = {"chat": "g1", "sender": "u1"}
 
 
 def test_media_ref_chi_nhan_khoa_tra_cuu_khong_phai_url() -> None:
@@ -107,9 +108,10 @@ ORG = uuid.uuid4()
 async def test_fetch_thanh_cong_va_gui_dung_lenh(redis: Redis) -> None:
     data = fake_voice_bytes("alo")
     bus = FakeBridgeBus(redis, lambda rid: _ok(rid, data))
-    got = await mf.fetch(bus, ORG, kind="voice", media_ref=REF, timeout=3)
+    got = await mf.fetch(bus, ORG, kind="voice", media_ref=REF, **WHO, timeout=3)
     assert (got.data, got.mime, got.size) == (data, "audio/ogg", len(data))
     assert got.sha256 == hashlib.sha256(data).hexdigest()
+    assert (bus.sent[0]["external_group_id"], bus.sent[0]["sender_external_id"]) == ("g1", "u1")
     assert bus.sent[0]["media_ref"] == REF and bus.sent[0]["channel"] == "zalo" and bus.sent[0]["session_id"] == "s1"
     assert await redis.llen(mf.result_key(bus.sent[0]["request_id"])) == 0     # đã xoá khoá kết quả
 
@@ -118,10 +120,14 @@ async def test_fetch_tu_choi_ref_la_khong_phat_lenh(redis: Redis) -> None:
     bus = FakeBridgeBus(redis, lambda rid: _ok(rid, b"OggS"))
     for ref in ("https://evil.example/a.ogg", "zalo:s1:../x", "x"):
         with pytest.raises(mf.MediaFetchError) as e:
-            await mf.fetch(bus, ORG, kind="voice", media_ref=ref, timeout=1)
+            await mf.fetch(bus, ORG, kind="voice", media_ref=ref, **WHO, timeout=1)
         assert e.value.code == "bad_request"
     with pytest.raises(mf.MediaFetchError):
-        await mf.fetch(bus, ORG, kind="video", media_ref=REF, timeout=1)
+        await mf.fetch(bus, ORG, kind="video", media_ref=REF, **WHO, timeout=1)
+    for bad in ({"chat": "g1", "sender": ""}, {"chat": None, "sender": "u1"}, {"chat": "g1", "sender": None}):   # thiếu ràng buộc
+        with pytest.raises(mf.MediaFetchError) as e2:
+            await mf.fetch(bus, ORG, kind="voice", media_ref=REF, **bad, timeout=1)  # type: ignore[arg-type]
+        assert e2.value.code == "bad_request"
     assert bus.sent == []
 
 
@@ -140,7 +146,7 @@ async def test_fetch_khong_tin_bridge(redis: Redis, make: Any, code: str) -> Non
     data = fake_voice_bytes("x")
     bus = FakeBridgeBus(redis, lambda rid: make(rid, data))
     with pytest.raises(mf.MediaFetchError) as e:
-        await mf.fetch(bus, ORG, kind="voice", media_ref=REF, timeout=2)
+        await mf.fetch(bus, ORG, kind="voice", media_ref=REF, **WHO, timeout=2)
     assert e.value.code == code
 
 
@@ -148,17 +154,17 @@ async def test_fetch_vuot_tran_byte_du_bridge_noi_nho(redis: Redis) -> None:
     big = b"OggS" + b"\x00" * mf.MAX_VOICE_BYTES      # > 5 MB
     bus = FakeBridgeBus(redis, lambda rid: _ok(rid, big))
     with pytest.raises(mf.MediaFetchError) as e:
-        await mf.fetch(bus, ORG, kind="voice", media_ref=REF, timeout=5)
+        await mf.fetch(bus, ORG, kind="voice", media_ref=REF, **WHO, timeout=5)
     assert e.value.code == "too_large"
     img = b"\x89PNG\r\n\x1a\n" + b"\x00" * mf.MAX_VOICE_BYTES      # 5 MB: dưới trần ảnh 8 MB ⇒ qua
-    ok = await mf.fetch(FakeBridgeBus(redis, lambda rid: _ok(rid, img, mime="image/png")), ORG, kind="image", media_ref=REF, timeout=5)
+    ok = await mf.fetch(FakeBridgeBus(redis, lambda rid: _ok(rid, img, mime="image/png")), ORG, kind="image", media_ref=REF, **WHO, timeout=5)
     assert ok.mime == "image/png"
 
 
 async def test_fetch_bridge_im_lang_la_timeout(redis: Redis) -> None:
     bus = FakeBridgeBus(redis, lambda rid: None)
     with pytest.raises(mf.MediaFetchError) as e:
-        await mf.fetch(bus, ORG, kind="image", media_ref=REF, timeout=1)
+        await mf.fetch(bus, ORG, kind="image", media_ref=REF, **WHO, timeout=1)
     assert e.value.code == "timeout"
     assert mf.friendly("timeout") and "http" not in mf.friendly("blocked_host")
 

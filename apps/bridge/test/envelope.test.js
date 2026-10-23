@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { MEDIA_FETCH, MEDIA_RESULT_TTL_S, envelope, mediaResultKey, uuid7 } from '../src/envelope.js';
-import { MediaCache, guardedFetch, isPrivateIp, mediaRef, parseMediaRef, validRequestId } from '../src/media.js';
+import { MediaCache, bindingOk, guardedFetch, mediaKey, isPrivateIp, mediaRef, parseMediaRef, validRequestId } from '../src/media.js';
 
 test('uuid7 có phiên bản 7 và sắp theo thời gian', () => {
   const a = uuid7();
@@ -48,4 +48,18 @@ test('L5 isPrivateIp + guardedFetch từ chối cổng/URL lạ trước khi ch�
   let called = 0;
   await assert.rejects(guardedFetch('https://evil.example/x', { cap: 10, fetchImpl: () => { called += 1; } }), { code: 'blocked_host' });
   assert.equal(called, 0);
+});
+
+test('L5 mediaKey: băm theo chat+người gửi+id; bindingOk đòi khớp đủ cả hai', () => {
+  const k = mediaKey('120363@g.us', '8490@s.whatsapp.net', 'ABC');
+  assert.match(k, /^[0-9a-f]{32}$/);
+  assert.notEqual(k, mediaKey('120999@g.us', '8490@s.whatsapp.net', 'ABC'));
+  assert.notEqual(k, mediaKey('120363@g.us', '8491@s.whatsapp.net', 'ABC'));
+  assert.notEqual(mediaKey('a|b', 'c', 'd'), mediaKey('a', 'b|c', 'd')); // không nhập nhằng ranh giới trường
+  const d = { bind: { chat: 'G', sender: 'S' } };
+  assert.equal(bindingOk(d, { chat: 'G', sender: 'S' }), true);
+  for (const bad of [{ chat: 'G' }, { sender: 'S' }, { chat: 'X', sender: 'S' }, { chat: 'G', sender: 'X' }, null, { chat: 1, sender: 'S' }]) {
+    assert.equal(bindingOk(d, bad), false);
+  }
+  assert.equal(bindingOk({}, { chat: 'G', sender: 'S' }), false);
 });

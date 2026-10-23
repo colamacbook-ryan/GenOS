@@ -2,6 +2,7 @@
 """L5 — pipeline voice/ảnh: ingest ghi media_ref → job tải (bridge giả) → lưu objects + raw.attachments → engine giả →
 clean.media_texts → luật (a); trạng thái đọc được; lỗi có lý do thân thiện; idempotent; không bỏ im lặng."""
 
+import dataclasses
 import hashlib
 import uuid
 from pathlib import Path
@@ -31,10 +32,11 @@ class FakeFetcher:
     """Thay `fetch.fetch`: trả byte theo media_ref; `errors[ref]` ném MediaFetchError."""
 
     def __init__(self, blobs: dict[str, bytes] | None = None, errors: dict[str, str] | None = None):
-        self.blobs, self.errors, self.calls = blobs or {}, errors or {}, []
+        self.blobs, self.errors, self.calls, self.binds = blobs or {}, errors or {}, [], []
 
-    async def __call__(self, bus: Any, org: uuid.UUID, *, kind: str, media_ref: str, timeout: float = 30.0) -> mf.Fetched:  # noqa: ASYNC109
+    async def __call__(self, bus: Any, org: uuid.UUID, *, kind: str, media_ref: str, chat: str, sender: str, timeout: float = 30.0) -> mf.Fetched:  # noqa: ASYNC109
         self.calls.append(media_ref)
+        self.binds.append((chat, sender))
         if media_ref in self.errors:
             raise mf.MediaFetchError(self.errors[media_ref])
         data = self.blobs[media_ref]
@@ -68,6 +70,7 @@ async def test_ingest_luu_media_ref_va_cac_co(app, db) -> None:  # type: ignore[
     assert all(i is not None for i in ids)
     pl = {r.external_msg_id: r for r in await rows(db, "SELECT external_msg_id, kind, payload FROM raw.events")}
     assert pl["mm-1"].kind == "voice" and pl["mm-1"].payload["media_ref"] == REF.format("1")
+    assert pl["mm-1"].payload["media_bind"] == {"chat": "g1", "sender": "u1"}   # ràng buộc nhóm + người gửi cho bridge đối chiếu
     assert pl["mm-1"].payload["forwarded"] is None and pl["mm-1"].payload["media"]["seconds"] == 5
     assert pl["mm-2"].kind == "image" and pl["mm-2"].payload["forwarded"] is True
     assert "media_ref" not in pl["mm-3"].payload
@@ -85,6 +88,7 @@ async def test_voice_thanh_cong_luu_file_va_chu(app, db, redis: Redis, tmp_path:
     d = deps(redis, tmp_path, f)
     [ev] = await pend(org)
     assert await jobs.process_event(d, ev) == "ok"
+    assert f.binds == [("g1", "u1")]                              # media.fetch mang đúng ràng buộc nhóm + người gửi
     [t] = await rows(db)
     assert (t.kind, t.status, t.text, t.engine) == ("transcript", "ok", "anh chuyển khoản 5 triệu cho chị Lan", "fake-stt")
     att = (await db.execute(text("SELECT storage_key, mime, bytes, sha256 FROM raw.attachments"))).one()
@@ -276,3 +280,15 @@ async def test_job_dang_ky_trong_cum_biz() -> None:
     from gh import biz
 
     assert jobs.media_sweep in [fn for fn, _ in biz.jobs()]
+
+
+async def test_tin_thieu_rang_buoc_khong_tai_chot_bad_request(app, db, redis: Redis, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    org = await org_id(db)
+    await listen(db, org, "g1")
+    [eid] = await put(sessionmaker(), org, media_msg("voice", "1"))
+    f = FakeFetcher({REF.format("1"): fake_voice_bytes("x")})
+    [ev] = await pend(org)
+    old = dataclasses.replace(ev, bind={})                       # tin cũ trước khi có ràng buộc (raw.events chỉ-INSERT nên dựng tay)
+    assert await jobs.process_event(deps(redis, tmp_path, f), old) == "failed"
+    assert f.calls == []
+    assert (await status.event_status(db, org, [eid]))[eid].error_code == "bad_request"

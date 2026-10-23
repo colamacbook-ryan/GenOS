@@ -117,7 +117,7 @@ services:
       # GH_HOST_LINK_DIR): phiên bản đang chạy, yêu cầu "Cập nhật ngay", trạng thái cập nhật.
       - ${GH_HOST_LINK_DIR:-../run}:/var/lib/gh/host
     # browser-bus: chỉ để tới browser-redis (không chung mạng với container browser). agy-bus: chỉ để tới agy-box.
-    networks: [default, browser-bus, agy-bus]
+    networks: [default, browser-bus, agy-bus, stt-bus]
     depends_on:
       migrate: { condition: service_completed_successfully }
       redis: { condition: service_healthy }
@@ -148,7 +148,7 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-    networks: [default, browser-bus, agy-bus]
+    networks: [default, browser-bus, agy-bus, stt-bus]
     depends_on:
       migrate: { condition: service_completed_successfully }
       redis: { condition: service_healthy }
@@ -248,11 +248,13 @@ services:
       redis: { condition: service_healthy }
 
   # L5 (v0.1.76) — STT tại máy, TUỲ CHỌN, TẮT MẶC ĐỊNH (profile `stt-local`): faster-whisper qua máy chủ API kiểu OpenAI
-  # (/v1/audio/transcriptions, cổng 8000 chỉ trong mạng compose — KHÔNG publish ra host). Bật: Cài đặt → Đa phương tiện chọn
-  # "tại máy" rồi `docker compose --profile stt-local up -d stt-local` (api/worker gọi http://stt-local:8000, biến GH_STT_LOCAL_URL
-  # đổi được ở .env của máy). Mặc định KHÔNG dùng: voice đi qua bộ định tuyến (gói thuê bao đã nối, 0 ₫ thêm). Chỉ nhận âm thanh,
-  # không giữ khoá/DB/Redis, không thấy tệp nào của Gen. Lần chạy đầu tải mô hình Whisper từ Hugging Face vào thư mục cache của container
-  # (cần Internet; mô hình nằm trong lớp ghi của container nên tải lại khi container bị tạo lại — chưa thêm volume vì danh sách volume của genh là hợp đồng riêng). Cần máy đủ mạnh (≈ 2 vCPU + 2 GB RAM cho mô hình small); máy yếu để mặc định.
+  # (/v1/audio/transcriptions, cổng 8000 chỉ trong mạng `stt-bus` — KHÔNG publish ra host). Mặc định KHÔNG dùng: voice đi qua
+  # bộ định tuyến (gói thuê bao đã nối, 0 ₫ thêm). Bật: Cài đặt → Đa phương tiện chọn "tại máy", nạp mô hình MỘT lần
+  # (`docker compose --profile stt-pull run --rm stt-models-pull`), rồi `docker compose --profile stt-local up -d stt-local`.
+  # Cách ly (review bảo mật): stt-local CHỈ ở mạng `stt-bus` (internal: true, chỉ api + worker + stt-local) — không thấy
+  # redis / db / bridge / browser, không có đường ra Internet. Mô hình đã nạp sẵn vào thư mục ${GH_STT_MODELS_DIR} (bind mount,
+  # chỉ đọc, HF_HUB_OFFLINE=1) nên chạy không cần mạng ngoài. Chỉ nhận âm thanh; không giữ khoá/DB/Redis, không thấy tệp của Gen.
+  # Cần máy đủ mạnh (≈ 2 vCPU + 2 GB RAM cho mô hình small); máy yếu để mặc định.
   stt-local:
     image: ghcr.io/speaches-ai/speaches:0.8.3-cpu@sha256:21e3df06d842fb7802ab470dd77c25f0e8c0d22950e8d8c6ae886e851af53ef8
     profiles: ["stt-local"]
@@ -260,13 +262,37 @@ services:
     logging: *logging
     environment:
       HF_HOME: /home/ubuntu/.cache/huggingface
+      HF_HUB_OFFLINE: "1"
       WHISPER__MODEL: ${GH_STT_LOCAL_MODEL:-Systran/faster-whisper-small}
       WHISPER__INFERENCE_DEVICE: cpu
+    volumes:
+      - ${GH_STT_MODELS_DIR:-./stt-models}:/home/ubuntu/.cache/huggingface:ro
+    networks: [stt-bus]
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     mem_limit: 3g
     cpus: 2
     pids_limit: 256
+
+  # L5 — việc MỘT LẦN nạp mô hình Whisper vào ${GH_STT_MODELS_DIR} (profile `stt-pull`, tắt mặc định, `run --rm`). Mạng riêng
+  # `stt-out` (có đường ra Internet, KHÔNG có api/db/redis/bridge) — chỉ dịch vụ này chạm Hugging Face. Thư mục phải ghi được
+  # bởi uid 1000 (user `ubuntu` của ảnh): `mkdir -p deploy/stt-models && chown 1000 deploy/stt-models`.
+  stt-models-pull:
+    image: ghcr.io/speaches-ai/speaches:0.8.3-cpu@sha256:21e3df06d842fb7802ab470dd77c25f0e8c0d22950e8d8c6ae886e851af53ef8
+    profiles: ["stt-pull"]
+    restart: "no"
+    logging: *logging
+    command: ["python", "-c", "import os; from huggingface_hub import snapshot_download as d; d(os.environ['MODEL'])"]
+    environment:
+      HF_HOME: /home/ubuntu/.cache/huggingface
+      MODEL: ${GH_STT_LOCAL_MODEL:-Systran/faster-whisper-small}
+    volumes:
+      - ${GH_STT_MODELS_DIR:-./stt-models}:/home/ubuntu/.cache/huggingface
+    networks: [stt-out]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 1g
+    pids_limit: 128
 
   # v0.1.29 — Gen đọc mạng xã hội (docs/design/gen-browser-agent.md §3.1): Playwright + Chromium trong container
   # RIÊNG. KHÔNG truy cập Postgres, KHÔNG giữ khoá master, không gọi model, KHÔNG thấy Redis chính (hàng đợi arq của
@@ -433,6 +459,12 @@ networks:
     internal: true
   # Chỉ agy-egress: đường ra Internet của agy (qua proxy chặn IP nội bộ — hộp không còn ở mạng này).
   agy-out: {}
+  # L5: api + worker + stt-local (profile tuỳ chọn) — api/worker gọi vào STT tại máy; stt-local không có đường ra, không thấy
+  # db/redis/bridge/browser.
+  stt-bus:
+    internal: true
+  # L5: chỉ stt-models-pull (việc một lần nạp mô hình, profile tắt mặc định): đường ra Internet tới Hugging Face.
+  stt-out: {}
 
 volumes:
   caddy_data:

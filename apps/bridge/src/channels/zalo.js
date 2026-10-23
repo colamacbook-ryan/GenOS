@@ -5,7 +5,8 @@ import { EventEmitter } from 'node:events';
 import { silentLogger } from '../log.js';
 import { RecentIds, errorCode, toIso, toPlain, withMeta } from '../util.js';
 import {
-  MEDIA_ERRORS, MediaCache, MediaError, baseMime, capBytes, checkDeclared, guardedFetch, mediaRef, mimeAllowed,
+  MEDIA_ERRORS, MediaCache, MediaError, baseMime, bindingOk, capBytes, checkDeclared, guardedFetch, mediaKey, mediaRef, mimeAllowed,
+  registerMedia,
 } from '../media.js';
 
 export const ZALO_QR_TTL_MS = 100000; // zca-js tự hết hạn QR sau 100 giây
@@ -519,15 +520,16 @@ export class ZaloAdapter extends EventEmitter {
       const c = d.content;
       let params = {};
       try { params = typeof c.params === 'string' ? JSON.parse(c.params) : (c.params || {}); } catch { params = {}; }
-      const ref = typeof c.href === 'string' ? mediaRef('zalo', this.sessionId, String(d.msgId ?? d.realMsgId ?? d.cliMsgId ?? '')) : null;
+      const ref = typeof c.href === 'string'
+        ? mediaRef('zalo', this.sessionId, mediaKey(isGroup ? threadId : '', d.uidFrom, d.msgId ?? d.realMsgId ?? d.cliMsgId)) : null;
       if (ref) {
         // Zalo không khai mime; thời lượng trong params (ms) nếu có. Khai báo chỉ để lõi báo trước too_large.
         const desc = {
           kind, mime: '', size: Number(params.fileSize ?? params.size) || 0,
           seconds: kind === 'voice' ? Math.round((Number(params.duration) || 0) / 1000) : 0, ptt: kind === 'voice',
         };
-        this.media.set(ref, { ...desc, href: c.href });
-        mediaOut = { ref, desc };
+        // Ghi vào sổ RAM chỉ sau khi bộ lọc tập nghe nhận tin (SessionManager gọi `registerMedia`).
+        mediaOut = { ref, desc, entry: { ...desc, href: c.href, bind: { chat: isGroup ? threadId : '', sender: String(d.uidFrom ?? '') } } };
       }
     }
     const out = {
@@ -560,16 +562,19 @@ export class ZaloAdapter extends EventEmitter {
     const readRef = isGroup || isReaction || msg.isSelf ? null : {
       msgId: d.msgId, cliMsgId: d.cliMsgId, uidFrom: d.uidFrom, idTo: d.idTo, msgType: d.msgType, st: d.st, at: d.at, cmd: d.cmd, ts: d.ts,
     };
-    return withMeta(out, { thread_ids: isGroup ? [] : [threadId], sender_alt_id: null, forwarded: null, read_ref: readRef });
+    return withMeta(out, { thread_ids: isGroup ? [] : [threadId], sender_alt_id: null, forwarded: null,
+      media: mediaOut ? { ref: mediaOut.ref, entry: mediaOut.entry } : null, read_ref: readRef });
   }
 
   /**
    * `media.fetch`: tải file của tin ĐÃ thấy theo `media_ref` trong sổ RAM. KHÔNG nhận URL từ ngoài: URL lấy từ chính
    * sự kiện của phiên Zalo, vẫn qua allowlist CDN + chặn IP nội bộ (`guardedFetch`).
    */
-  async fetchMedia(ref) {
+  registerMedia(m) { return registerMedia(this.media, m); }
+
+  async fetchMedia(ref, expect) {
     const d = this.media.get(ref);
-    if (!d) throw new MediaError(MEDIA_ERRORS.notFound);
+    if (!d || !bindingOk(d, expect)) throw new MediaError(MEDIA_ERRORS.notFound);
     const bad = checkDeclared(d);
     if (bad) throw new MediaError(bad);
     if (this.state !== 'active') throw new MediaError(MEDIA_ERRORS.sessionInactive);

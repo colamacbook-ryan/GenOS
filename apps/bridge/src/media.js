@@ -3,6 +3,7 @@
 //  - `media_ref` chỉ là KHOÁ TRA CỨU trong sổ RAM của chính bridge — không bao giờ là URL, không bao giờ được fetch trực tiếp.
 //  - Bridge chỉ tải bằng phiên đang có (Baileys giải mã từ khoá của tin; Zalo: URL do chính phiên Zalo nhận, host trong allowlist).
 //  - Không ghi token / URL có chữ ký vào log: lỗi chỉ mang MÃ (xem MEDIA_ERRORS), không mang URL hay nội dung.
+import { createHash } from 'node:crypto';
 import dns from 'node:dns/promises';
 import net from 'node:net';
 
@@ -79,6 +80,33 @@ export function parseMediaRef(ref) {
   if (typeof ref !== 'string' || !REF_RE.test(ref)) return null;
   const [channel, sessionId, ...rest] = ref.split(':');
   return { channel, sessionId, key: rest.join(':') };
+}
+
+/**
+ * Khoá tra sổ = băm (kênh-chat | người gửi | id tin) — id tin đơn lẻ có thể trùng/bị đoán giữa các chat khác nhau, nên
+ * không dùng làm khoá. 128 bit đầu của SHA-256 ⇒ khuôn `[0-9a-f]{32}` của media_ref.
+ */
+export function mediaKey(chat, sender, msgId) {
+  return createHash('sha256').update(JSON.stringify([String(chat ?? ''), String(sender ?? ''), String(msgId ?? '')])).digest('hex').slice(0, 32);
+}
+
+/**
+ * Đăng ký mô tả vào sổ — CHỈ gọi sau khi bộ lọc tập nghe đã nhận tin. Mỗi mục mang ràng buộc `bind {chat, sender}`;
+ * không ghi đè mục có sẵn nếu chat/sender khác (chống đầu độc sổ). Trả true nếu đã ghi.
+ */
+export function registerMedia(cache, m) {
+  const e = m?.entry;
+  if (!m?.ref || !e?.bind) return false;
+  const cur = cache.get(m.ref);
+  if (cur && (cur.bind.chat !== e.bind.chat || cur.bind.sender !== e.bind.sender)) return false;
+  cache.set(m.ref, e);
+  return true;
+}
+
+/** Sự kiện `media.fetch` phải khớp ràng buộc lúc đăng ký (`expect {chat, sender}` do lõi lấy từ chính tin trong Kho thô). */
+export function bindingOk(desc, expect) {
+  return Boolean(desc?.bind) && typeof expect?.chat === 'string' && typeof expect?.sender === 'string'
+    && desc.bind.chat === expect.chat && desc.bind.sender === expect.sender;
 }
 
 /** Mã yêu cầu do lõi sinh (UUID) — dùng làm một phần tên khoá Redis nên phải kiểm chặt. */

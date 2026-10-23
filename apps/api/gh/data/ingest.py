@@ -367,6 +367,9 @@ def _media_fields(kind: str, p: dict[str, Any]) -> dict[str, Any]:
         m: dict[str, Any] = raw_m if isinstance(raw_m, dict) else {}
         out["media"] = {k: m[k] for k in ("kind", "mime", "size", "seconds", "ptt")
                         if isinstance(m.get(k), (str, int, float, bool))}
+        # Ràng buộc bridge đã gắn cho ref này (nhóm + người gửi): `media.fetch` gửi lại đúng cặp để bridge đối chiếu.
+        out["media_bind"] = {"chat": str(p.get("external_group_id") or ""),
+                             "sender": str(p.get("sender_external_id") or "")}
     if "forwarded" in p and (p["forwarded"] is None or isinstance(p["forwarded"], bool)):
         out["forwarded"] = p["forwarded"]
     for k in ("revokes", "revokes_cli"):

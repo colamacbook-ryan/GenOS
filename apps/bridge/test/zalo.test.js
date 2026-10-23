@@ -1,3 +1,4 @@
+import { META } from '../src/util.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ZaloAdapter } from '../src/channels/zalo.js';
@@ -199,6 +200,10 @@ test('gửi tin Zalo dùng ThreadType đúng', async () => {
 
 // ─── L5: voice / ảnh / thu hồi / tải file an toàn ─────────────────────────────────────────────────────────────
 
+const norm = (a, m) => { const p = a.normalise(m); a.registerMedia(p[META]?.media); return p; };
+const fm = (a, p, over) => a.fetchMedia(p.media_ref, { chat: p.external_group_id ?? '', sender: p.sender_external_id, ...over });
+
+
 const ZALO_URL = 'https://voice-aac.zadn.vn/a/b.aac?sig=SIGNED';
 const PUBLIC = () => Promise.resolve([{ address: '8.8.8.8', family: 4 }]);
 
@@ -230,69 +235,70 @@ const zvoice = (over = {}) => zaloMessage({ msgType: 'chat.voice', content: { hr
 
 test('L5 chuẩn hoá Zalo: voice → media_ref + thời lượng; href/URL ký không vào payload; forwarded = null (không biết)', () => {
   const a = mediaAdapter(fakeFetch({}));
-  const p = a.normalise(zvoice());
+  const p = norm(a, zvoice());
   assert.equal(p.kind, 'voice');
-  assert.equal(p.media_ref, 'zalo:s1:5001');
+  assert.match(p.media_ref, /^zalo:s1:[0-9a-f]{32}$/);
   assert.deepEqual(p.media, { kind: 'voice', mime: '', size: 3000, seconds: 12, ptt: true });
   assert.equal(p.forwarded, null);
   assert.equal(JSON.stringify(p).includes('SIGNED'), false);
-  const img = a.normalise(zaloMessage({ msgId: '77', msgType: 'chat.photo', content: { title: 'ảnh', href: 'https://f1.zadn.vn/x.jpg?sig=Z', thumb: 'https://t' } }));
-  assert.equal(img.media_ref, 'zalo:s1:77');
+  const img = norm(a, zaloMessage({ msgId: '77', msgType: 'chat.photo', content: { title: 'ảnh', href: 'https://f1.zadn.vn/x.jpg?sig=Z', thumb: 'https://t' } }));
+  assert.match(img.media_ref, /^zalo:s1:[0-9a-f]{32}$/);
+  assert.notEqual(img.media_ref, p.media_ref);
   assert.equal(JSON.stringify(img).includes('sig=Z'), false);
-  const gif = a.normalise(zaloMessage({ msgType: 'chat.gif', content: { href: 'https://f1.zadn.vn/x.gif' } }));
+  const gif = norm(a, zaloMessage({ msgType: 'chat.gif', content: { href: 'https://f1.zadn.vn/x.gif' } }));
   assert.equal(gif.media_ref, undefined); // chỉ ảnh chụp cần OCR
 });
 
 test('L5 fetchMedia Zalo: tải qua allowlist, mime từ phản hồi, không gửi cookie', async () => {
   const f = fakeFetch({ [ZALO_URL]: { type: 'audio/mp4; codecs=mp4a', body: Buffer.from('M4A-DATA') } });
   const a = mediaAdapter(f);
-  const p = a.normalise(zvoice());
-  const got = await a.fetchMedia(p.media_ref);
+  const p = norm(a, zvoice());
+  const got = await fm(a, p);
   assert.deepEqual([got.bytes.toString(), got.mime], ['M4A-DATA', 'audio/mp4']);
   assert.equal(f.calls[0].init.redirect, 'manual');
   assert.equal(JSON.stringify(f.calls[0].init.headers).toLowerCase().includes('cookie'), false);
 });
 
 test('L5 fetchMedia Zalo: chặn SSRF — host lạ, http, IP nội bộ, redirect ra ngoài, IP literal, userinfo', async () => {
-  const evil = (href) => a2.normalise(zaloMessage({ msgId: String(Math.random()).slice(2, 8), msgType: 'chat.voice', content: { href } }));
+  const evil = (href) => norm(a2, zaloMessage({ msgId: String(Math.random()).slice(2, 8), msgType: 'chat.voice', content: { href } }));
   const f = fakeFetch({ '*': {} });
   const a2 = mediaAdapter(f);
   for (const href of ['https://evil.example/a.aac', 'http://voice.zadn.vn/a', 'https://127.0.0.1/a', 'https://zadn.vn.evil.com/a',
     'https://user:pw@voice.zadn.vn/a', 'https://voice.zadn.vn:8443/a', 'file:///etc/passwd', 'https://169.254.169.254/latest']) {
     const p = evil(href);
-    await assert.rejects(a2.fetchMedia(p.media_ref), { code: 'blocked_host' }, href);
+    await assert.rejects(fm(a2, p), { code: 'blocked_host' }, href);
   }
   assert.equal(f.calls.length, 0, 'không có yêu cầu mạng nào được phát ra');
 
   // DNS trỏ IP nội bộ dù tên trong allowlist
   const priv = mediaAdapter(fakeFetch({ '*': {} }), { lookup: () => Promise.resolve([{ address: '10.0.0.5' }]) });
-  const p = priv.normalise(zvoice());
-  await assert.rejects(priv.fetchMedia(p.media_ref), { code: 'blocked_host' });
+  const p = norm(priv, zvoice());
+  await assert.rejects(fm(priv, p), { code: 'blocked_host' });
 
   // redirect sang host lạ bị chặn; redirect trong allowlist được theo
   const redir = mediaAdapter(fakeFetch({ [ZALO_URL]: { status: 302, location: 'https://evil.example/x' } }));
-  await assert.rejects(redir.fetchMedia(redir.normalise(zvoice()).media_ref), { code: 'blocked_host' });
+  await assert.rejects(fm(redir, norm(redir, zvoice())), { code: 'blocked_host' });
   const ok = mediaAdapter(fakeFetch({ [ZALO_URL]: { status: 302, location: 'https://cdn2.zalo.me/z' }, 'https://cdn2.zalo.me/z': { body: Buffer.from('OK') } }));
-  assert.equal((await ok.fetchMedia(ok.normalise(zvoice()).media_ref)).bytes.toString(), 'OK');
+  assert.equal((await fm(ok, norm(ok, zvoice()))).bytes.toString(), 'OK');
 });
 
 test('L5 fetchMedia Zalo: trần byte (Content-Length và dòng chảy), mime lạ, lỗi mạng không lộ URL, ref lạ', async () => {
   const a = mediaAdapter(fakeFetch({ [ZALO_URL]: { length: String(6 * 1024 * 1024) } }));
-  await assert.rejects(a.fetchMedia(a.normalise(zvoice()).media_ref), { code: 'too_large' });
+  await assert.rejects(fm(a, norm(a, zvoice())), { code: 'too_large' });
 
   const lie = mediaAdapter(fakeFetch({ [ZALO_URL]: { length: '10', body: Buffer.alloc(5 * 1024 * 1024 + 1) } }));
-  await assert.rejects(lie.fetchMedia(lie.normalise(zvoice()).media_ref), { code: 'too_large' });
+  await assert.rejects(fm(lie, norm(lie, zvoice())), { code: 'too_large' });
 
   const html = mediaAdapter(fakeFetch({ [ZALO_URL]: { type: 'text/html', body: Buffer.from('<html>') } }));
-  await assert.rejects(html.fetchMedia(html.normalise(zvoice()).media_ref), { code: 'mime_not_allowed' });
+  await assert.rejects(fm(html, norm(html, zvoice())), { code: 'mime_not_allowed' });
 
   const down = mediaAdapter(fakeFetch({}));
-  await assert.rejects(down.fetchMedia(down.normalise(zvoice()).media_ref), (e) => e.code === 'download_failed' && !String(e.message).includes('zadn'));
+  await assert.rejects(fm(down, norm(down, zvoice())), (e) => e.code === 'download_failed' && !String(e.message).includes('zadn'));
   await assert.rejects(down.fetchMedia('zalo:s1:khong-co'), { code: 'not_found' });
 
   const long = mediaAdapter(fakeFetch({}));
-  const lp = long.normalise(zaloMessage({ msgType: 'chat.voice', content: { href: ZALO_URL, params: JSON.stringify({ duration: 700000 }) } }));
-  await assert.rejects(long.fetchMedia(lp.media_ref), { code: 'too_large' }); // > 10 phút, khai báo
+  const lp = norm(long, zaloMessage({ msgType: 'chat.voice', content: { href: ZALO_URL, params: JSON.stringify({ duration: 700000 }) } }));
+  await assert.rejects(fm(long, lp), { code: 'too_large' }); // > 10 phút, khai báo
 });
 
 test('L5 undo Zalo: lắng nghe `undo` → tin system mang revokes; trùng bị bỏ; vào qua bộ lọc tập nghe như tin thường', async () => {
@@ -315,4 +321,22 @@ test('L5 undo Zalo: lắng nghe `undo` → tin system mang revokes; trùng bị 
   const got = bus.events.filter((e) => e.stream === STREAMS.inbound && e.payload.revokes);
   assert.equal(got.length, 1);
   assert.equal(got[0].payload.revokes, '5001');
+});
+
+test('L5 sổ media Zalo: cùng msgId ở hai chat ⇒ ref khác; chưa qua bộ lọc thì chưa tải; sai ràng buộc ⇒ not_found; không ghi đè', async () => {
+  const f = fakeFetch({ [ZALO_URL]: { body: Buffer.from('THAT') }, 'https://voice-aac.zadn.vn/gia.aac': { body: Buffer.from('GIA') } });
+  const a = mediaAdapter(f);
+  const real = a.normalise(zvoice({ threadId: 'G1', uidFrom: '111' }));
+  assert.equal(a.media.size, 0);
+  await assert.rejects(fm(a, real), { code: 'not_found' });
+  a.registerMedia(real[META].media);
+  const other = norm(a, zaloMessage({ threadId: 'G2', uidFrom: '222', msgType: 'chat.voice', content: { href: 'https://voice-aac.zadn.vn/gia.aac' } }));
+  assert.notEqual(real.media_ref, other.media_ref);
+  assert.equal((await fm(a, real)).bytes.toString(), 'THAT');
+  assert.equal((await fm(a, other)).bytes.toString(), 'GIA');
+  await assert.rejects(fm(a, real, { chat: 'G2' }), { code: 'not_found' });
+  await assert.rejects(fm(a, real, { sender: '222' }), { code: 'not_found' });
+  const poisoned = { ref: real.media_ref, entry: { kind: 'voice', mime: '', size: 1, seconds: 1, href: 'https://voice-aac.zadn.vn/gia.aac', bind: { chat: 'G2', sender: '222' } } };
+  assert.equal(a.registerMedia(poisoned), false);
+  assert.equal((await fm(a, real)).bytes.toString(), 'THAT');
 });
