@@ -571,3 +571,48 @@ async def test_promise_kept_attack_old_self_report_from_context_blocks_closing(a
     await _kept_turn(sm, r, org, t0, ok, cite=("Em gửi 2 túi decaf", "Nhận 2 túi decaf"))
     assert (await _facts(db))["promised_to"].valid_to is None
     assert {"code": "promise_kept_untrusted", "n": 1} in await _last_errors(db)
+
+
+async def test_confirmation_that_also_creates_a_new_obligation_still_closes_the_kept_promise(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """"Nhận 2 túi decaf rồi nha Khoa, chiều chị chuyển khoản 300k": `owes` mới lấy chính tin xác nhận làm nguồn — nó không thể là thứ
+    được giữ, không được làm tập trích mơ hồ; lời hứa decaf đóng, `owes` mới vẫn mở."""
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    r, t0 = await _seed_promise(db, sm, redis, org)
+    an_p, khoa = await person_of(db, "an"), await person_of(db, "khoa")
+    ok = msg("Nhận 2 túi decaf rồi nha Khoa, chiều chị chuyển khoản 300k", sender="an", name="An Hội An Cafe")
+    ok_at = t0 + timedelta(hours=1)
+    ok["occurred_at"] = ok_at.isoformat()
+    await put(sm, org, ok)
+
+    def build(w):  # type: ignore[no-untyped-def]
+        src = find_msg(w, "chiều chị chuyển khoản").message_id
+        out = out_with(w, unit_for(w, "chiều chị chuyển khoản 300k", kind="nghia_vu_loi_hua"), facts=[
+            FactProposed(unit_ref="u1", subject=FactSubject(surface="chị An", person_ref=f"u_{an_p}"), predicate="owes",
+                         object=FactObject(value="300k", person_ref=f"u_{khoa}"), quote_refs=[src])])
+        ids = [find_msg(w, "tuần sau e gửi").message_id, src]
+        return out.model_copy(update={"memory_updates": [MemoryUpdate(type="promise_kept", text="đã nhận", message_ids=ids)]})
+    r.groups.analyze = Analyzer(build)
+    await r.run(org, "manual")
+    fs = await _facts(db)
+    assert fs["promised_to"].valid_to == ok_at and fs["owes"].valid_to is None
+
+
+async def test_acceptance_ack_in_the_same_turn_as_the_promise_does_not_close_it(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """Khoa vừa hứa, An đáp "ok em" CÙNG lượt, model trích nhầm làm promise_kept ⇒ đó là nhận lời, không đóng lời hứa vừa sinh."""
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    t0 = datetime.now(UTC) - timedelta(hours=10)
+    ask = msg("Khoa ơi bên mình có decaf không, khách bầu hỏi hoài", sender="an", name="An Hội An Cafe")
+    pr = msg("Dạ tuần sau e gửi chị 2 túi mẫu decaf thử nha", sender="khoa", name="Khoa Rang Xay MR")
+    ack = msg("ok em", sender="an", name="An Hội An Cafe")
+    ask["occurred_at"], pr["occurred_at"], ack["occurred_at"] = t0.isoformat(), (t0 + timedelta(minutes=18)).isoformat(), (t0 + timedelta(minutes=19)).isoformat()
+    await put(sm, org, ask, pr, ack)
+    base = _promise_turn(await person_of(db, "khoa"), await person_of(db, "an"))
+
+    def build(w):  # type: ignore[no-untyped-def]
+        ids = [find_msg(w, "tuần sau e gửi").message_id, find_msg(w, "ok em").message_id]
+        return base(w).model_copy(update={"memory_updates": [MemoryUpdate(type="promise_kept", text="đã nhận", message_ids=ids)]})
+    await refinery(sm, redis, Analyzer(build)).run(org, "manual")
+    assert (await _facts(db))["promised_to"].valid_to is None
+    assert {"code": "promise_kept_untrusted", "n": 1} in await _last_errors(db)

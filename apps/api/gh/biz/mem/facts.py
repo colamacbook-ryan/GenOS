@@ -646,6 +646,7 @@ class KeptMsg:
     has_text: bool = True              # có chữ (sticker/ảnh không chữ không chứng minh được "đã giữ")
     thread_key: str | None = None      # luồng của tin (event_state.detail.thread_key)
     reply_to_raw: uuid.UUID | None = None
+    ack: bool = False                  # lời xác nhận ngắn đưa lại vào cửa sổ ("ok em"), không phải tin được nhận vào lượt
 
 
 @dataclass
@@ -701,6 +702,12 @@ async def close_kept(db: AsyncSession, org_id: uuid.UUID, cited: list[KeptMsg]) 
         ORDER BY f.subject_id, f.predicate, f.id"""), {"o": org_id, "p": list(KEPT_PREDICATES), "r": ids})).all()
     if not rows:
         return out
+    # chỉ xét sự thật có ÍT NHẤT một tin được trích (ngoài nguồn/bằng chứng của chính nó) gửi SAU khi nó bắt đầu: sự thật sinh ra từ chính
+    # tin xác nhận ("nhận rồi nha, chiều chị chuyển 300k" ⇒ `owes` mới) không thể là thứ được "giữ", không được làm cả tập mơ hồ
+    rows = [r for r in rows if any(c.raw_event_id not in {r.source_raw_event_id, *(r.ev or [])} and _aware(c.sent_at) > r.valid_from
+                                   for c in cited)]
+    if not rows:
+        return out
     if len(rows) > 1:
         # mơ hồ xét trên TOÀN BỘ tập trích: chứa tin nguồn của ≥ 2 nghĩa vụ đang mở (một tin hứa hai việc, hoặc hai tin hứa) ⇒ không
         # biết đóng cái nào; kẻ gian cũng không lách được bằng cách trích kèm tin nguồn của nghĩa vụ khác
@@ -741,8 +748,11 @@ async def close_kept(db: AsyncSession, org_id: uuid.UUID, cited: list[KeptMsg]) 
 
         def neutral(c: KeptMsg, r: Any = r) -> bool:     # lời tự báo chỉ trung tính khi qua kiểm cơ bản và không dính sự thật đang mở khác
             return basic(c) and not (refs.get(c.raw_event_id, set()) - {r.id})
+        promise_new = any(c.raw_event_id == r.source_raw_event_id and c.new for c in cited)
         if not all(neutral(c) for c in selfs):
             out.untrusted += 1
+        elif promise_new and others and all(c.ack for c in others):
+            out.untrusted += 1          # lời hứa vừa có trong CHÍNH lượt này, bằng chứng chỉ là "ok em" ⇒ đó là nhận lời, không phải đã giữ
         elif not others:
             if selfs:
                 out.self_report += 1

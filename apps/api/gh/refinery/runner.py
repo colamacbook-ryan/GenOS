@@ -1885,7 +1885,7 @@ class GroupTurns:
                     ge.raw_event_id, ge.sent_at, g.person_id if g is not None else ge.sender_person_id, new=fresh,
                     forwarded=bool(g.forwarded if g is not None else ge.forwarded),
                     has_text=bool(((g.body if g is not None else ge.body) or "").strip()), thread_key=tk if fresh else None,
-                    reply_to_raw=reply_raw))
+                    reply_to_raw=reply_raw, ack=g is None and not ge.context))
             try:
                 async with db.begin_nested():
                     res = await facts_mod.close_kept(db, org_id, cited)
