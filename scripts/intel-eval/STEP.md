@@ -33,6 +33,11 @@ $PY scripts/intel-eval/gkb_score.py --data .../kbN --key <đáp án ngoài repo>
 - `init` dựng DB `gh_step_*` (nhân từ khuôn đã migrate, cần Postgres) + Redis DB riêng (`--redis-url`, mặc định DB 10, bị xoá sạch), rồi mở tiến trình nền;
   `--auto-stub` tự trả brain-out rỗng hợp lệ (đếm lượt/kích thước prompt, kiểm hạ tầng; **không dùng để chấm**).
 - `--contexts ctx.json` = `{"G1": "giao_thuong", …}` (nhãn bối cảnh Sếp đã xác nhận); không có và `context.md` không có bảng nhóm ⇒ bối cảnh **chưa xác nhận**. Hồ sơ Sếp lấy từ mục "Hồ sơ Sếp" của `context.md` (kb1 không có mục này ⇒ Hồ sơ rỗng).
+- "Bây giờ" của mỗi lượt = giờ của DỮ LIỆU (`clockplan.data_time`: giờ gốc tin cuối đã đến), không phải đồng hồ nén — mốc "quá hạn/hôm nay/dưới 24 giờ",
+  lùi nhịp và cửa sổ truy hồi 90 ngày chạy theo ngày thật của tin.
+- Sau lượt kế hoạch cuối, tin còn chờ (lượt ghi lỗi/lùi nhịp, tin đuôi) được **xả** như scheduler thật: bản ghi `plan_turn = null`, `reason = "drain:…"`.
+- Lượt model trả đúng nhưng pipeline ghi lỗi (cả lượt hoặc từng đơn vị) ⇒ `write_error` trong `state.last`/`outputs.jsonl`; `submit` in cảnh báo ra stderr,
+  `export` đếm "lượt lỗi ghi" + số tin còn chờ (`write_errors` trong signals.json, gkb_score cũng đếm). Không còn `error: null` cho lượt mất dữ liệu.
 - Một lượt kế hoạch của replay có thể thành nhiều lượt pipeline (an toàn/cổng chạy ngay, rồi lượt thường): `turn_NNN` đếm theo **lượt pipeline**; `outputs.jsonl` có thêm `plan_turn`.
 - Tiến trình nền chết (khởi động lại máy…) ⇒ `init --force` làm lại từ đầu (không có resume: id tin/sự thật là uuid sinh mới mỗi lần).
 - Token trong `stats`/`tokens.jsonl` là **ước tính** (ký tự / 3, cùng hệ số `retrieve.py`; sai số ±25%), không phải số đếm của tokenizer thật.
