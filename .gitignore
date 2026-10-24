@@ -22,3 +22,9 @@ dump.rdb
 # hộp thư Console ↔ genh khi chạy compose từ repo (genh tạo <gốc cài đặt>/run)
 /run/
 /run-dev/
+
+# L6: đáp án + kết quả chấm G-KB KHÔNG bao giờ vào repo (spec §2.1)
+evalkey*/
+gate*.json
+manual*.csv
+manual*.json

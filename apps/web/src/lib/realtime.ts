@@ -394,8 +394,8 @@ export function applyEvent(qc: QueryClient, e: RealtimeEvent): void {
         if (old.items.some((n) => n.id === item.id)) return old;
         return { items: [item, ...old.items].slice(0, 20), unread: old.unread + (item.read ? 0 : 1) };
       });
-      // Chưa có danh sách trong bộ đệm (chuông chưa tải) → tải lần tới sẽ có.
-      if (!qc.getQueryData(qk.notifications)) void qc.invalidateQueries({ queryKey: qk.notifications });
+      // Luôn lấy lại danh sách từ máy chủ sau khi chèn (huỷ lần tải đang bay — xem `refreshNotifications`).
+      refreshNotifications(qc);
       return;
     }
     case 'notification.resolved': {
@@ -420,7 +420,16 @@ let users = 0;
  * bước này thì chuông thiếu thông báo (vd bản mới vừa lên, Gen đề xuất ghi Phiên) cho tới lần tải kế.
  */
 export function onSocketStatus(qc: QueryClient, s: RealtimeStatus): void {
-  if (s === 'open') void qc.invalidateQueries({ queryKey: qk.notifications });
+  if (s === 'open') refreshNotifications(qc);
+}
+
+/**
+ * Lấy lại danh sách chuông từ máy chủ, HUỶ lần tải đang bay trước. Một lần tải đang bay có thể đã được máy chủ trả TRƯỚC khi
+ * thông báo mới tạo ra: `invalidateQueries` khi bộ đệm còn trống chỉ nhập vào lần tải đó (không tải lại), còn khi đã có dữ liệu
+ * thì phản hồi cũ về sau ghi đè mục vừa chèn. Gọi ở cả `notification.new` lẫn lúc ổ cắm mở (e2e gen-kho-write-v0150 chập chờn).
+ */
+export function refreshNotifications(qc: QueryClient): void {
+  void qc.cancelQueries({ queryKey: qk.notifications, exact: true }).then(() => qc.invalidateQueries({ queryKey: qk.notifications }));
 }
 
 const PUBLIC_PREFIXES = ['/login', '/setup'];
