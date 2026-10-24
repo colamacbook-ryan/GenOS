@@ -11,6 +11,7 @@ from gh.refinery.extract import (
     DEFAULT_TZ,
     EXTRACTOR_VERSION,
     Analysis,
+    Backlog,
     ContractError,
     GroupEvent,
     GroupWindow,
@@ -22,5 +23,5 @@ from gh.refinery.verify import MediaText, Verified, VerifiedFact, VerifiedQuote,
 
 IS_STUB = False
 
-__all__ = ["DEFAULT_TZ", "EXTRACTOR_VERSION", "IS_STUB", "Analysis", "ContractError", "GroupEvent", "GroupWindow", "MediaText",
+__all__ = ["DEFAULT_TZ", "EXTRACTOR_VERSION", "IS_STUB", "Analysis", "Backlog", "ContractError", "GroupEvent", "GroupWindow", "MediaText",
            "ModelCall", "ModelReply", "Verified", "VerifiedFact", "VerifiedQuote", "VerifiedUnit", "analyze_group_detailed", "check"]

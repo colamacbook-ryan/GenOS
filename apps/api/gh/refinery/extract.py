@@ -228,6 +228,18 @@ class GroupEvent:
         return f"u_{self.sender_person_id}" if self.sender_person_id is not None else None
 
 
+@dataclass(frozen=True)
+class Backlog:
+    """Tin của CÙNG luồng đã vào kho nhưng KHÔNG có trong lượt này (trần 60 tin/12.000 ký tự, lượt an toàn nhận ứng viên trước, nhập lịch sử…).
+    Chỉ đếm + khoảng giờ gửi — không nội dung. Model phải biết để không kết luận "im lặng/vắng mặt" từ khoảng nó chưa thấy (lỗi kb1-r2)."""
+
+    n: int                                     # tin chờ (chưa phân tích) của luồng ngoài lượt này
+    first_at: datetime | None = None
+    last_at: datetime | None = None
+    done_after: int = 0                        # tin gửi SAU tin cuối của lượt nhưng đã phân tích ở lượt trước (lượt an toàn/cổng, tin cũ tới trễ)
+    done_after_at: datetime | None = None      # giờ gửi sớm nhất của các tin đó
+
+
 @dataclass
 class GroupWindow:
     """Đầu vào MỘT lượt của MỘT luồng (§4D.1). L2 dựng: tin mới (≤ 60 tin/12.000 ký tự), cửa sổ gần, chữ từ voice/ảnh."""
@@ -241,6 +253,7 @@ class GroupWindow:
     tz: str = DEFAULT_TZ
     group_name: str | None = None
     predicates: Sequence[tuple[str, str]] = ()      # (mã vị từ, mô tả) — danh mục `mem.predicates` đưa vào prompt
+    backlog: Backlog | None = None                  # tin cùng luồng đã đến nhưng chưa đưa vào lượt này (None = lượt thấy hết)
 
     @property
     def all_events(self) -> list[GroupEvent]:
@@ -372,6 +385,14 @@ def build_user_prompt(window: GroupWindow, pack: ContextPack, profile: ProfileSn
     unread = {k: int(v) for k, v in dict(window.unreadable).items() if v}
     tail = [f"Luồng: thread_ref = {window.thread_ref}",
             f"Bây giờ (chỉ để biết, KHÔNG tự tính ngày): {_local(now, window.tz)}"]
+    b = window.backlog
+    if b is not None and b.n > 0 and b.first_at is not None and b.last_at is not None:
+        tail.append(f"Lượt này chưa thấy hết luồng: còn {b.n} tin đã đến nhưng chưa đưa vào lượt này (gửi từ {_local(b.first_at, window.tz)} "
+                    f"đến {_local(b.last_at, window.tz)}), lượt sau sẽ xử lý. Không kết luận ai im lặng, vắng mặt, chưa trả lời, không đặt hàng "
+                    "hay chưa giữ lời trong khoảng đó — việc chưa thấy kết thúc thì `status_hint` = `theo_doi`.")
+    if b is not None and b.done_after > 0 and b.done_after_at is not None:
+        tail.append(f"Luồng có {b.done_after} tin gửi từ {_local(b.done_after_at, window.tz)} trở đi đã được phân tích ở lượt trước (xem Lịch sử), "
+                    "lượt này không thấy chúng: không kết luận ai im lặng hay việc chưa xong sau tin cuối của lượt này.")
     if unread:
         tail.append("Tin không đọc được (đếm vào `unreadable`): " + ", ".join(f"{k} {v}" for k, v in unread.items()))
     tail.append("Chỉ trả JSON `brain-out/1`, đúng khuôn trong kỹ năng. Trích dẫn sao chép từng chữ từ trường tương ứng.")

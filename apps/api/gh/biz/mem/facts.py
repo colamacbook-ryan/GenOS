@@ -628,6 +628,109 @@ async def _assert(db: AsyncSession, fin: FactIn, pred: predicates.Predicate) -> 
     return await _load(db, fid, "inserted" if nxt is None else "inserted_between")
 
 
+# ─── lời hứa đã giữ ⇒ đóng hiệu lực ────────────────────────────────────────
+
+#: Vị từ "nghĩa vụ" mà `promise_kept` được đóng (kỹ năng v2.1 §9.3: "đóng lời hứa trong sổ").
+KEPT_PREDICATES = ("promised_to", "owes")
+
+
+@dataclass(frozen=True)
+class KeptMsg:
+    """Một tin model trích trong `promise_kept` (đã qua `verify`: mã có trong cửa sổ). Bên gọi điền các cờ từ kho thô, không từ model."""
+
+    raw_event_id: uuid.UUID
+    sent_at: datetime
+    sender_person_id: uuid.UUID | None
+    new: bool                          # tin MỚI được nhận vào lượt này (không phải tin ngữ cảnh/lời xác nhận đưa lại)
+    forwarded: bool = False            # cờ chuyển tiếp của nền tảng (None/không biết ⇒ False; simhash xuyên nhóm là việc của T1)
+    has_text: bool = True              # có chữ (sticker/ảnh không chữ không chứng minh được "đã giữ")
+    thread_key: str | None = None      # luồng của tin (event_state.detail.thread_key)
+    reply_to_raw: uuid.UUID | None = None
+
+
+@dataclass
+class KeptResult:
+    closed: list[uuid.UUID] = field(default_factory=list)
+    untrusted: int = 0                 # có lời hứa khớp nhưng bằng chứng không đủ tin cậy ⇒ KHÔNG đóng
+
+
+async def _beneficiary(db: AsyncSession, r: Any) -> uuid.UUID | None:
+    """Bên được hứa / chủ nợ của sự thật: `object_entity_id`, hoặc `object_value.to_entity_id` (vị từ nghĩa vụ, code ghi)."""
+    ent = r.object_entity_id
+    if ent is None and isinstance(r.object_value, dict) and r.object_value.get("to_entity_id"):
+        try:
+            ent = uuid.UUID(str(r.object_value["to_entity_id"]))
+        except ValueError:
+            return None
+    if ent is None:
+        return None
+    try:
+        return await entities.canonical(db, ent)
+    except entities.EntityError:
+        return None
+
+
+async def close_kept(db: AsyncSession, org_id: uuid.UUID, cited: list[KeptMsg]) -> KeptResult:
+    """`memory_updates.promise_kept` (model: [tin hứa, tin chứng minh đã giữ]) ⇒ ĐÓNG hiệu lực theo thời gian sự việc (`valid_to` = giờ
+    gửi tin đã giữ, `closed_recorded_at = now()`, trạng thái GIỮ `asserted` — CNS-095; không xoá). Model đọc chữ người ngoài nên lời nó
+    là ĐỀ XUẤT; cổng tin cậy (cùng tinh thần `_assert` 6b/6e — chỉ người trong cuộc hoặc Sếp đổi được sự thật, tin chuyển tiếp không đổi
+    được sự thật của người trong cuộc):
+    * chỉ sự thật có TIN NGUỒN (`source_raw_event_id`) nằm trong mã được trích — không đóng hàng loạt theo bằng chứng phụ;
+    * mỗi tin được trích khác tin nguồn/bằng chứng của chính sự thật là "bằng chứng đã giữ" và phải ĐỦ: tin mới của lượt, không chuyển
+      tiếp, có chữ, gửi SAU lời hứa, cùng luồng với tin hứa (hoặc trả lời đúng tin đó), người gửi là Sếp hoặc bên được hứa/chủ nợ
+      (`promised_to` thêm chính người hứa; `owes`: con nợ hay người thứ ba nói "đã trả" không đủ);
+    * có dù chỉ MỘT tin bằng chứng không đủ (vd model trích kèm tin người thứ ba) ⇒ KHÔNG đóng, đếm `untrusted` (không tự mở tranh
+      chấp: kẻ gian sẽ dùng chính đường đó để làm lung lay sự thật thật).
+    `owner_confirmed` chỉ Sếp đóng (§4A.1 6f); `disputed` đi đường tranh chấp. Cùng khoá tư vấn với `assert_fact`."""
+    out = KeptResult()
+    ids = list(dict.fromkeys(c.raw_event_id for c in cited))
+    if len(ids) < 2:
+        return out
+    rows = (await db.execute(text("""
+        SELECT f.id, f.subject_id, f.predicate, f.valid_from, f.source_raw_event_id, f.object_entity_id, f.object_value,
+               (SELECT s.detail ->> 'thread_key' FROM refinery.event_state s WHERE s.event_id = f.source_raw_event_id LIMIT 1) AS tk,
+               ARRAY(SELECT x.raw_event_id FROM mem.fact_evidence x WHERE x.fact_id = f.id AND x.raw_event_id IS NOT NULL) AS ev
+        FROM mem.facts f
+        WHERE f.org_id = :o AND f.predicate = ANY(:p) AND f.status = 'asserted' AND f.valid_to IS NULL AND f.source_raw_event_id = ANY(:r)
+        ORDER BY f.subject_id, f.predicate, f.id"""), {"o": org_id, "p": list(KEPT_PREDICATES), "r": ids})).all()
+    if not rows:
+        return out
+    owner = (await entities.owner(db, org_id)).id
+    speakers: dict[uuid.UUID, uuid.UUID] = {}
+    for c in cited:
+        if c.sender_person_id is not None and c.sender_person_id not in speakers:
+            speakers[c.sender_person_id] = (await entities.ensure_person(db, org_id, c.sender_person_id)).id
+    plan: list[tuple[Any, datetime]] = []
+    for r in rows:
+        allowed = {owner}
+        if (ben := await _beneficiary(db, r)) is not None:
+            allowed.add(ben)
+        if r.predicate == "promised_to":
+            allowed.add(await entities.canonical(db, r.subject_id))
+        own = {r.source_raw_event_id, *(r.ev or [])}
+        proofs = [c for c in cited if c.raw_event_id not in own]
+
+        def ok(c: KeptMsg, r: Any = r, allowed: set[uuid.UUID] = allowed) -> bool:
+            return (c.new and not c.forwarded and c.has_text and _aware(c.sent_at) > r.valid_from
+                    and (c.thread_key is not None and c.thread_key == r.tk or c.reply_to_raw == r.source_raw_event_id)
+                    and c.sender_person_id is not None and speakers.get(c.sender_person_id) in allowed)
+        if proofs and all(ok(c) for c in proofs):
+            plan.append((r, min(_aware(c.sent_at) for c in proofs)))
+        else:
+            out.untrusted += 1
+    if not plan:
+        return out
+    await disputes.set_actor(db, "extractor", "promise_kept")
+    for sid, pred in dict.fromkeys((str(r.subject_id), r.predicate) for r, _ in plan):    # cùng thứ tự khoá với assert_facts (CNS-102)
+        await db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(CAST(:o AS text) || CAST(:s AS text) || :p, 0))"),
+                         {"o": str(org_id), "s": sid, "p": pred})
+    for r, at in plan:
+        res = await db.execute(text("""UPDATE mem.facts SET valid_to = :t, closed_recorded_at = now()
+                                       WHERE id = :i AND status = 'asserted' AND valid_to IS NULL RETURNING id"""), {"t": at, "i": r.id})
+        out.closed.extend(x[0] for x in res.all())
+    return out
+
+
 # ─── lượt nhiều sự thật + thử lại ──────────────────────────────────────────
 
 @dataclass
