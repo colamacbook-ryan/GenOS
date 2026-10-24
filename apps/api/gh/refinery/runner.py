@@ -773,6 +773,7 @@ RETRY_BACKOFF = timedelta(minutes=5)
 HISTORY_EVIDENCE_MAX = 10          # tin bằng chứng của khối Lịch sử thêm vào tin ngữ cảnh (để trích được)
 HISTORY_EVIDENCE_CHARS = 3000
 ACK_LOOKBACK = timedelta(days=1)    # biên lệch giờ của cận dưới updated_at/received_at lời xác nhận (index org/state/updated_at + partition)
+BACKLOG_DONE_MAX = 500              # trần đếm "tin sau cửa sổ đã phân tích" (truy vấn có cận; dòng prompt ghi "N" tối đa giá trị này)
 ACK_MAX = 30                        # lời xác nhận ngắn (đã loại khỏi lượt) đưa lại vào cửa sổ làm bằng chứng "đã xử lý"
 FREE_MODE_RETRY = timedelta(minutes=15)
 TEMPLATE_WINDOW = timedelta(days=7)
@@ -1522,10 +1523,12 @@ class GroupTurns:
             if b.reply_ext and b.reply_ext in by_ext and by_ext[b.reply_ext] != b.message_id:
                 ge.reply_to = by_ext[b.reply_ext]
         first = min(b.occurred_at for b in blocks)
-        acks = await self._acks(db, org_id, tk, blocks, first)
+        backlog, next_unseen = await self._backlog(db, org_id, tk, blocks)
+        acks = await self._acks(db, org_id, tk, blocks, await self._ack_from(db, org_id, tk, first), until=next_unseen)
         if acks:
             new_events = sorted([*new_events, *acks], key=lambda e: e.sent_at)
-        ctx_events = await self._context(db, org_id, tk, blocks, first)
+        ack_ids = {a.raw_event_id for a in acks}
+        ctx_events = [c for c in await self._context(db, org_id, tk, blocks, first) if c.raw_event_id not in ack_ids]
         pack = await retrieve.pack(db, org_id, tk, [{"sender_person_id": b.person_id, "raw_event_id": b.event_id, "text": b.body}
                                                     for b in blocks], now=clock.now())
         ctx_events = await self._history_evidence(db, org_id, tk, blocks, ctx_events, pack)
@@ -1549,8 +1552,41 @@ class GroupTurns:
         profile = await profile_read.snapshot(db, org_id)
         preds = [(p.code, p.description_vi) for p in await predicates.all_predicates(db)]
         window = l3.GroupWindow(thread_ref=tk, new_events=new_events, context_events=ctx_events, media_texts=media,
-                                unreadable=unreadable, now=clock.now(), group_name=gname, predicates=preds)
+                                unreadable=unreadable, now=clock.now(), group_name=gname, predicates=preds, backlog=backlog)
         return window, pack, profile
+
+    async def _backlog(self, db: AsyncSession, org_id: uuid.UUID, tk: str, blocks: list[GEv]) -> tuple[Any, datetime | None]:
+        """Phần luồng lượt này KHÔNG thấy (chỉ đếm + giờ gửi, không đọc nội dung):
+        (1) tin CHỜ (`pending`/`processing` của lượt khác) ngoài lượt: dư sau trần 60 tin/12.000 ký tự, tin tồn cũ hơn mà lượt an toàn/cổng
+        bỏ qua để nhận ứng viên trước, tin nhập lịch sử…; (2) tin gửi SAU tin cuối của lượt nhưng đã phân tích ở lượt trước (lượt an toàn/cổng
+        chạy trước, tin cũ tới trễ) — trừ tin không cần model. Trả (`l3.Backlog` hoặc None, giờ gửi sớm nhất của tin (1)/(2) sau tin cuối của
+        lượt — cận trên cho lời xác nhận ngắn)."""
+        mine = [m.event_id for b in blocks for m in b.all_events]
+        last = max(m.occurred_at for b in blocks for m in b.all_events)
+        p = (await db.execute(text("""
+            SELECT count(*) AS n, min(e.occurred_at) AS lo, max(e.occurred_at) AS hi,
+                   min(e.occurred_at) FILTER (WHERE e.occurred_at > :last) AS nxt
+            FROM refinery.event_state s JOIN raw.events e ON e.id = s.event_id AND e.received_at = s.event_received_at
+            WHERE s.org_id = :o AND s.state IN ('pending', 'processing') AND s.detail ->> 'thread_key' = :t
+              AND NOT (s.event_id = ANY(:mine))"""), {"o": org_id, "t": tk, "mine": mine, "last": last})).one()
+        d_n, d_at = 0, None
+        scope = await self._thread_scope(db, tk)
+        if scope is not None:
+            where, sp = scope
+            # chỉ tin MODEL đã phân tích (có analysis_id) — tin bị bộ lọc/luật loại không phải "đã được phân tích"; trần BACKLOG_DONE_MAX dòng
+            d = (await db.execute(text(f"""
+                SELECT count(*) AS n, min(x.occurred_at) AS lo FROM (
+                    SELECT e.occurred_at
+                    FROM raw.events e JOIN refinery.event_state s ON s.event_id = e.id AND s.event_received_at = e.received_at
+                    WHERE e.org_id = :o AND {where} AND e.occurred_at > :last AND NOT (e.id = ANY(:mine))
+                      AND s.state NOT IN ('pending', 'processing', 'error') AND s.detail ->> 'thread_key' = :t AND s.detail ? 'analysis_id'
+                    ORDER BY e.occurred_at LIMIT :cap) x"""),  # noqa: S608 — `where` là hằng + outbound_to_sql nội bộ
+                                  {"o": org_id, "t": tk, "mine": mine, "last": last, "cap": BACKLOG_DONE_MAX, **sp})).one()
+            d_n, d_at = int(d.n), d.lo
+        if not p.n and not d_n:
+            return None, None
+        until = min((x for x in (p.nxt, d_at) if x is not None), default=None)
+        return l3.Backlog(int(p.n), p.lo, p.hi, d_n, d_at), until
 
     async def _history_evidence(self, db: AsyncSession, org_id: uuid.UUID, tk: str, blocks: list[GEv], ctx_events: list[Any],
                                 pack: Any) -> list[Any]:
@@ -1587,11 +1623,29 @@ class GroupTurns:
             extra.append(self._ctx_event(r))
         return sorted([*ctx_events, *extra], key=lambda c: c.sent_at)
 
-    async def _acks(self, db: AsyncSession, org_id: uuid.UUID, tk: str, blocks: list[GEv], first: datetime) -> list[Any]:
-        """Lời xác nhận ngắn ("Dạ e ghi nhận ạ", "ok ạ") của CÙNG luồng, từ tin mới đầu tiên trở đi (cận dưới updated_at/received_at = mốc cũ hơn
+    async def _ack_from(self, db: AsyncSession, org_id: uuid.UUID, tk: str, first: datetime) -> datetime:
+        """Cận dưới lời xác nhận ngắn của lượt: ngay SAU tin đã phân tích gần nhất trước cửa sổ (tối đa `CONTEXT_WINDOW` trước tin mới
+        đầu). Lời xác nhận đến giữa hai lượt ("Dạ chị nhận được rồi nha" trước tin kích hoạt) không tự kích hoạt lượt nào; trước đây nó chỉ
+        hiện ở tin ngữ cảnh ("đã xử lý") nên không bao giờ là tin mới của lượt nào (review fix-gkb2 M2)."""
+        lo = first - CONTEXT_WINDOW
+        scope = await self._thread_scope(db, tk)
+        if scope is None:
+            return first
+        where, sp = scope
+        prev = (await db.execute(text(f"""
+            SELECT e.occurred_at FROM raw.events e JOIN refinery.event_state s ON s.event_id = e.id AND s.event_received_at = e.received_at
+            WHERE e.org_id = :o AND {where} AND e.occurred_at < :first AND e.occurred_at >= :lo AND s.detail ? 'analysis_id'
+            ORDER BY e.occurred_at DESC LIMIT 1"""), {"o": org_id, "first": first, "lo": lo, **sp})).scalar_one_or_none()  # noqa: S608
+        return (prev + timedelta(microseconds=1)) if prev is not None else lo
+
+    async def _acks(self, db: AsyncSession, org_id: uuid.UUID, tk: str, blocks: list[GEv], first: datetime, *,
+                    until: datetime | None = None) -> list[Any]:
+        """Lời xác nhận ngắn ("Dạ e ghi nhận ạ", "ok ạ") của CÙNG luồng, từ `first` (= `_ack_from`: ngay sau tin đã phân tích gần nhất) trở đi (cận dưới updated_at/received_at = mốc cũ hơn
         giữa giờ gửi và giờ vào kho của tin mới đầu, trừ `ACK_LOOKBACK` — truy vấn có cận theo cột có index, không cắt ack thuộc cửa sổ). Chúng không kích hoạt lượt, không
         tính trần/đếm tin (vẫn `discarded`, lý do `ack`) nhưng là BẰNG CHỨNG "đã xử lý" — thiếu chúng model báo nhầm "đơn chưa được xác
-        nhận" (lỗi kb1 #4). Đưa vào cửa sổ đúng chỗ theo thời gian, tối đa `ACK_MAX` tin (mỗi tin ≤ 24 ký tự)."""
+        nhận" (lỗi kb1 #4). Đưa vào cửa sổ đúng chỗ theo thời gian, tối đa `ACK_MAX` tin (mỗi tin ≤ 24 ký tự). `until` = giờ gửi tin chờ đầu
+        tiên SAU cửa sổ (luồng còn tồn đọng): ack từ mốc đó trở đi thuộc lượt sau — đưa vào lượt này thì nó thành "hoạt động mới nhất" của
+        nhóm, che mất phần tồn đọng (lỗi kb1-r2: sticker 05–07/10 trong lượt tới 26/09)."""
         have = {m.event_id for b in blocks for m in b.all_events}
         rows = (await db.execute(text("""
             SELECT e.id, e.received_at, e.occurred_at, e.kind, e.body_text, e.payload, e.external_msg_id, e.sender_identity_id,
@@ -1601,9 +1655,9 @@ class GroupTurns:
             LEFT JOIN core.persons p ON p.id = pi.person_id
             WHERE s.org_id = :o AND s.state = 'discarded' AND s.updated_at >= :lo AND s.event_received_at >= :lo AND e.received_at >= :lo
               AND s.detail ->> 'thread_key' = :t AND s.detail ->> 'reason' = 'ack'
-              AND e.occurred_at >= :first AND e.occurred_at <= :now
+              AND e.occurred_at >= :first AND e.occurred_at <= :now AND (CAST(:until AS timestamptz) IS NULL OR e.occurred_at < :until)
             ORDER BY e.occurred_at LIMIT :n"""),
-                                 {"o": org_id, "t": tk, "first": first, "now": clock.now(), "n": ACK_MAX,
+                                 {"o": org_id, "t": tk, "first": first, "now": clock.now(), "n": ACK_MAX, "until": until,
                                   # mốc CŨ HƠN giữa giờ gửi tin mới đầu và giờ vào kho của tin mới, trừ biên lệch giờ: ack có
                                   # occurred_at ≥ first thì vào kho/được quét ≥ first − biên ⇒ không bao giờ bị cắt, truy vấn vẫn có cận
                                   "lo": min(first, min(b.received_at for b in blocks)) - ACK_LOOKBACK})).all()
@@ -1746,6 +1800,7 @@ class GroupTurns:
                 except Exception as exc:  # noqa: BLE001 — sự thật đề xuất lỗi ghi: đơn vị đã ghi vẫn giữ
                     log.error("Ghi sự thật của lượt %s lỗi: %s", aid, err_code(exc))
                     errors.append({"code": "facts_write_failed", "n": len(fact_ins), "error": type(exc).__name__})
+            await self._promises_kept(db, org_id, aid, verified, window, evs, tk, errors)
             # trạng thái từng tin: có đơn vị trích ⇒ clean; còn lại ⇒ discarded (không có sự việc)
             held: set[uuid.UUID] = set()
             for e in evs:
@@ -1803,6 +1858,49 @@ class GroupTurns:
             await self.r._raw_state(org_id, e, "clean" if ok else "discarded", cited.get(e.event_id) or ("Noise" if not ok else None),
                                     UNVERIFIED_CONFIDENCE if ok else None)
         await self.r._embed(org_id, unit_rows)
+
+    async def _promises_kept(self, db: AsyncSession, org_id: uuid.UUID, aid: uuid.UUID, verified: Any, window: Any, evs: list[GEv],
+                             tk: str, errors: list[dict[str, Any]]) -> None:
+        """`memory_updates.promise_kept` ⇒ đóng hiệu lực lời hứa trong sổ qua cổng tin cậy của `facts.close_kept` (kỹ năng v2.1 §9.3:
+        [tin hứa, tin đã giữ]). Cờ của từng tin được trích (tin mới của lượt? chuyển tiếp? có chữ? luồng, trả lời tin nào) lấy từ kho thô,
+        không từ model. Đếm `promise_kept_closed` / `promise_kept_untrusted` / `promise_kept_unmatched` (mã + số, không nội dung)."""
+        by_mid = {e.message_id: e for e in window.all_events if e.raw_event_id is not None}
+        mine = {e.event_id: e for e in evs}
+        for mu in verified.memory_updates:
+            if mu.type != "promise_kept":
+                continue
+            cited: list[Any] = []
+            for i in dict.fromkeys(mu.message_ids):
+                ge = by_mid.get(i)
+                if ge is None:
+                    continue
+                g = mine.get(ge.raw_event_id)
+                # tin mới của lượt = tin được nhận vào lượt + lời xác nhận ngắn đưa vào cửa sổ (`_acks`, context=False, cùng luồng)
+                fresh = g is not None or not ge.context
+                reply_raw = None
+                if g is not None and g.reply_ext:
+                    reply_raw = (await db.execute(text("""SELECT id FROM raw.events WHERE org_id = :o AND channel_id = :c AND external_msg_id = :x
+                                                          LIMIT 1"""), {"o": org_id, "c": g.channel_id, "x": g.reply_ext})).scalar_one_or_none()
+                cited.append(facts_mod.KeptMsg(
+                    ge.raw_event_id, ge.sent_at, g.person_id if g is not None else ge.sender_person_id, new=fresh,
+                    forwarded=bool(g.forwarded if g is not None else ge.forwarded),
+                    has_text=bool(((g.body if g is not None else ge.body) or "").strip()), thread_key=tk if fresh else None,
+                    reply_to_raw=reply_raw, ack=g is None and not ge.context))
+            try:
+                async with db.begin_nested():
+                    res = await facts_mod.close_kept(db, org_id, cited)
+            except Exception as exc:  # noqa: BLE001 — đóng lời hứa lỗi: lượt vẫn ghi, mã lỗi vào analyses
+                log.error("Đóng lời hứa đã giữ của lượt %s lỗi: %s", aid, err_code(exc))
+                errors.append({"code": "promise_kept_failed", "error": type(exc).__name__})
+                continue
+            if res.closed:
+                verified.bump("promise_kept_closed", len(res.closed))
+            for code, n in (("promise_kept_untrusted", res.untrusted), ("promise_kept_ambiguous", res.ambiguous),
+                            ("promise_kept_self_report", res.self_report)):
+                if n:
+                    verified.bump(code, n)
+            if not (res.closed or res.untrusted or res.ambiguous or res.self_report):
+                verified.bump("promise_kept_unmatched")
 
     async def _ctx_gevs(self, org_id: uuid.UUID, ids: list[tuple[uuid.UUID, datetime]]) -> dict[uuid.UUID, GEv]:
         """`GEv` đầy đủ (người gửi + mã người, nhóm, hướng) cho tin ngữ cảnh/bằng chứng của cửa sổ — để đơn vị trích chúng được ghi

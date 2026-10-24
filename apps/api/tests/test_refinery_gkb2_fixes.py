@@ -1,0 +1,618 @@
+# ruff: noqa: E501
+"""Sửa sau lần chạy G-KB kb1 lần 2 (kb1-r2, pipeline thật + agent đóng vai model):
+
+(i) lượt nhận một phần tồn đọng của luồng (trần 60 tin, lượt an toàn nhận ứng viên trước, nhập lịch sử…) không biết còn tin đã đến
+    mà chưa đưa vào ⇒ model kết luận "khách nguội/không đặt hàng". Lượt phải BIẾT phần tồn đọng (đếm + khoảng giờ gửi, không nội dung),
+    và lời xác nhận ngắn (ack) lấy làm bằng chứng không được vượt qua tin tồn đọng đầu tiên sau cửa sổ.
+(ii) `memory_updates.promise_kept` bị bỏ qua ⇒ sự thật `promised_to` mãi "đang hiệu lực". Lời hứa đã giữ ĐÓNG hiệu lực
+    (`valid_to` = giờ gửi tin chứng minh đã giữ), không xoá, không đổi trạng thái (spec §4A.1 CNS-095, kỹ năng v2.1 §9.3)."""
+
+import uuid
+from datetime import UTC, datetime, timedelta
+
+from sqlalchemy import text
+
+from gh.biz.mem import contexts, profile_read
+from gh.biz.mem.profile_read import ProfileSnapshot
+from gh.biz.mem.retrieve import ContextPack
+from gh.db import sessionmaker
+from gh.refinery import extract
+from gh.refinery.brain_contract import BrainOut, FactObject, FactProposed, FactSubject, MemoryUpdate, Quote
+from gh.refinery.runner import Refinery
+from tests.phase2 import FakeRouter, listen, msg, org_id, put
+from tests.refinery_group_helpers import Analyzer, enable_groups, find_msg, out_with, unit_for
+
+THREAD = "g:6f1c7e2a-0000-4000-8000-000000000001"
+NOW = datetime(2026, 10, 8, 10, 10, tzinfo=UTC)
+
+
+async def setup(db):  # type: ignore[no-untyped-def]
+    org = await org_id(db)
+    gid = await listen(db, org, "g1")
+    await enable_groups(db, org)
+    return org, gid
+
+
+def refinery(sm, redis, analyzer: Analyzer) -> Refinery:  # type: ignore[no-untyped-def]
+    return Refinery(sm, redis, FakeRouter(), None, analyzer=analyzer)
+
+
+async def person_of(db, ext: str) -> uuid.UUID:  # type: ignore[no-untyped-def]
+    return (await db.execute(text("SELECT person_id FROM core.person_identities WHERE external_id LIKE :e || '%' LIMIT 1"),
+                             {"e": ext})).scalar_one()  # type: ignore[no-any-return]
+
+
+# ─── (i) phần tồn đọng của luồng ─────────────────────────────────────────────────────────────────────────────────────
+
+def _prompt(backlog: "extract.Backlog | None") -> str:
+    ev = [extract.GroupEvent("m_1", NOW - timedelta(days=12), "Chị lấy 20kg Blend Honey nha", None, "Chị An", raw_event_id=uuid.uuid4())]
+    w = extract.GroupWindow(THREAD, ev, now=NOW, backlog=backlog)
+    pol = contexts.unconfirmed(THREAD)
+    return extract.build_user_prompt(w, ContextPack(THREAD, pol, 0), ProfileSnapshot(uuid.uuid4(), 0, None, ()), pol)
+
+
+def test_prompt_states_unseen_backlog_with_count_and_time_range_only() -> None:
+    p = _prompt(extract.Backlog(44, NOW - timedelta(days=10), NOW - timedelta(hours=1)))
+    tail = p[p.index("Bây giờ"):]
+    assert "44 tin" in tail and "2026-09-28T17:10+0700" in tail and "2026-10-08T16:10+0700" in tail
+    assert "im lặng" in tail                                         # cấm kết luận vắng mặt/im lặng khi chưa thấy các tin đó
+    assert _prompt(None).count("chưa đưa vào lượt này") == 0 and "chưa đưa vào lượt này" in tail
+    assert _prompt(extract.Backlog(0, NOW, NOW)).count("chưa đưa vào lượt này") == 0
+    done = _prompt(extract.Backlog(0, done_after=3, done_after_at=NOW - timedelta(days=2)))
+    assert "chưa đưa vào lượt này" not in done and "3 tin gửi từ 2026-10-06T17:10+0700 trở đi đã được phân tích ở lượt trước" in done
+
+
+async def test_carry_turn_knows_its_backlog_and_acks_stop_at_the_first_unseen_message(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """kb1-r2 lượt 3: 60 tin tới 26/09 + 2 sticker/"ok" của 05–07/10 (vượt qua 44 tin tồn của chị An 28/09–08/10), "Bây giờ" 08/10
+    ⇒ model chấm "chị An nguội". Lượt nối tiếp phải mang phần tồn đọng; ack chỉ lấy tới trước tin tồn đọng đầu tiên."""
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    base = datetime.now(UTC) - timedelta(days=20)
+    payloads = []
+    for i in range(65):                                                    # 65 người khác nhau (không chuỗi) ⇒ lượt đầu 60, dư 5
+        p = msg(f"Tin số {i} về đơn hàng nhé", sender=f"s{i}", name=f"Người {i}")
+        p["occurred_at"] = (base + timedelta(hours=6 * i)).isoformat()
+        payloads.append(p)
+    early_ack = msg("Dạ e ghi nhận ạ", sender="thao", name="Thảo")          # nằm GIỮA cửa sổ lượt đầu ⇒ vẫn là bằng chứng của lượt đầu
+    early_ack["occurred_at"] = (base + timedelta(hours=6 * 30 + 1)).isoformat()
+    late_ack = msg("ok em", sender="ly", name="Ly")                          # nằm SAU tin tồn đọng đầu tiên (tin 60) ⇒ không thuộc lượt đầu
+    late_ack["occurred_at"] = (base + timedelta(hours=6 * 62 + 1)).isoformat()
+    await put(sm, org, *payloads, early_ack, late_ack)
+    an = Analyzer()
+    r = refinery(sm, redis, an)
+    await r.run(org, "manual")
+    w1 = an.windows[0]
+    bodies1 = [e.body for e in w1.new_events]
+    assert sum(1 for b in bodies1 if b and b.startswith("Tin số")) == 60
+    assert "Dạ e ghi nhận ạ" in bodies1 and "ok em" not in bodies1
+    assert w1.backlog is not None and w1.backlog.n == 5
+    assert w1.backlog.first_at == base + timedelta(hours=6 * 60) and w1.backlog.last_at == base + timedelta(hours=6 * 64)
+    prompt = extract.build_user_prompt(w1, an.packs[0], await profile_read.snapshot(db, org), an.packs[0].policy)
+    assert "5 tin" in prompt[prompt.index("Bây giờ"):]
+    assert "Tin số 61" not in prompt                                         # phần tồn đọng chỉ có đếm + giờ, không nội dung
+    await r.run(org, "manual")
+    w2 = an.windows[1]
+    assert [e.body for e in w2.new_events] == ["Tin số 60 về đơn hàng nhé", "Tin số 61 về đơn hàng nhé", "Tin số 62 về đơn hàng nhé",
+                                               "ok em", "Tin số 63 về đơn hàng nhé", "Tin số 64 về đơn hàng nhé"]
+    assert w2.backlog is None                                                # hết tồn đọng ⇒ không có dòng cảnh báo
+
+
+async def test_safety_turn_knows_the_older_backlog_it_skipped(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """Lượt an toàn nhận ứng viên trước tin tồn cũ hơn (đúng spec) ⇒ phải biết còn tin cũ hơn chưa thấy; lượt thường sau đó (tin cũ hơn)
+    phải biết các tin MỚI hơn đã phân tích ở lượt an toàn, và không nhận lời xác nhận ngắn nằm sau chúng (kb1-r2 lượt 19→20)."""
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    base = datetime.now(UTC) - timedelta(hours=5)
+    for i in range(8):
+        p = msg(f"Tin thường số {i} về hàng nhé", sender=f"n{i}", name=f"Người {i}")
+        p["occurred_at"] = (base + timedelta(minutes=i)).isoformat()
+        await put(sm, org, p)
+    otp = msg("Em lỡ nhập mã OTP vào link đó rồi", sender="victim", name="Nạn nhân")
+    otp["occurred_at"] = (base + timedelta(minutes=200)).isoformat()
+    ack = msg("ok em", sender="ly", name="Ly")
+    ack["occurred_at"] = (base + timedelta(minutes=201)).isoformat()
+    await put(sm, org, otp, ack)
+    an = Analyzer()
+    r = refinery(sm, redis, an)
+    await r.run(org, "schedule")
+    w = an.windows[0]
+    taken = {e.body for e in w.new_events}
+    assert "Em lỡ nhập mã OTP vào link đó rồi" in taken
+    normal_in_safety = sum(1 for b in taken if b and b.startswith("Tin thường"))
+    assert w.backlog is not None and w.backlog.n == 8 - normal_in_safety and w.backlog.done_after == 0
+    assert w.backlog.first_at == base
+    await r.run(org, "manual")
+    w2 = an.windows[1]
+    assert all((e.body or "").startswith("Tin thường") for e in w2.new_events) and "ok em" not in [e.body for e in w2.new_events]
+    assert w2.backlog is not None and w2.backlog.n == 0 and w2.backlog.done_after == normal_in_safety + 1
+    assert w2.backlog.done_after_at == base + timedelta(minutes=8 - normal_in_safety)
+    prompt = extract.build_user_prompt(w2, an.packs[1], await profile_read.snapshot(db, org), an.packs[1].policy)
+    assert "đã được phân tích ở lượt trước" in prompt and "OTP" not in prompt[prompt.index("Bây giờ"):]
+
+
+# ─── (ii) lời hứa đã giữ đóng hiệu lực sự thật ───────────────────────────────────────────────────────────────────────
+
+def _promise_turn(khoa: uuid.UUID, an_p: uuid.UUID):  # type: ignore[no-untyped-def]
+    def build(w):  # type: ignore[no-untyped-def]
+        u = unit_for(w, "tuần sau e gửi chị 2 túi mẫu decaf", kind="nghia_vu_loi_hua", summary="Khoa hứa gửi chị An 2 túi decaf")
+        promise = find_msg(w, "tuần sau e gửi").message_id
+        ask = find_msg(w, "có decaf không").message_id
+        u = u.model_copy(update={"quotes": [*u.quotes, Quote(message_id=ask, field="body", text="bên mình có decaf không")]})
+        return out_with(w, u, facts=[
+            FactProposed(unit_ref="u1", subject=FactSubject(surface="Khoa", person_ref=f"u_{khoa}"), predicate="promised_to",
+                         object=FactObject(value="gửi 2 túi mẫu decaf", person_ref=f"u_{an_p}"), quote_refs=[promise]),
+            FactProposed(unit_ref="u1", subject=FactSubject(surface="chị An", person_ref=f"u_{an_p}"), predicate="needs",
+                         object=FactObject(value="cà phê decaf"), quote_refs=[ask])])
+    return build
+
+
+async def _seed_promise(db, sm, redis, org):  # type: ignore[no-untyped-def]
+    t0 = datetime.now(UTC) - timedelta(hours=10)
+    ask = msg("Khoa ơi bên mình có decaf không, khách bầu hỏi hoài", sender="an", name="An Hội An Cafe")
+    pr = msg("Dạ tuần sau e gửi chị 2 túi mẫu decaf thử nha", sender="khoa", name="Khoa Rang Xay MR")
+    ask["occurred_at"], pr["occurred_at"] = t0.isoformat(), (t0 + timedelta(minutes=18)).isoformat()
+    await put(sm, org, ask, pr)
+    an_p, khoa = await person_of(db, "an"), await person_of(db, "khoa")
+    r = refinery(sm, redis, Analyzer(_promise_turn(khoa, an_p)))
+    await r.run(org, "manual")
+    return r, t0
+
+
+async def _facts(db):  # type: ignore[no-untyped-def]
+    return {x.predicate: x for x in (await db.execute(text(
+        "SELECT id, predicate, status, valid_from, valid_to, closed_recorded_at FROM mem.facts ORDER BY predicate"))).all()}
+
+
+async def test_promise_kept_closes_the_promise_fact_by_valid_to_without_deleting(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    r, t0 = await _seed_promise(db, sm, redis, org)
+    before = await _facts(db)
+    assert before["promised_to"].valid_to is None and before["promised_to"].status == "asserted"
+    kept = msg("Nhận 2 túi decaf rồi nha Khoa, khách khen thơm 👍", sender="an", name="An Hội An Cafe")
+    kept_at = t0 + timedelta(hours=6)
+    kept["occurred_at"] = kept_at.isoformat()
+    await put(sm, org, kept)
+
+    def build(w):  # type: ignore[no-untyped-def]
+        ids = [find_msg(w, "tuần sau e gửi").message_id, find_msg(w, "Nhận 2 túi decaf").message_id]       # tin hứa (ngữ cảnh) + tin giữ
+        return BrainOut(thread_ref=w.thread_ref, memory_updates=[MemoryUpdate(type="promise_kept", text="Khoa đã gửi decaf, chị An đã nhận", message_ids=ids)])
+    r.groups.analyze = Analyzer(build)
+    await r.run(org, "manual")
+    after = await _facts(db)
+    p = after["promised_to"]
+    assert p.id == before["promised_to"].id and p.status == "asserted"            # không xoá, không đổi trạng thái (CNS-095)
+    assert p.valid_to == kept_at and p.closed_recorded_at is not None
+    assert after["needs"].valid_to is None                                         # spec không có đường đóng `needs` khi được đáp ứng
+    ev = (await db.execute(text("SELECT by, reason, valid_to_after FROM mem.fact_status_events WHERE fact_id = :f AND valid_to_after IS NOT NULL"),
+                           {"f": p.id})).all()
+    assert [(e.by, e.reason) for e in ev] == [("extractor", "promise_kept")]
+    # lượt sau: khối "Sự thật đã biết" không còn lời hứa đã giữ
+    await put(sm, org, msg("Tuần này chị lấy 20kg Blend Honey nha", sender="an", name="An Hội An Cafe"))
+    an3 = Analyzer()
+    r.groups.analyze = an3
+    await r.run(org, "manual")
+    texts = [i.text for i in an3.packs[-1].facts]
+    assert not any("promised_to" in t for t in texts) and any("needs" in t for t in texts)
+
+
+async def test_promise_kept_without_the_promise_message_closes_nothing(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """Không có mã tin hứa ⇒ không đoán lời hứa nào (không nối theo chữ); đếm `promise_kept_unmatched` để G-KB thấy."""
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    r, t0 = await _seed_promise(db, sm, redis, org)
+    kept = msg("Nhận 2 túi decaf rồi nha Khoa", sender="an", name="An Hội An Cafe")
+    kept["occurred_at"] = (t0 + timedelta(hours=6)).isoformat()
+    await put(sm, org, kept)
+
+    def build(w):  # type: ignore[no-untyped-def]
+        return BrainOut(thread_ref=w.thread_ref, memory_updates=[MemoryUpdate(type="promise_kept", text="đã nhận decaf",
+                                                                              message_ids=[find_msg(w, "Nhận 2 túi decaf").message_id])])
+    r.groups.analyze = Analyzer(build)
+    await r.run(org, "manual")
+    assert (await _facts(db))["promised_to"].valid_to is None
+    errs = (await db.execute(text("SELECT errors FROM refinery.analyses ORDER BY started_at DESC LIMIT 1"))).scalar_one()
+    assert {"code": "promise_kept_unmatched", "n": 1} in errs
+
+
+# ─── (ii) cổng tin cậy: model đọc chữ người ngoài ⇒ promise_kept chỉ là đề xuất ──────────────────────────────────────────
+
+async def _seed_debt(db, sm, redis, org):  # type: ignore[no-untyped-def]
+    t0 = datetime.now(UTC) - timedelta(hours=10)
+    debt = msg("Chị An ơi em nợ chị 5 triệu tiền hàng, cuối tuần em trả nha", sender="tuan", name="Tuấn Quán Cóc")
+    debt["occurred_at"] = t0.isoformat()
+    other = msg("Chị An cho em hỏi giá Culi tuần này", sender="an", name="An Hội An Cafe")
+    other["occurred_at"] = (t0 + timedelta(minutes=1)).isoformat()
+    await put(sm, org, debt, other)
+    an_p, tuan = await person_of(db, "an"), await person_of(db, "tuan")
+
+    def build(w):  # type: ignore[no-untyped-def]
+        u = unit_for(w, "em nợ chị 5 triệu tiền hàng", kind="nghia_vu_loi_hua", summary="Tuấn nợ chị An 5 triệu")
+        return out_with(w, u, facts=[FactProposed(unit_ref="u1", subject=FactSubject(surface="Tuấn", person_ref=f"u_{tuan}"), predicate="owes",
+                                                  object=FactObject(value="5 triệu tiền hàng", person_ref=f"u_{an_p}"),
+                                                  quote_refs=[find_msg(w, "em nợ chị 5 triệu").message_id])])
+    r = refinery(sm, redis, Analyzer(build))
+    await r.run(org, "manual")
+    return r, t0
+
+
+async def _claim_kept(sm, r, org, body: str, sender: str, name: str, at: datetime) -> None:  # type: ignore[no-untyped-def]
+    p = msg(body, sender=sender, name=name)
+    p["occurred_at"] = at.isoformat()
+    await put(sm, org, p)
+
+    def build(w):  # type: ignore[no-untyped-def]
+        ids = [find_msg(w, "em nợ chị 5 triệu").message_id, find_msg(w, body).message_id]
+        return BrainOut(thread_ref=w.thread_ref, memory_updates=[MemoryUpdate(type="promise_kept", text="đã trả", message_ids=ids)])
+    r.groups.analyze = Analyzer(build)
+    await r.run(org, "manual")
+
+
+async def _last_errors(db):  # type: ignore[no-untyped-def]
+    return (await db.execute(text("SELECT errors FROM refinery.analyses ORDER BY started_at DESC LIMIT 1"))).scalar_one()
+
+
+async def test_promise_kept_attack_third_party_or_debtor_saying_paid_never_closes_a_debt(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """Người thứ ba (không phải chủ nợ) nhắn "Tuấn trả rồi đó", model báo promise_kept ⇒ khoản nợ VẪN hiệu lực; con nợ tự nhận "em trả
+    rồi" cũng không đóng được; chỉ chủ nợ (hoặc Sếp) xác nhận mới đóng."""
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    r, t0 = await _seed_debt(db, sm, redis, org)
+    await _claim_kept(sm, r, org, "Tuấn trả chị An rồi đó mọi người", "lan", "Lan Lạ Mặt", t0 + timedelta(hours=1))
+    assert (await _facts(db))["owes"].valid_to is None
+    assert {"code": "promise_kept_untrusted", "n": 1} in await _last_errors(db)
+    await _claim_kept(sm, r, org, "Em chuyển trả chị 5 triệu rồi nha", "tuan", "Tuấn Quán Cóc", t0 + timedelta(hours=2))
+    assert (await _facts(db))["owes"].valid_to is None                            # con nợ tự nói "đã trả" ⇒ không đóng khoản tiền
+    assert {"code": "promise_kept_self_report", "n": 1} in await _last_errors(db)
+    paid_at = t0 + timedelta(hours=3)
+    await _claim_kept(sm, r, org, "Chị nhận đủ 5 triệu rồi nha Tuấn", "an", "An Hội An Cafe", paid_at)
+    f = (await _facts(db))["owes"]
+    assert f.valid_to == paid_at and f.status == "asserted"
+
+
+async def test_promise_kept_needs_a_new_message_of_this_turn_not_a_context_message(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """Tin "đã nhận" chỉ nằm ở tin ngữ cảnh (đã xử lý lượt trước) ⇒ không đóng; đóng đúng sự thật có tin nguồn được trích, không đóng
+    sự thật khác chỉ vì tin đó là bằng chứng phụ."""
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    r, t0 = await _seed_promise(db, sm, redis, org)
+    kept = msg("Nhận 2 túi decaf rồi nha Khoa", sender="an", name="An Hội An Cafe")
+    kept["occurred_at"] = (t0 + timedelta(hours=1)).isoformat()
+    await put(sm, org, kept)
+    r.groups.analyze = Analyzer()                                                  # lượt này model không báo gì
+    await r.run(org, "manual")
+    await put(sm, org, msg("Tuần sau chị lấy thêm 10kg nha", sender="an", name="An Hội An Cafe"))
+
+    def build(w):  # type: ignore[no-untyped-def]
+        ids = [find_msg(w, "tuần sau e gửi").message_id, find_msg(w, "Nhận 2 túi decaf").message_id]      # cả hai là tin ngữ cảnh
+        assert all(find_msg(w, n).context for n in ("tuần sau e gửi", "Nhận 2 túi decaf"))
+        return BrainOut(thread_ref=w.thread_ref, memory_updates=[MemoryUpdate(type="promise_kept", text="đã nhận", message_ids=ids)])
+    r.groups.analyze = Analyzer(build)
+    await r.run(org, "manual")
+    assert (await _facts(db))["promised_to"].valid_to is None
+    # trích tin hỏi decaf của chị An (nguồn của `needs`, bằng chứng phụ của lời hứa) không đóng lời hứa và không đóng `needs`
+    kept2 = msg("Decaf ngon lắm Khoa", sender="an", name="An Hội An Cafe")
+    kept2["occurred_at"] = (t0 + timedelta(hours=2)).isoformat()
+    await put(sm, org, kept2)
+
+    def build2(w):  # type: ignore[no-untyped-def]
+        ids = [find_msg(w, "có decaf không").message_id, find_msg(w, "Decaf ngon lắm").message_id]
+        return BrainOut(thread_ref=w.thread_ref, memory_updates=[MemoryUpdate(type="promise_kept", text="đã nhận", message_ids=ids)])
+    r.groups.analyze = Analyzer(build2)
+    await r.run(org, "manual")
+    fs = await _facts(db)
+    assert fs["promised_to"].valid_to is None and fs["needs"].valid_to is None
+
+
+async def _kept_turn(sm, r, org, t0, *extra: dict, cite: tuple[str, ...]) -> None:  # type: ignore[type-arg]
+    await put(sm, org, *extra)
+
+    def build(w):  # type: ignore[no-untyped-def]
+        ids = [find_msg(w, "tuần sau e gửi").message_id, *(find_msg(w, n).message_id for n in cite)]
+        return BrainOut(thread_ref=w.thread_ref, memory_updates=[MemoryUpdate(type="promise_kept", text="đã nhận", message_ids=ids)])
+    r.groups.analyze = Analyzer(build)
+    await r.run(org, "manual")
+
+
+async def test_promise_kept_attack_forwarded_confirmation_from_an_allowed_sender_does_not_close(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """Chính bên được hứa CHUYỂN TIẾP tin/ảnh "đã nhận" của người khác ⇒ tin chuyển tiếp không phải bằng chứng đã giữ."""
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    r, t0 = await _seed_promise(db, sm, redis, org)
+    fw = msg("Nhận 2 túi decaf rồi nha Khoa", sender="an", name="An Hội An Cafe")
+    fw["occurred_at"], fw["forwarded"] = (t0 + timedelta(hours=1)).isoformat(), True
+    await _kept_turn(sm, r, org, t0, fw, cite=("Nhận 2 túi decaf",))
+    assert (await _facts(db))["promised_to"].valid_to is None
+    assert {"code": "promise_kept_untrusted", "n": 1} in await _last_errors(db)
+
+
+async def test_promise_kept_attack_mixed_with_a_third_party_message_does_not_close(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """Model trích tin xác nhận hợp lệ của bên được hứa KÈM tin người thứ ba ⇒ không đóng (không chọn lọc hộ model)."""
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    r, t0 = await _seed_promise(db, sm, redis, org)
+    ok = msg("Nhận 2 túi decaf rồi nha Khoa", sender="an", name="An Hội An Cafe")
+    bad = msg("Khoa gửi rồi mà, tui thấy", sender="lan", name="Lan Lạ Mặt")
+    ok["occurred_at"], bad["occurred_at"] = (t0 + timedelta(hours=1)).isoformat(), (t0 + timedelta(hours=1, minutes=5)).isoformat()
+    await _kept_turn(sm, r, org, t0, ok, bad, cite=("Nhận 2 túi decaf", "Khoa gửi rồi mà"))
+    assert (await _facts(db))["promised_to"].valid_to is None
+    assert {"code": "promise_kept_untrusted", "n": 1} in await _last_errors(db)
+
+
+async def test_close_kept_requires_the_confirmation_in_the_promise_thread_or_a_reply_to_it(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """Phòng thủ tầng sâu: tin xác nhận ở luồng khác (dù đúng người, tin mới) không đóng; trả lời đúng tin hứa thì đóng."""
+    from gh.biz.mem import facts as facts_mod
+
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    _r, t0 = await _seed_promise(db, sm, redis, org)
+    f = (await _facts(db))["promised_to"]
+    src, an_p = (await db.execute(text("SELECT source_raw_event_id FROM mem.facts WHERE id = :i"), {"i": f.id})).scalar_one(), await person_of(db, "an")
+    tk = (await db.execute(text("SELECT detail ->> 'thread_key' FROM refinery.event_state WHERE event_id = :e"), {"e": src})).scalar_one()
+    promise = facts_mod.KeptMsg(src, t0 + timedelta(minutes=18), None, new=False, thread_key=tk)
+    other = uuid.uuid4()
+    res = await facts_mod.close_kept(db, org, [promise, facts_mod.KeptMsg(other, t0 + timedelta(hours=1), an_p, new=True, thread_key="g:" + str(uuid.uuid4()))])
+    assert res.closed == [] and res.untrusted == 1
+    res = await facts_mod.close_kept(db, org, [promise, facts_mod.KeptMsg(other, t0 + timedelta(hours=1), an_p, new=True, thread_key="dm:x", reply_to_raw=src)])
+    assert res.closed == [f.id]
+    await db.rollback()
+
+
+
+# ─── review fix-gkb2: mơ hồ nhiều sự thật, ack trong cửa sổ, người hứa tự báo, các điều kiện còn lại ─────────────────────────
+
+async def test_one_confirmation_never_closes_two_facts_of_the_same_source_message(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """"thứ 6 em chuyển chị 20tr, thứ 7 em qua lấy 50kg": An xác nhận "đã lấy 50kg" KHÔNG được đóng luôn khoản nợ 20tr ⇒ mơ hồ, không đóng."""
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    t0 = datetime.now(UTC) - timedelta(hours=10)
+    m = msg("Chị ơi thứ 6 em chuyển chị 20 triệu, thứ 7 em qua lấy thêm 50kg nha", sender="tuan", name="Tuấn")
+    m["occurred_at"] = t0.isoformat()
+    other = msg("ok để chị chuẩn bị hàng", sender="an", name="An")
+    other["occurred_at"] = (t0 + timedelta(minutes=1)).isoformat()
+    await put(sm, org, m, other)
+    an_p, tuan = await person_of(db, "an"), await person_of(db, "tuan")
+
+    def build(w):  # type: ignore[no-untyped-def]
+        u = unit_for(w, "thứ 6 em chuyển chị 20 triệu", kind="nghia_vu_loi_hua", summary="Tuấn hứa")
+        src = find_msg(w, "thứ 6 em chuyển").message_id
+        return out_with(w, u, facts=[
+            FactProposed(unit_ref="u1", subject=FactSubject(surface="Tuấn", person_ref=f"u_{tuan}"), predicate="owes",
+                         object=FactObject(value="20 triệu", person_ref=f"u_{an_p}"), quote_refs=[src]),
+            FactProposed(unit_ref="u1", subject=FactSubject(surface="Tuấn", person_ref=f"u_{tuan}"), predicate="promised_to",
+                         object=FactObject(value="qua lấy thêm 50kg", person_ref=f"u_{an_p}"), quote_refs=[src])])
+    r = refinery(sm, redis, Analyzer(build))
+    await r.run(org, "manual")
+    k = msg("Tuấn qua lấy 50kg rồi nha mọi người", sender="an", name="An")
+    k["occurred_at"] = (t0 + timedelta(hours=2)).isoformat()
+    await put(sm, org, k)
+
+    def build2(w):  # type: ignore[no-untyped-def]
+        ids = [find_msg(w, "thứ 6 em chuyển").message_id, find_msg(w, "Tuấn qua lấy 50kg").message_id]
+        return BrainOut(thread_ref=w.thread_ref, memory_updates=[MemoryUpdate(type="promise_kept", text="đã lấy 50kg", message_ids=ids)])
+    r.groups.analyze = Analyzer(build2)
+    await r.run(org, "manual")
+    fs = await _facts(db)
+    assert fs["owes"].valid_to is None and fs["promised_to"].valid_to is None
+    assert {"code": "promise_kept_ambiguous", "n": 1} in await _last_errors(db)
+
+
+async def test_short_ack_in_the_window_is_a_valid_confirmation(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """"Dạ chị nhận được rồi nha" (lời xác nhận ngắn, không tự kích hoạt lượt, được đưa lại vào cửa sổ) là tin MỚI của lượt."""
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    r, t0 = await _seed_promise(db, sm, redis, org)
+    ack = msg("Dạ chị nhận được rồi nha", sender="an", name="An Hội An Cafe")
+    ack_at = t0 + timedelta(hours=1)
+    ack["occurred_at"] = ack_at.isoformat()
+    trig = msg("Tuần sau chị lấy thêm 10kg Culi", sender="an", name="An Hội An Cafe")
+    trig["occurred_at"] = (t0 + timedelta(hours=1, minutes=2)).isoformat()
+    await _kept_turn(sm, r, org, t0, ack, trig, cite=("Dạ chị nhận được rồi nha",))
+    assert (await _facts(db))["promised_to"].valid_to == ack_at, await _last_errors(db)
+
+
+async def test_promiser_self_report_never_closes_but_the_promisee_does(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    r, t0 = await _seed_promise(db, sm, redis, org)
+    m = msg("Em gửi 2 túi decaf cho chị rồi đó", sender="khoa", name="Khoa Rang Xay MR")
+    m["occurred_at"] = (t0 + timedelta(hours=1)).isoformat()
+    await _kept_turn(sm, r, org, t0, m, cite=("Em gửi 2 túi decaf",))
+    assert (await _facts(db))["promised_to"].valid_to is None
+    assert {"code": "promise_kept_self_report", "n": 1} in await _last_errors(db)
+    ok = msg("Nhận 2 túi decaf rồi nha Khoa", sender="an", name="An Hội An Cafe")
+    ok_at = t0 + timedelta(hours=2)
+    ok["occurred_at"] = ok_at.isoformat()
+    await _kept_turn(sm, r, org, t0, ok, cite=("Nhận 2 túi decaf",))
+    assert (await _facts(db))["promised_to"].valid_to == ok_at
+
+
+async def test_fresh_self_report_beside_the_promisee_confirmation_is_neutral(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """Cùng lượt: Khoa "em gửi rồi" + An "nhận rồi" (cả hai tin mới, cùng luồng) ⇒ lời tự báo trung tính, xác nhận của An đóng lời hứa."""
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    r, t0 = await _seed_promise(db, sm, redis, org)
+    selfm = msg("Em gửi 2 túi decaf cho chị rồi đó", sender="khoa", name="Khoa Rang Xay MR")
+    ok = msg("Nhận 2 túi decaf rồi nha Khoa", sender="an", name="An Hội An Cafe")
+    ok_at = t0 + timedelta(hours=1, minutes=5)
+    selfm["occurred_at"], ok["occurred_at"] = (t0 + timedelta(hours=1)).isoformat(), ok_at.isoformat()
+    await _kept_turn(sm, r, org, t0, selfm, ok, cite=("Em gửi 2 túi decaf", "Nhận 2 túi decaf"))
+    assert (await _facts(db))["promised_to"].valid_to == ok_at
+
+
+async def test_owner_outbound_message_closes_the_promise(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    from gh.biz.mem import entities
+
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    r, t0 = await _seed_promise(db, sm, redis, org)
+    boss = {**msg("Anh thấy An nhận decaf rồi, ok", sender="own-zalo", name="Sếp"), "direction": "outbound"}
+    boss_at = t0 + timedelta(hours=1)
+    boss["occurred_at"] = boss_at.isoformat()
+    await put(sm, org, boss)
+    ent = await entities.ensure_person(db, org, await person_of(db, "own-zalo"))
+    await db.execute(text("UPDATE mem.entities SET is_owner = false WHERE org_id = :o AND is_owner AND id <> :e"), {"o": org, "e": ent.id})
+    await db.execute(text("UPDATE mem.entities SET is_owner = true WHERE id = :e"), {"e": ent.id})
+    await db.commit()
+    await _kept_turn(sm, r, org, t0, cite=("An nhận decaf rồi",))
+    assert (await _facts(db))["promised_to"].valid_to == boss_at
+
+
+async def test_close_kept_rejects_textless_or_earlier_than_promise_confirmations(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    from gh.biz.mem import facts as facts_mod
+
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    _r, t0 = await _seed_promise(db, sm, redis, org)
+    f = (await _facts(db))["promised_to"]
+    src = (await db.execute(text("SELECT source_raw_event_id FROM mem.facts WHERE id = :i"), {"i": f.id})).scalar_one()
+    tk = (await db.execute(text("SELECT detail ->> 'thread_key' FROM refinery.event_state WHERE event_id = :e"), {"e": src})).scalar_one()
+    an_p = await person_of(db, "an")
+    promise = facts_mod.KeptMsg(src, t0 + timedelta(minutes=18), None, new=False, thread_key=tk)
+
+    def kept(**kw):  # type: ignore[no-untyped-def]
+        base = {"raw_event_id": uuid.uuid4(), "sent_at": t0 + timedelta(hours=1), "sender_person_id": an_p, "new": True, "thread_key": tk}
+        return facts_mod.KeptMsg(**(base | kw))
+    assert (await facts_mod.close_kept(db, org, [promise, kept(has_text=False)])).closed == []
+    assert (await facts_mod.close_kept(db, org, [promise, kept(new=False)])).closed == []                               # tin ngữ cảnh cùng luồng
+    assert (await facts_mod.close_kept(db, org, [promise, kept(sent_at=t0 + timedelta(minutes=5))])).closed == []      # trước lời hứa
+    assert (await facts_mod.close_kept(db, org, [promise, kept()])).closed == [f.id]                                    # đối chứng: đủ điều kiện thì đóng
+    await db.rollback()
+
+
+async def test_done_after_counts_only_model_analysed_messages_not_filtered_ones(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """"đã được phân tích ở lượt trước" chỉ đúng với tin model đã phân tích (có analysis_id); tin bộ lọc/luật loại không được đếm."""
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    base = datetime.now(UTC) - timedelta(hours=5)
+    for i in range(8):
+        p = msg(f"Tin thường số {i} về hàng nhé", sender=f"n{i}", name=f"Người {i}")
+        p["occurred_at"] = (base + timedelta(minutes=i)).isoformat()
+        await put(sm, org, p)
+    otp = msg("Em lỡ nhập mã OTP vào link đó rồi", sender="victim", name="Nạn nhân")
+    otp["occurred_at"] = (base + timedelta(minutes=200)).isoformat()
+    later = msg("Tin rao bị bộ lọc loại", sender="spam", name="Spam")
+    later["occurred_at"] = (base + timedelta(minutes=210)).isoformat()
+    await put(sm, org, otp)
+    an = Analyzer()
+    r = refinery(sm, redis, an)
+    await r.run(org, "schedule")
+    [later_id] = await put(sm, org, later)
+    await r.groups.ensure_scanned(org)
+    # giả lập tin bị bộ lọc/luật loại (không qua model): discarded, có thread_key, KHÔNG có analysis_id
+    await db.execute(text("""UPDATE refinery.event_state SET state = 'discarded', detail = detail - 'analysis_id' || '{"discarded_by": "prefilter"}'::jsonb
+                             WHERE event_id = :e"""), {"e": later_id})
+    await db.commit()
+    await r.run(org, "manual")
+    w2 = an.windows[1]
+    analysed = sum(1 for e in an.windows[0].new_events if (e.body or "").startswith(("Tin thường", "Em lỡ")))
+    assert w2.backlog is not None and w2.backlog.done_after == analysed
+
+
+async def test_promise_kept_attack_citing_a_second_promise_source_is_ambiguous_over_the_whole_set(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """Tập trích chứa tin nguồn của HAI nghĩa vụ đang mở (hai tin hứa khác nhau) ⇒ mơ hồ trên toàn tập ⇒ không đóng cái nào."""
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    r, t0 = await _seed_promise(db, sm, redis, org)
+    an_p, khoa = await person_of(db, "an"), await person_of(db, "khoa")
+    p2 = msg("Mai em gửi chị bảng giá Culi mới nha", sender="khoa", name="Khoa Rang Xay MR")
+    p2["occurred_at"] = (t0 + timedelta(minutes=30)).isoformat()
+    await put(sm, org, p2)
+
+    def build(w):  # type: ignore[no-untyped-def]
+        return out_with(w, unit_for(w, "Mai em gửi chị bảng giá", kind="nghia_vu_loi_hua"), facts=[
+            FactProposed(unit_ref="u1", subject=FactSubject(surface="Khoa", person_ref=f"u_{khoa}"), predicate="promised_to",
+                         object=FactObject(value="gửi bảng giá Culi", person_ref=f"u_{an_p}"), quote_refs=[find_msg(w, "Mai em gửi chị bảng giá").message_id])])
+    r.groups.analyze = Analyzer(build)
+    await r.run(org, "manual")
+    assert sum(1 for x in (await db.execute(text("SELECT 1 FROM mem.facts WHERE predicate = 'promised_to' AND valid_to IS NULL"))).all()) == 2
+    ok = msg("Nhận 2 túi decaf rồi nha Khoa", sender="an", name="An Hội An Cafe")
+    ok["occurred_at"] = (t0 + timedelta(hours=1)).isoformat()
+    await _kept_turn(sm, r, org, t0, ok, cite=("Mai em gửi chị bảng giá", "Nhận 2 túi decaf"))
+    assert sum(1 for x in (await db.execute(text("SELECT 1 FROM mem.facts WHERE predicate = 'promised_to' AND valid_to IS NULL"))).all()) == 2
+    assert {"code": "promise_kept_ambiguous", "n": 1} in await _last_errors(db)
+
+
+async def test_promise_kept_attack_self_report_tied_to_another_open_fact_blocks_closing(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """Tin tự báo của người hứa là nguồn của sự thật đang mở KHÁC ⇒ không còn trung tính ⇒ không đóng (dù bên được hứa xác nhận kèm)."""
+    from tests.refinery_group_helpers import phone_fact
+
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    r, t0 = await _seed_promise(db, sm, redis, org)
+    khoa = await person_of(db, "khoa")
+    selfm = msg("Em gửi rồi nha, số em 0901234567", sender="khoa", name="Khoa Rang Xay MR")
+    ok = msg("Nhận 2 túi decaf rồi nha Khoa", sender="an", name="An Hội An Cafe")
+    selfm["occurred_at"], ok["occurred_at"] = (t0 + timedelta(hours=1)).isoformat(), (t0 + timedelta(hours=1, minutes=5)).isoformat()
+    await put(sm, org, selfm, ok)
+
+    def build(w):  # type: ignore[no-untyped-def]
+        ids = [find_msg(w, "tuần sau e gửi").message_id, find_msg(w, "Em gửi rồi nha").message_id, find_msg(w, "Nhận 2 túi decaf").message_id]
+        out = out_with(w, unit_for(w, "số em 0901234567", kind=None), facts=[phone_fact(w, "số em 0901234567", khoa)])
+        return out.model_copy(update={"memory_updates": [MemoryUpdate(type="promise_kept", text="đã nhận", message_ids=ids)]})
+    r.groups.analyze = Analyzer(build)
+    await r.run(org, "manual")
+    assert (await _facts(db))["promised_to"].valid_to is None
+    assert {"code": "promise_kept_untrusted", "n": 1} in await _last_errors(db)
+
+
+async def test_promise_kept_attack_old_self_report_from_context_blocks_closing(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """Tin tự báo cũ (tin ngữ cảnh, không phải tin mới của lượt) trích kèm ⇒ không qua kiểm cơ bản ⇒ không đóng."""
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    r, t0 = await _seed_promise(db, sm, redis, org)
+    selfm = msg("Em gửi 2 túi decaf cho chị rồi đó", sender="khoa", name="Khoa Rang Xay MR")
+    selfm["occurred_at"] = (t0 + timedelta(hours=1)).isoformat()
+    await put(sm, org, selfm)
+    r.groups.analyze = Analyzer()
+    await r.run(org, "manual")                                                     # lượt riêng: tin tự báo thành tin ngữ cảnh
+    ok = msg("Nhận 2 túi decaf rồi nha Khoa", sender="an", name="An Hội An Cafe")
+    ok["occurred_at"] = (t0 + timedelta(hours=2)).isoformat()
+    await _kept_turn(sm, r, org, t0, ok, cite=("Em gửi 2 túi decaf", "Nhận 2 túi decaf"))
+    assert (await _facts(db))["promised_to"].valid_to is None
+    assert {"code": "promise_kept_untrusted", "n": 1} in await _last_errors(db)
+
+
+async def test_confirmation_that_also_creates_a_new_obligation_still_closes_the_kept_promise(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """"Nhận 2 túi decaf rồi nha Khoa, chiều chị chuyển khoản 300k": `owes` mới lấy chính tin xác nhận làm nguồn — nó không thể là thứ
+    được giữ, không được làm tập trích mơ hồ; lời hứa decaf đóng, `owes` mới vẫn mở."""
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    r, t0 = await _seed_promise(db, sm, redis, org)
+    an_p, khoa = await person_of(db, "an"), await person_of(db, "khoa")
+    ok = msg("Nhận 2 túi decaf rồi nha Khoa, chiều chị chuyển khoản 300k", sender="an", name="An Hội An Cafe")
+    ok_at = t0 + timedelta(hours=1)
+    ok["occurred_at"] = ok_at.isoformat()
+    await put(sm, org, ok)
+
+    def build(w):  # type: ignore[no-untyped-def]
+        src = find_msg(w, "chiều chị chuyển khoản").message_id
+        out = out_with(w, unit_for(w, "chiều chị chuyển khoản 300k", kind="nghia_vu_loi_hua"), facts=[
+            FactProposed(unit_ref="u1", subject=FactSubject(surface="chị An", person_ref=f"u_{an_p}"), predicate="owes",
+                         object=FactObject(value="300k", person_ref=f"u_{khoa}"), quote_refs=[src])])
+        ids = [find_msg(w, "tuần sau e gửi").message_id, src]
+        return out.model_copy(update={"memory_updates": [MemoryUpdate(type="promise_kept", text="đã nhận", message_ids=ids)]})
+    r.groups.analyze = Analyzer(build)
+    await r.run(org, "manual")
+    fs = await _facts(db)
+    assert fs["promised_to"].valid_to == ok_at and fs["owes"].valid_to is None
+
+
+async def test_acceptance_ack_in_the_same_turn_as_the_promise_does_not_close_it(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """Khoa vừa hứa, An đáp "ok em" CÙNG lượt, model trích nhầm làm promise_kept ⇒ đó là nhận lời, không đóng lời hứa vừa sinh."""
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    t0 = datetime.now(UTC) - timedelta(hours=10)
+    ask = msg("Khoa ơi bên mình có decaf không, khách bầu hỏi hoài", sender="an", name="An Hội An Cafe")
+    pr = msg("Dạ tuần sau e gửi chị 2 túi mẫu decaf thử nha", sender="khoa", name="Khoa Rang Xay MR")
+    ack = msg("ok em", sender="an", name="An Hội An Cafe")
+    ask["occurred_at"], pr["occurred_at"], ack["occurred_at"] = t0.isoformat(), (t0 + timedelta(minutes=18)).isoformat(), (t0 + timedelta(minutes=19)).isoformat()
+    await put(sm, org, ask, pr, ack)
+    base = _promise_turn(await person_of(db, "khoa"), await person_of(db, "an"))
+
+    def build(w):  # type: ignore[no-untyped-def]
+        ids = [find_msg(w, "tuần sau e gửi").message_id, find_msg(w, "ok em").message_id]
+        return base(w).model_copy(update={"memory_updates": [MemoryUpdate(type="promise_kept", text="đã nhận", message_ids=ids)]})
+    await refinery(sm, redis, Analyzer(build)).run(org, "manual")
+    assert (await _facts(db))["promised_to"].valid_to is None
+    assert {"code": "promise_kept_untrusted", "n": 1} in await _last_errors(db)

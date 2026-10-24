@@ -146,7 +146,7 @@ def test_extract_v2_1_unread_counts_and_predicates_in_prompt() -> None:
 
 def test_extract_v2_1_skill_matches_contract() -> None:
     sk = extract.skill_prompt()
-    assert "extractor_version: intel-v2.1" in sk and "{{" not in sk
+    assert f"extractor_version: {extract.EXTRACTOR_VERSION} ·" in sk and "{{" not in sk
     for t in vi_time.URGENT_LEXICON:
         assert t in sk, t
     for name in bc.Unit.model_fields:

@@ -628,6 +628,154 @@ async def _assert(db: AsyncSession, fin: FactIn, pred: predicates.Predicate) -> 
     return await _load(db, fid, "inserted" if nxt is None else "inserted_between")
 
 
+# ─── lời hứa đã giữ ⇒ đóng hiệu lực ────────────────────────────────────────
+
+#: Vị từ "nghĩa vụ" mà `promise_kept` được đóng (kỹ năng v2.1 §9.3: "đóng lời hứa trong sổ").
+KEPT_PREDICATES = ("promised_to", "owes")
+
+
+@dataclass(frozen=True)
+class KeptMsg:
+    """Một tin model trích trong `promise_kept` (đã qua `verify`: mã có trong cửa sổ). Bên gọi điền các cờ từ kho thô, không từ model."""
+
+    raw_event_id: uuid.UUID
+    sent_at: datetime
+    sender_person_id: uuid.UUID | None
+    new: bool                          # tin MỚI được nhận vào lượt này (không phải tin ngữ cảnh/lời xác nhận đưa lại)
+    forwarded: bool = False            # cờ chuyển tiếp của nền tảng (None/không biết ⇒ False; simhash xuyên nhóm là việc của T1)
+    has_text: bool = True              # có chữ (sticker/ảnh không chữ không chứng minh được "đã giữ")
+    thread_key: str | None = None      # luồng của tin (event_state.detail.thread_key)
+    reply_to_raw: uuid.UUID | None = None
+    ack: bool = False                  # lời xác nhận ngắn đưa lại vào cửa sổ ("ok em"), không phải tin được nhận vào lượt
+
+
+@dataclass
+class KeptResult:
+    closed: list[uuid.UUID] = field(default_factory=list)
+    untrusted: int = 0                 # có lời hứa khớp nhưng bằng chứng không đủ tin cậy ⇒ KHÔNG đóng
+    ambiguous: int = 0                 # tập trích chứa tin nguồn của ≥ 2 nghĩa vụ đang mở ⇒ không biết đóng cái nào ⇒ KHÔNG đóng
+    self_report: int = 0               # chỉ người hứa/con nợ tự báo "đã giữ" ⇒ KHÔNG đóng
+
+
+async def _beneficiary(db: AsyncSession, r: Any) -> uuid.UUID | None:
+    """Bên được hứa / chủ nợ của sự thật: `object_entity_id`, hoặc `object_value.to_entity_id` (vị từ nghĩa vụ, code ghi)."""
+    ent = r.object_entity_id
+    if ent is None and isinstance(r.object_value, dict) and r.object_value.get("to_entity_id"):
+        try:
+            ent = uuid.UUID(str(r.object_value["to_entity_id"]))
+        except ValueError:
+            return None
+    if ent is None:
+        return None
+    try:
+        return await entities.canonical(db, ent)
+    except entities.EntityError:
+        return None
+
+
+async def close_kept(db: AsyncSession, org_id: uuid.UUID, cited: list[KeptMsg]) -> KeptResult:
+    """`memory_updates.promise_kept` (model: [tin hứa, tin chứng minh đã giữ]) ⇒ ĐÓNG hiệu lực theo thời gian sự việc (`valid_to` = giờ
+    gửi tin đã giữ, `closed_recorded_at = now()`, trạng thái GIỮ `asserted` — CNS-095; không xoá). Model đọc chữ người ngoài nên lời nó
+    là ĐỀ XUẤT; cổng tin cậy (cùng tinh thần `_assert` 6b/6e — chỉ người trong cuộc hoặc Sếp đổi được sự thật, tin chuyển tiếp không đổi
+    được sự thật của người trong cuộc):
+    * chỉ sự thật có TIN NGUỒN (`source_raw_event_id`) nằm trong mã được trích — không đóng theo bằng chứng phụ; một tin nguồn sinh
+      ≥ 2 nghĩa vụ đang mở ("thứ 6 em chuyển 20tr, thứ 7 em qua lấy 50kg"), hay tập trích chứa tin nguồn của ≥ 2 nghĩa vụ ⇒ không biết
+      đóng cái nào ⇒ KHÔNG đóng (`ambiguous`, xét trên toàn bộ tập trích);
+    * người được đóng: Sếp hoặc bên được hứa/chủ nợ. Người hứa/con nợ tự báo "em gửi rồi/em trả rồi" là TRUNG TÍNH: không đóng
+      (chỉ có nó ⇒ `self_report`), cũng không chặn xác nhận của bên được hứa đi kèm — nhưng chỉ khi nó qua kiểm cơ bản (tin mới, không
+      chuyển tiếp, gửi sau lời hứa, cùng luồng) và không là nguồn/bằng chứng của sự thật đang mở khác; không thì KHÔNG đóng;
+    * mọi tin bằng chứng còn lại phải ĐỦ: tin mới của lượt (kể cả lời xác nhận ngắn trong cửa sổ), không chuyển tiếp, có chữ, gửi SAU
+      lời hứa, cùng luồng với tin hứa (hoặc trả lời đúng tin đó), người gửi được phép. Một tin không đủ (vd tin người thứ ba) ⇒ KHÔNG
+      đóng, đếm `untrusted` (không tự mở tranh chấp: kẻ gian sẽ dùng chính đường đó để làm lung lay sự thật thật).
+    `owner_confirmed` chỉ Sếp đóng (§4A.1 6f); `disputed` đi đường tranh chấp. Thứ tự khoá như `assert_fact`: dòng thực thể (share)
+    → khoá tư vấn (chủ thể đích, vị từ) → dòng sự thật."""
+    out = KeptResult()
+    ids = list(dict.fromkeys(c.raw_event_id for c in cited))
+    if len(ids) < 2:
+        return out
+    rows = (await db.execute(text("""
+        SELECT f.id, f.subject_id, f.predicate, f.valid_from, f.source_raw_event_id, f.object_entity_id, f.object_value,
+               (SELECT s.detail ->> 'thread_key' FROM refinery.event_state s WHERE s.event_id = f.source_raw_event_id LIMIT 1) AS tk,
+               ARRAY(SELECT x.raw_event_id FROM mem.fact_evidence x WHERE x.fact_id = f.id AND x.raw_event_id IS NOT NULL) AS ev
+        FROM mem.facts f
+        WHERE f.org_id = :o AND f.predicate = ANY(:p) AND f.status = 'asserted' AND f.valid_to IS NULL AND f.source_raw_event_id = ANY(:r)
+        ORDER BY f.subject_id, f.predicate, f.id"""), {"o": org_id, "p": list(KEPT_PREDICATES), "r": ids})).all()
+    if not rows:
+        return out
+    # chỉ xét sự thật có ÍT NHẤT một tin được trích (ngoài nguồn/bằng chứng của chính nó) gửi SAU khi nó bắt đầu: sự thật sinh ra từ chính
+    # tin xác nhận ("nhận rồi nha, chiều chị chuyển 300k" ⇒ `owes` mới) không thể là thứ được "giữ", không được làm cả tập mơ hồ
+    rows = [r for r in rows if any(c.raw_event_id not in {r.source_raw_event_id, *(r.ev or [])} and _aware(c.sent_at) > r.valid_from
+                                   for c in cited)]
+    if not rows:
+        return out
+    if len(rows) > 1:
+        # mơ hồ xét trên TOÀN BỘ tập trích: chứa tin nguồn của ≥ 2 nghĩa vụ đang mở (một tin hứa hai việc, hoặc hai tin hứa) ⇒ không
+        # biết đóng cái nào; kẻ gian cũng không lách được bằng cách trích kèm tin nguồn của nghĩa vụ khác
+        out.ambiguous = 1
+        return out
+    # tin được trích là nguồn/bằng chứng của sự thật ĐANG MỞ nào (mọi vị từ) — tin tự báo dính sự thật khác không được coi là trung tính
+    refs: dict[uuid.UUID, set[uuid.UUID]] = {}
+    for x in (await db.execute(text("""
+        SELECT f.source_raw_event_id AS raw, f.id FROM mem.facts f
+        WHERE f.org_id = :o AND f.source_raw_event_id = ANY(:r) AND f.valid_to IS NULL AND f.status IN ('asserted', 'owner_confirmed', 'disputed', 'proposed')
+        UNION
+        SELECT x.raw_event_id, f.id FROM mem.fact_evidence x JOIN mem.facts f ON f.id = x.fact_id
+        WHERE f.org_id = :o AND x.raw_event_id = ANY(:r) AND f.valid_to IS NULL AND f.status IN ('asserted', 'owner_confirmed', 'disputed', 'proposed')"""),
+                               {"o": org_id, "r": ids})).all():
+        refs.setdefault(x.raw, set()).add(x.id)
+    owner = (await entities.owner(db, org_id)).id
+    speakers: dict[uuid.UUID, uuid.UUID] = {}
+    for c in cited:
+        if c.sender_person_id is not None and c.sender_person_id not in speakers:
+            speakers[c.sender_person_id] = (await entities.ensure_person(db, org_id, c.sender_person_id)).id
+    plan: list[tuple[Any, uuid.UUID, datetime]] = []
+    for r in rows:
+        subj = await entities.canonical(db, r.subject_id)
+        allowed = {owner}
+        if (ben := await _beneficiary(db, r)) is not None:
+            allowed.add(ben)
+        own = {r.source_raw_event_id, *(r.ev or [])}
+        proofs = [c for c in cited if c.raw_event_id not in own]
+        selfs = [c for c in proofs if c.sender_person_id is not None and speakers.get(c.sender_person_id) == subj and subj not in allowed]
+        others = [c for c in proofs if c not in selfs]
+
+        def basic(c: KeptMsg, r: Any = r) -> bool:
+            return (c.new and not c.forwarded and _aware(c.sent_at) > r.valid_from
+                    and (c.thread_key is not None and c.thread_key == r.tk or c.reply_to_raw == r.source_raw_event_id))
+
+        def ok(c: KeptMsg, allowed: set[uuid.UUID] = allowed) -> bool:
+            return basic(c) and c.has_text and c.sender_person_id is not None and speakers.get(c.sender_person_id) in allowed
+
+        def neutral(c: KeptMsg, r: Any = r) -> bool:     # lời tự báo chỉ trung tính khi qua kiểm cơ bản và không dính sự thật đang mở khác
+            return basic(c) and not (refs.get(c.raw_event_id, set()) - {r.id})
+        promise_new = any(c.raw_event_id == r.source_raw_event_id and c.new for c in cited)
+        if not all(neutral(c) for c in selfs):
+            out.untrusted += 1
+        elif promise_new and others and all(c.ack for c in others):
+            out.untrusted += 1          # lời hứa vừa có trong CHÍNH lượt này, bằng chứng chỉ là "ok em" ⇒ đó là nhận lời, không phải đã giữ
+        elif not others:
+            if selfs:
+                out.self_report += 1
+            else:
+                out.untrusted += 1
+        elif all(ok(c) for c in others):
+            plan.append((r, subj, min(_aware(c.sent_at) for c in others)))
+        else:
+            out.untrusted += 1
+    if not plan:
+        return out
+    await disputes.set_actor(db, "extractor", "promise_kept")
+    await entities.lock_rows(db, [subj for _, subj, _ in plan], "share")
+    for sid, pred in sorted({(str(subj), r.predicate) for r, subj, _ in plan}):          # cùng thứ tự khoá với assert_facts (CNS-102)
+        await db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(CAST(:o AS text) || CAST(:s AS text) || :p, 0))"),
+                         {"o": str(org_id), "s": sid, "p": pred})
+    for r, _subj, at in plan:
+        res = await db.execute(text("""UPDATE mem.facts SET valid_to = :t, closed_recorded_at = now()
+                                       WHERE id = :i AND status = 'asserted' AND valid_to IS NULL RETURNING id"""), {"t": at, "i": r.id})
+        out.closed.extend(x[0] for x in res.all())
+    return out
+
+
 # ─── lượt nhiều sự thật + thử lại ──────────────────────────────────────────
 
 @dataclass
