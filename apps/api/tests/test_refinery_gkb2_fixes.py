@@ -213,3 +213,91 @@ async def test_promise_kept_without_the_promise_message_closes_nothing(app, db, 
     assert (await _facts(db))["promised_to"].valid_to is None
     errs = (await db.execute(text("SELECT errors FROM refinery.analyses ORDER BY started_at DESC LIMIT 1"))).scalar_one()
     assert {"code": "promise_kept_unmatched", "n": 1} in errs
+
+
+# ─── (ii) cổng tin cậy: model đọc chữ người ngoài ⇒ promise_kept chỉ là đề xuất ──────────────────────────────────────────
+
+async def _seed_debt(db, sm, redis, org):  # type: ignore[no-untyped-def]
+    t0 = datetime.now(UTC) - timedelta(hours=10)
+    debt = msg("Chị An ơi em nợ chị 5 triệu tiền hàng, cuối tuần em trả nha", sender="tuan", name="Tuấn Quán Cóc")
+    debt["occurred_at"] = t0.isoformat()
+    other = msg("Chị An cho em hỏi giá Culi tuần này", sender="an", name="An Hội An Cafe")
+    other["occurred_at"] = (t0 + timedelta(minutes=1)).isoformat()
+    await put(sm, org, debt, other)
+    an_p, tuan = await person_of(db, "an"), await person_of(db, "tuan")
+
+    def build(w):  # type: ignore[no-untyped-def]
+        u = unit_for(w, "em nợ chị 5 triệu tiền hàng", kind="nghia_vu_loi_hua", summary="Tuấn nợ chị An 5 triệu")
+        return out_with(w, u, facts=[FactProposed(unit_ref="u1", subject=FactSubject(surface="Tuấn", person_ref=f"u_{tuan}"), predicate="owes",
+                                                  object=FactObject(value="5 triệu tiền hàng", person_ref=f"u_{an_p}"),
+                                                  quote_refs=[find_msg(w, "em nợ chị 5 triệu").message_id])])
+    r = refinery(sm, redis, Analyzer(build))
+    await r.run(org, "manual")
+    return r, t0
+
+
+async def _claim_kept(sm, r, org, body: str, sender: str, name: str, at: datetime) -> None:  # type: ignore[no-untyped-def]
+    p = msg(body, sender=sender, name=name)
+    p["occurred_at"] = at.isoformat()
+    await put(sm, org, p)
+
+    def build(w):  # type: ignore[no-untyped-def]
+        ids = [find_msg(w, "em nợ chị 5 triệu").message_id, find_msg(w, body).message_id]
+        return BrainOut(thread_ref=w.thread_ref, memory_updates=[MemoryUpdate(type="promise_kept", text="đã trả", message_ids=ids)])
+    r.groups.analyze = Analyzer(build)
+    await r.run(org, "manual")
+
+
+async def _last_errors(db):  # type: ignore[no-untyped-def]
+    return (await db.execute(text("SELECT errors FROM refinery.analyses ORDER BY started_at DESC LIMIT 1"))).scalar_one()
+
+
+async def test_promise_kept_attack_third_party_or_debtor_saying_paid_never_closes_a_debt(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """Người thứ ba (không phải chủ nợ) nhắn "Tuấn trả rồi đó", model báo promise_kept ⇒ khoản nợ VẪN hiệu lực; con nợ tự nhận "em trả
+    rồi" cũng không đóng được; chỉ chủ nợ (hoặc Sếp) xác nhận mới đóng."""
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    r, t0 = await _seed_debt(db, sm, redis, org)
+    await _claim_kept(sm, r, org, "Tuấn trả chị An rồi đó mọi người", "lan", "Lan Lạ Mặt", t0 + timedelta(hours=1))
+    assert (await _facts(db))["owes"].valid_to is None
+    assert {"code": "promise_kept_untrusted", "n": 1} in await _last_errors(db)
+    await _claim_kept(sm, r, org, "Em chuyển trả chị 5 triệu rồi nha", "tuan", "Tuấn Quán Cóc", t0 + timedelta(hours=2))
+    assert (await _facts(db))["owes"].valid_to is None                            # con nợ tự nói "đã trả" ⇒ không đóng khoản tiền
+    paid_at = t0 + timedelta(hours=3)
+    await _claim_kept(sm, r, org, "Chị nhận đủ 5 triệu rồi nha Tuấn", "an", "An Hội An Cafe", paid_at)
+    f = (await _facts(db))["owes"]
+    assert f.valid_to == paid_at and f.status == "asserted"
+
+
+async def test_promise_kept_needs_a_new_message_of_this_turn_not_a_context_message(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """Tin "đã nhận" chỉ nằm ở tin ngữ cảnh (đã xử lý lượt trước) ⇒ không đóng; đóng đúng sự thật có tin nguồn được trích, không đóng
+    sự thật khác chỉ vì tin đó là bằng chứng phụ."""
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    r, t0 = await _seed_promise(db, sm, redis, org)
+    kept = msg("Nhận 2 túi decaf rồi nha Khoa", sender="an", name="An Hội An Cafe")
+    kept["occurred_at"] = (t0 + timedelta(hours=1)).isoformat()
+    await put(sm, org, kept)
+    r.groups.analyze = Analyzer()                                                  # lượt này model không báo gì
+    await r.run(org, "manual")
+    await put(sm, org, msg("Tuần sau chị lấy thêm 10kg nha", sender="an", name="An Hội An Cafe"))
+
+    def build(w):  # type: ignore[no-untyped-def]
+        ids = [find_msg(w, "tuần sau e gửi").message_id, find_msg(w, "Nhận 2 túi decaf").message_id]      # cả hai là tin ngữ cảnh
+        assert all(find_msg(w, n).context for n in ("tuần sau e gửi", "Nhận 2 túi decaf"))
+        return BrainOut(thread_ref=w.thread_ref, memory_updates=[MemoryUpdate(type="promise_kept", text="đã nhận", message_ids=ids)])
+    r.groups.analyze = Analyzer(build)
+    await r.run(org, "manual")
+    assert (await _facts(db))["promised_to"].valid_to is None
+    # trích tin hỏi decaf của chị An (nguồn của `needs`, bằng chứng phụ của lời hứa) không đóng lời hứa và không đóng `needs`
+    kept2 = msg("Decaf ngon lắm Khoa", sender="an", name="An Hội An Cafe")
+    kept2["occurred_at"] = (t0 + timedelta(hours=2)).isoformat()
+    await put(sm, org, kept2)
+
+    def build2(w):  # type: ignore[no-untyped-def]
+        ids = [find_msg(w, "có decaf không").message_id, find_msg(w, "Decaf ngon lắm").message_id]
+        return BrainOut(thread_ref=w.thread_ref, memory_updates=[MemoryUpdate(type="promise_kept", text="đã nhận", message_ids=ids)])
+    r.groups.analyze = Analyzer(build2)
+    await r.run(org, "manual")
+    fs = await _facts(db)
+    assert fs["promised_to"].valid_to is None and fs["needs"].valid_to is None
