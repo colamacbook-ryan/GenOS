@@ -83,6 +83,11 @@ def test_step_init_next_submit_export_runs_real_pipeline_and_writes_facts(tmp_pa
             prompt_path = Path(nxt)
             prompt = json.loads(prompt_path.read_text())
             assert prompt["format"] == "gkb-step/1" and prompt["system"].startswith("<!-- extractor_version") and prompt["messages"][-1]["role"] == "user"
+            user = prompt["messages"][0]["content"]
+            now = h.datetime.fromisoformat(re.search(r"Bây giờ[^:]*: (\S+)", user).group(1))  # type: ignore[union-attr]
+            ats = [h.datetime.fromisoformat(json.loads(x)["at"]) for x in user.split("tin mới của luồng", 1)[1].splitlines()
+                   if x.startswith('{"id"')]
+            assert ats and now >= max(ats) and now - max(ats) < h.timedelta(days=1)       # "bây giờ" = giờ của lượt theo dữ liệu (lỗi kb1 #2)
             if prompt["kind"] == "extract" and broken_first:           # lượt đầu: trả chuỗi hỏng → pipeline thật phải gọi lại MỘT lần kèm lỗi
                 (prompt_path.parent / "answer.json").write_text(fake_agent(prompt, broken=True), encoding="utf-8")
                 step("submit", str(prompt_path.parent / "answer.json"))
@@ -113,7 +118,10 @@ def test_step_init_next_submit_export_runs_real_pipeline_and_writes_facts(tmp_pa
             n = c.execute("SELECT count(*) FROM mem.facts WHERE predicate = 'contact_phone'").fetchone()[0]  # type: ignore[index]
             ok = c.execute("SELECT count(*) FROM refinery.analyses WHERE status = 'ok'").fetchone()[0]  # type: ignore[index]
             raw = c.execute("SELECT count(*) FROM raw.events").fetchone()[0]  # type: ignore[index]
+            stuck = c.execute("SELECT count(*) FROM refinery.event_state WHERE state IN ('pending', 'processing')").fetchone()[0]  # type: ignore[index]
         assert n == 1 and ok == done and raw == len(ds.msgs)
+        assert stuck == 0                                                  # tin chờ sau lượt kế hoạch cuối được xả (drain), không kẹt
+        assert s["write_errors"] == [] and all(r["write_error"] is None for r in recs)
         assert s["db"]["facts_by_predicate"]["contact_phone"] == 1
         st = json.loads(step("stats", "--out", str(run)).stdout)
         assert st["by_kind"]["retry"] == 1 and st["calls"] == done + 1
@@ -146,3 +154,13 @@ def test_est_tokens_is_chars_over_three() -> None:
     import step as stepmod
 
     assert stepmod.est_tokens(30_000) == 10_000 and stepmod.est_tokens(0) == 0
+
+
+def test_write_error_reports_failed_writes() -> None:
+    """Lỗi kb1 (1d): lượt model trả đúng nhưng ghi lỗi (cả lượt / từng đơn vị) ⇒ chuỗi mã lỗi; ghi trọn ⇒ None."""
+    import step as stepmod
+
+    assert stepmod.write_error({"write_errors": []}) is None
+    assert stepmod.write_error({"write_errors": ["write_failed"]}) == "write_failed×1"
+    assert stepmod.write_error({"write_errors": ["unit_write_failed", "unit_write_failed_safety", "unit_write_failed"]}) == \
+        "unit_write_failed×2,unit_write_failed_safety×1"
