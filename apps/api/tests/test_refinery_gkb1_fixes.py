@@ -317,3 +317,23 @@ def test_engine_hides_sql_parameters_in_errors(app) -> None:  # type: ignore[no-
     from gh import db as dbmod
 
     assert dbmod.get_engine().sync_engine.hide_parameters is True and dbmod.get_admin_engine().sync_engine.hide_parameters is True
+
+
+async def test_ack_lookup_is_bounded_by_indexed_time_columns(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """`_acks` không quét mọi tin `discarded` của tổ chức: chặn theo `updated_at` (index org/state/updated_at) + received_at (partition)."""
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    now = datetime.now(UTC)
+    ack = msg("Dạ e ghi nhận ạ", sender="u2", name="Thảo")
+    ack["occurred_at"] = (now - timedelta(minutes=1)).isoformat()
+    order = msg("Thảo ơi tuần này a lấy 25kg Blend Honey nha", sender="u1", name="Anh Dũng")
+    order["occurred_at"] = (now - timedelta(minutes=2)).isoformat()
+    an = Analyzer()
+    r = refinery(sm, redis, an)
+    await put(sm, org, ack)
+    await r.groups.ensure_scanned(org)
+    await db.execute(text("UPDATE refinery.event_state SET updated_at = now() - interval '3 days' WHERE state = 'discarded'"))
+    await db.commit()
+    await put(sm, org, order)
+    await r.run(org, "manual")
+    assert [e.body for e in an.windows[-1].new_events] == ["Thảo ơi tuần này a lấy 25kg Blend Honey nha"]

@@ -771,6 +771,7 @@ CONTEXT_WINDOW = timedelta(hours=24)
 RETRY_BACKOFF = timedelta(minutes=5)
 HISTORY_EVIDENCE_MAX = 10          # tin bằng chứng của khối Lịch sử thêm vào tin ngữ cảnh (để trích được)
 HISTORY_EVIDENCE_CHARS = 3000
+ACK_LOOKBACK = timedelta(days=1)    # cận dưới updated_at/received_at của lời xác nhận (index org/state/updated_at + partition raw.events)
 ACK_MAX = 30                        # lời xác nhận ngắn (đã loại khỏi lượt) đưa lại vào cửa sổ làm bằng chứng "đã xử lý"
 FREE_MODE_RETRY = timedelta(minutes=15)
 TEMPLATE_WINDOW = timedelta(days=7)
@@ -1581,7 +1582,8 @@ class GroupTurns:
         return sorted([*ctx_events, *extra], key=lambda c: c.sent_at)
 
     async def _acks(self, db: AsyncSession, org_id: uuid.UUID, tk: str, blocks: list[GEv], first: datetime) -> list[Any]:
-        """Lời xác nhận ngắn ("Dạ e ghi nhận ạ", "ok ạ") của CÙNG luồng, từ tin mới đầu tiên trở đi. Chúng không kích hoạt lượt, không
+        """Lời xác nhận ngắn ("Dạ e ghi nhận ạ", "ok ạ") của CÙNG luồng, từ tin mới đầu tiên trở đi (vào kho/quét trong `ACK_LOOKBACK`
+        trước tin mới sớm nhất — truy vấn bị chặn theo cột có index, không quét mọi tin `discarded`). Chúng không kích hoạt lượt, không
         tính trần/đếm tin (vẫn `discarded`, lý do `ack`) nhưng là BẰNG CHỨNG "đã xử lý" — thiếu chúng model báo nhầm "đơn chưa được xác
         nhận" (lỗi kb1 #4). Đưa vào cửa sổ đúng chỗ theo thời gian, tối đa `ACK_MAX` tin (mỗi tin ≤ 24 ký tự)."""
         have = {m.event_id for b in blocks for m in b.all_events}
@@ -1591,9 +1593,12 @@ class GroupTurns:
             FROM refinery.event_state s JOIN raw.events e ON e.id = s.event_id AND e.received_at = s.event_received_at
             LEFT JOIN core.person_identities pi ON pi.id = e.sender_identity_id
             LEFT JOIN core.persons p ON p.id = pi.person_id
-            WHERE s.org_id = :o AND s.state = 'discarded' AND s.detail ->> 'thread_key' = :t AND s.detail ->> 'reason' = 'ack'
+            WHERE s.org_id = :o AND s.state = 'discarded' AND s.updated_at >= :lo AND s.event_received_at >= :lo AND e.received_at >= :lo
+              AND s.detail ->> 'thread_key' = :t AND s.detail ->> 'reason' = 'ack'
               AND e.occurred_at >= :first AND e.occurred_at <= :now
-            ORDER BY e.occurred_at LIMIT :n"""), {"o": org_id, "t": tk, "first": first, "now": clock.now(), "n": ACK_MAX})).all()
+            ORDER BY e.occurred_at LIMIT :n"""),
+                                 {"o": org_id, "t": tk, "first": first, "now": clock.now(), "n": ACK_MAX,
+                                  "lo": min(b.received_at for b in blocks) - ACK_LOOKBACK})).all()
         out = []
         for r in rows:
             if r.id in have:
