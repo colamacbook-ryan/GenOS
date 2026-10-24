@@ -39,6 +39,7 @@ from clockplan import (  # noqa: E402
     FakeClock,
     PlanConfig,
     check_distribution,
+    data_time,
     distribution,
     lively_threads,
     plan_batch40,
@@ -59,7 +60,7 @@ from common import (  # noqa: E402
 )
 
 ANALYZER_CONTRACT = """Điểm cắm phân tích (chờ L2/L3): một đối tượng có `async analyze(inp: TurnInput) -> AnalysisResult` (hoặc hàm async cùng chữ ký).
-`inp` mang: thread_ref ('g:<nhóm>'), tin mới (message_id = 'm_<id dữ liệu>'), cửa sổ gần, Hồ sơ Sếp đã seed, chính sách bối cảnh, giờ giả.
+`inp` mang: thread_ref ('g:<nhóm>'), tin mới (message_id = 'm_<id dữ liệu>'), cửa sổ gần, Hồ sơ Sếp đã seed, chính sách bối cảnh, `now_iso` = giờ của lượt theo DỮ LIỆU (`clockplan.data_time`; chế độ nén không đưa đồng hồ nén ra ngoài).
 Trả `output` (dict hoặc chuỗi JSON `brain-out/1`), `usage` ({input, output, cache_read, cache_write, model, calls}) và `attempts` (số lần gọi
 model kể cả lần tự sửa schema). Khi L2/L3 merge: viết adapter gọi `refinery.runner`/`extract` với đồng hồ `turn.start_s`, rồi `--analyzer adapter:Analyzer`."""
 
@@ -377,7 +378,7 @@ async def run_replay(ds: Dataset, out_dir: str | Path, *, mode: str = "compresse
             first = turn.new[0]
             media = {m.id: engine.process(f"fake://{'voice' if m.kind == 'voice_transcript' else 'image'}/{m.id}")
                      for m in turn.new if m.kind in ("voice_transcript", "image_caption")}
-            inp = TurnInput(n=turn.n, thread_ref=("g:mixed" if turn.thread == "mixed" else thread_ref(first)), now_iso=clock.now().isoformat(), new=[msg_json(m) for m in turn.new],
+            inp = TurnInput(n=turn.n, thread_ref=("g:mixed" if turn.thread == "mixed" else thread_ref(first)), now_iso=data_time(msgs, times, turn.start).isoformat(), new=[msg_json(m) for m in turn.new],
                             recent=[msg_json(m) for m in turn.recent], contexts_confirmed=bool(confirmed and labels.get(turn.thread)),
                             context_label=(labels.get(turn.thread) if confirmed else None), profile=ctx["profile"], media=media,
                             turn=turn.to_json())

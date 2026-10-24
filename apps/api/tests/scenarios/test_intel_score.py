@@ -378,3 +378,32 @@ def test_no_real_kb_ids_in_l6_sources() -> None:
             for m in re.finditer(r"\bm0\d{3}\b|\"S\d\d\"", t):
                 bad.append((p.name, m.group()))
     assert not bad, bad
+
+
+async def test_replay_now_is_data_time_not_compressed_clock(world) -> None:  # type: ignore[no-untyped-def]
+    """Lỗi kb1 (2): `now_iso` của mỗi lượt ≥ giờ tin mới nhất của lượt (và < tin kế của dữ liệu), kể cả ở chế độ nén."""
+    from datetime import datetime
+
+    seen: list[tuple[datetime, datetime]] = []
+
+    class Spy(h.Oracle):
+        async def analyze(self, inp: Any) -> Any:
+            seen.append((datetime.fromisoformat(inp.now_iso), max(datetime.fromisoformat(m["ts"]) for m in inp.new)))
+            return await super().analyze(inp)
+
+    await replay.run_replay(world["ds"], world["tmp"] / "a", analyzer=Spy(world["key"]), mode="compressed")
+    assert seen and all(now >= newest for now, newest in seen)
+    span = world["ds"].msgs[-1].ts - world["ds"].msgs[0].ts
+    assert seen[-1][0] - world["ds"].msgs[0].ts >= span * 0.5           # đồng hồ nén chỉ trôi vài phút; giờ dữ liệu trôi theo tin
+
+
+async def test_write_errors_are_counted_separately_from_contract_errors(world) -> None:  # type: ignore[no-untyped-def]
+    """Lỗi kb1 (1d): lượt model trả đúng nhưng pipeline ghi lỗi phải hiện ra (`write_errors`), không phải "0 lỗi"."""
+    runs = await do_runs(world, oracle_n(world, 1))
+    f = Path(runs[0]) / "outputs.jsonl"
+    recs = [json.loads(x) for x in f.read_text().splitlines()]
+    recs[0]["write_error"] = "write_failed×1"
+    f.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in recs) + "\n")
+    r = gs.Run(runs[0], world["ds"])
+    assert r.write_errors == [{"turn": recs[0]["turn"], "error": "write_failed×1"}] and r.contract_errors == 0
+    assert gs.score_run(r, world["key"])["write_errors"] == 1

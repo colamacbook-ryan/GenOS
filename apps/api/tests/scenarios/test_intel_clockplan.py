@@ -160,3 +160,21 @@ def test_check_distribution_fails_when_lively_median_low() -> None:
     d = cp.distribution(turns, cp.lively_threads(ds.msgs))
     chk = cp.check_distribution(d)
     assert not chk["ok"] and not chk["checks"]["lively_median_ge_10"] and "G1" in chk["lively_below_median"]
+
+
+def test_data_time_maps_compressed_clock_back_to_data_time() -> None:
+    """Lỗi kb1 (2): chế độ nén đưa đồng hồ NÉN cho pipeline làm "bây giờ" (kẹt ở ngày tin đầu). `data_time` = giờ gốc của tin cuối đã đến +
+    phần giây giả trôi sau nó, không vượt tin kế; realtime ⇒ trùng đồng hồ giả."""
+    msgs = [mk(1, secs=0), mk(2, secs=30), mk(3, secs=50 * 86400), mk(4, secs=50 * 86400 + 5)]
+    t = cp.compress_gaps(msgs, 60)                                         # [0, 30, 90, 95]
+    assert cp.data_time(msgs, t, 30) == msgs[1].ts
+    assert cp.data_time(msgs, t, 45) == msgs[1].ts + timedelta(seconds=15)
+    assert cp.data_time(msgs, t, 90) == msgs[2].ts                         # sau khoảng lặng 50 ngày: đúng ngày của tin
+    assert cp.data_time(msgs, t, 200) == msgs[3].ts + timedelta(seconds=105)
+    rt = cp.realtime_times(msgs)
+    c = cp.FakeClock(msgs[0].ts)
+    for x in (0, 31, 50 * 86400 + 1):
+        c.advance_to(x)
+        assert cp.data_time(msgs, rt, x) == c.now()
+    seq = [cp.data_time(msgs, t, x) for x in range(0, 120, 3)]
+    assert seq == sorted(seq)                                              # không bao giờ lùi

@@ -663,13 +663,28 @@ def is_ack(text: str | None) -> bool:
     return bool(words) and all(w in _ACK_WORDS for w in words)
 
 
+# Dấu hiệu tin rao/thông báo hàng loạt (trên chữ đã bỏ dấu, chữ thường): chỉ những tin này mới bị coi là "mẫu lặp".
+# Chỉ cụm đặc trưng (không từ đơn dễ khớp nhầm: "tuyen" ⊂ "tuyến"/"trực tuyến", "co ai", "cac ban"); `\b` hai đầu ⇒ "sale" ≠ "Salem".
+_BROADCAST = re.compile(r"\b(?:ib|inbox|ibx|lien he|tuyen dung|tuyen nhan vien|tuyen gap|can tuyen|thanh ly|quan nao can|ai can|"
+                        r"khuyen mai|giam gia|sale|uu dai|quy khach|bang gia|thong bao|moi nguoi oi|ca nha oi|cac quan|lich rang|"
+                        r"follow|dang ky|mien phi|qua tang|voucher)\b")
+
+
+def is_broadcast(body: str | None) -> bool:
+    """Tin có dáng rao vặt/thông báo hàng loạt (quảng cáo, tuyển dụng, thanh lý, bảng giá, lịch chung) hoặc có link/SĐT."""
+    fold = strip_accents((body or "").lower())
+    return bool(_BROADCAST.search(fold) or _LINK.search(fold) or _PHONE.search(fold))
+
+
 def no_model_reason(kind: str | None, body: str | None, *, template_n: int = 0) -> str | None:
-    """Vì sao tin KHÔNG vào phần "tin mới" của lượt model (None = vào). `template_n` = số lần cùng nội dung đã thấy trong 7
-    ngày (≥ 3 ⇒ tin mẫu lặp, `is_template` — không phải sự việc mới, sửa điểm yếu 5 của v2)."""
+    """Vì sao tin KHÔNG vào phần "tin mới" của lượt model (None = vào). `template_n` = số lần cùng nội dung CÙNG người CÙNG luồng
+    trong 7 ngày theo giờ gửi (≥ 3 ⇒ tin mẫu lặp, `is_template` — sửa điểm yếu 5 của v2). CHỈ áp cho tin rao/thông báo hàng loạt
+    (`is_broadcast`): tin nghiệp vụ lặp của một người (đơn định kỳ "tuần này a lấy 25kg", giữ phòng họp thứ 3) KHÔNG phải mẫu —
+    chính nhịp lặp là tín hiệu (lỗi kb1 #4)."""
     if kind in NO_MODEL_KINDS:
         return str(kind)
     if is_ack(body):
         return "ack"
-    if template_n >= 3 and len(triage.normalize(body or "")) >= triage.BROADCAST_MIN_LEN:
+    if template_n >= TEMPLATE_MIN_N and len(triage.normalize(body or "")) >= triage.BROADCAST_MIN_LEN and is_broadcast(body):
         return "template"
     return None

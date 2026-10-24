@@ -4,8 +4,8 @@
 Trần ≈ 6.000 token (Hồ sơ ≤ 800, sự thật ≤ 2.000, quan hệ ≤ 800, lịch sử ≤ 2.400; ước lượng ~3 ký tự/token tiếng Việt).
 1. SQL có cấu trúc: người gửi + mention đã nối trong cửa sổ → `mem.facts` đang hiệu lực (ưu tiên owner_confirmed, disputed,
    lời hứa/hạn mở); bối cảnh nhóm.
-2. Tìm lai trong CÙNG nhóm 90 ngày: cosine pgvector (nếu bên gọi đưa `query_embedding`) + trigram trên `mem.fold(conclusion)`,
-   gộp RRF. Khối xuyên nhóm CÙNG THỰC THỂ chỉ mang SỰ THẬT đã kiểm (+ `attributed_to` + id bằng chứng), KHÔNG mang nguyên
+2. Tìm lai trong CÙNG nhóm 90 ngày, gộp RRF: đơn vị của người/thực thể trong cửa sổ + mới nhất của luồng + trigram trên
+   `mem.fold(conclusion)` (xếp hạng, không lọc ngưỡng) + cosine pgvector (nếu bên gọi đưa `query_embedding`); mỗi mục kèm id tin bằng chứng. Khối xuyên nhóm CÙNG THỰC THỂ chỉ mang SỰ THẬT đã kiểm (+ `attributed_to` + id bằng chứng), KHÔNG mang nguyên
    văn tin của nhóm khác (CNS-086) — đúng theo cấu tạo: facts chỉ có giá trị đã chuẩn hoá, không có thân tin.
 3. Quan hệ 1–2 bước: CTE đệ quy trên `mem.facts` có `object_entity_id` (family_of, works_at, staff_of…), tối đa 20 nút, rồi
    `clean.relationships` (cạnh nóng).
@@ -34,6 +34,7 @@ HISTORY_DAYS = 90
 HISTORY_TOP = 10
 RELATED_MAX_NODES = 20
 RRF_K = 60
+TRGM_MIN = 0.05                                   # sàn độ giống trigram (chỉ bỏ cặp gần như không chung chữ)
 PREDICATE_PRIORITY = {"promised_to": 0, "owes": 0, "deadline": 0, "asked_waiting": 0, "scheduled_event": 1,
                       "health_event": 1}
 
@@ -169,7 +170,13 @@ async def _facts(db: AsyncSession, org_id: uuid.UUID, anchors: list[uuid.UUID], 
 
 
 async def _history(db: AsyncSession, org_id: uuid.UUID, thread_key: str, query_text: str, now: datetime,
-                   query_embedding: list[float] | None, time_hint: tuple[datetime, datetime] | None) -> list[PackItem]:
+                   query_embedding: list[float] | None, time_hint: tuple[datetime, datetime] | None,
+                   persons: list[uuid.UUID] | None = None, anchors: list[uuid.UUID] | None = None) -> list[PackItem]:
+    """Top `HISTORY_TOP` đơn vị cùng luồng (cùng nhóm / cùng 1-1) trong 90 ngày (hoặc khoảng `time_hint`), gộp RRF từ các kênh:
+    (1) liên quan người/thực thể của cửa sổ (người gửi + mention đã nối) — mang việc đang dở của chính chủ thể (lời hứa, đơn, tiền);
+    (2) mới nhất của luồng; (3) chữ bỏ dấu (trigram, xếp theo độ giống — KHÔNG lọc bằng ngưỡng `%` 0.3: câu hỏi ghép nhiều tin dài
+    gần như không bao giờ đạt ngưỡng với một kết luận ngắn); (4) cosine pgvector nếu bên gọi đưa `query_embedding`.
+    Mỗi mục mang `meaning_unit_id` + id tin bằng chứng (`evidence_raw_ids`, `meta.evidence` = [(raw_event_id, raw_received_at)])."""
     gid = contexts.group_of(thread_key)
     since, until = now - timedelta(days=HISTORY_DAYS), now
     if time_hint is not None:
@@ -189,35 +196,51 @@ async def _history(db: AsyncSession, org_id: uuid.UUID, thread_key: str, query_t
         return []
     ranks: dict[uuid.UUID, float] = {}
     info: dict[uuid.UUID, Any] = {}
+    cols = "m.id, m.observed_at, m.conclusion, m.kind_hint"
+
+    def add(rows: Any, weight: float = 1.0) -> None:
+        for i, r in enumerate(rows):
+            ranks[r.id] = ranks.get(r.id, 0.0) + weight / (RRF_K + i + 1)
+            info[r.id] = r
+
+    members: list[uuid.UUID] = []
+    for a in anchors or []:
+        members.extend(await entities.members(db, a))
+    if persons or members:
+        add((await db.execute(text(f"""
+            SELECT {cols} FROM clean.meaning_units m
+            WHERE {where} AND (m.person_id = ANY(CAST(:pp AS uuid[])) OR EXISTS (
+                SELECT 1 FROM mem.mentions x WHERE x.meaning_unit_id = m.id AND x.status = 'linked' AND x.entity_id = ANY(CAST(:an AS uuid[]))))
+            ORDER BY m.observed_at DESC LIMIT :n"""),  # noqa: S608
+            {**params, "pp": list(persons or []), "an": members})).all(), 1.5)
+    add((await db.execute(text(f"SELECT {cols} FROM clean.meaning_units m WHERE {where} ORDER BY m.observed_at DESC LIMIT :n"),  # noqa: S608
+                          params)).all())
     q = " ".join(query_text.split())[:500]
     if q:
-        rows = (await db.execute(text(f"""
-            SELECT m.id, m.observed_at, m.conclusion, m.kind_hint FROM clean.meaning_units m
-            WHERE {where} AND mem.fold(m.conclusion) % mem.fold(CAST(:q AS text))
+        add((await db.execute(text(f"""
+            SELECT {cols} FROM clean.meaning_units m
+            WHERE {where} AND similarity(mem.fold(m.conclusion), mem.fold(CAST(:q AS text))) > :minsim
             ORDER BY similarity(mem.fold(m.conclusion), mem.fold(CAST(:q AS text))) DESC LIMIT :n"""),  # noqa: S608
-            {**params, "q": q})).all()
-        for i, r in enumerate(rows):
-            ranks[r.id] = ranks.get(r.id, 0.0) + 1.0 / (RRF_K + i + 1)
-            info[r.id] = r
+            {**params, "q": q, "minsim": TRGM_MIN})).all())
     if query_embedding:
         vec = "[" + ",".join(f"{x:.6f}" for x in query_embedding) + "]"
-        rows = (await db.execute(text(f"""
-            SELECT m.id, m.observed_at, m.conclusion, m.kind_hint FROM clean.meaning_units m
+        add((await db.execute(text(f"""
+            SELECT {cols} FROM clean.meaning_units m
             WHERE {where} AND m.embedding IS NOT NULL
-            ORDER BY m.embedding <=> CAST(:v AS vector) LIMIT :n"""), {**params, "v": vec})).all()  # noqa: S608
-        for i, r in enumerate(rows):
-            ranks[r.id] = ranks.get(r.id, 0.0) + 1.0 / (RRF_K + i + 1)
-            info[r.id] = r
-    if not ranks and time_hint is not None:           # chỉ có cụm thời gian: lấy mới nhất trong khoảng đó
-        rows = (await db.execute(text(f"""
-            SELECT m.id, m.observed_at, m.conclusion, m.kind_hint FROM clean.meaning_units m WHERE {where}
-            ORDER BY m.observed_at DESC LIMIT :n"""), params)).all()  # noqa: S608
-        for i, r in enumerate(rows):
-            ranks[r.id] = 1.0 / (RRF_K + i + 1)
-            info[r.id] = r
-    top = sorted(ranks, key=lambda k: ranks[k], reverse=True)[:HISTORY_TOP]
+            ORDER BY m.embedding <=> CAST(:v AS vector) LIMIT :n"""), {**params, "v": vec})).all())  # noqa: S608
+    top = sorted(ranks, key=lambda k: (-ranks[k], -info[k].observed_at.timestamp(), str(k)))[:HISTORY_TOP]
+    ev: dict[uuid.UUID, list[tuple[uuid.UUID, datetime]]] = {}
+    if top:
+        for r in (await db.execute(text("""
+            SELECT meaning_unit_id, raw_event_id, raw_received_at FROM clean.evidence
+            WHERE meaning_unit_id = ANY(:ids) AND quote_status = 'verified' ORDER BY raw_received_at, raw_event_id"""),
+                                   {"ids": top})).all():
+            lst = ev.setdefault(r.meaning_unit_id, [])
+            if r.raw_event_id not in {x[0] for x in lst}:
+                lst.append((r.raw_event_id, r.raw_received_at))
     return [PackItem(text=f"{info[k].observed_at.astimezone(UTC):%d/%m} {info[k].conclusion}", meaning_unit_id=k,
-                     meta={"kind_hint": info[k].kind_hint, "observed_at": info[k].observed_at}) for k in top]
+                     evidence_raw_ids=tuple(x[0] for x in ev.get(k, ())),
+                     meta={"kind_hint": info[k].kind_hint, "observed_at": info[k].observed_at, "evidence": ev.get(k, [])}) for k in top]
 
 
 async def _related(db: AsyncSession, org_id: uuid.UUID, anchors: list[uuid.UUID]) -> list[PackItem]:
@@ -278,6 +301,8 @@ async def pack(db: AsyncSession, org_id: uuid.UUID, thread_key: str, events: lis
     out.facts, out.budget_used["facts"] = _fit(await _facts(db, org_id, anchors, now), BUDGET["facts"])
     out.related, out.budget_used["related"] = _fit(await _related(db, org_id, anchors), BUDGET["related"])
     qtext = " ".join(str(_g(e, "text") or "") for e in events[-8:])
+    persons = [p for p in dict.fromkeys(_g(e, "sender_person_id") for e in events) if p is not None]
     out.history, out.budget_used["history"] = _fit(
-        await _history(db, org_id, thread_key, qtext, now, query_embedding, time_hint), BUDGET["history"])
+        await _history(db, org_id, thread_key, qtext, now, query_embedding, time_hint, persons, anchors), BUDGET["history"])
+    out.history.sort(key=lambda i: i.meta["observed_at"])        # cắt theo hạng RRF, đọc theo thời gian: việc trước → việc sau
     return out
