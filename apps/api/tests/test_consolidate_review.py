@@ -77,9 +77,17 @@ async def test_review2_old_messages_processed_late_are_not_new(fresh_db, db) -> 
 
 
 async def test_review2_same_raw_event_counts_once(fresh_db, db) -> None:  # type: ignore[no-untyped-def]
+    from zoneinfo import ZoneInfo
+
     w, a, b, d = await _scene(db)
-    await _evidence_from(db, w, a.id, w.x_i, d.opened_at + timedelta(hours=1))
-    await _evidence_from(db, w, a.id, w.x_i, d.opened_at + timedelta(hours=2))
+    # hai tin CÙNG một ngày giờ VN (bộ đếm ngày theo Asia/Ho_Chi_Minh). Trước đây +1h/+2h từ giờ mở tranh chấp (= giờ máy) vắt qua nửa đêm
+    # VN khi test chạy lúc 22:00–23:00 VN ⇒ thành hai ngày ⇒ đóng tranh chấp ⇒ test đỏ theo giờ chạy.
+    vn = ZoneInfo("Asia/Ho_Chi_Minh")
+    t1 = d.opened_at + timedelta(minutes=1)
+    if (t1 + timedelta(minutes=1)).astimezone(vn).date() != t1.astimezone(vn).date():
+        t1 += timedelta(minutes=3)
+    await _evidence_from(db, w, a.id, w.x_i, t1)
+    await _evidence_from(db, w, a.id, w.x_i, t1 + timedelta(minutes=1))
     assert (await consolidate.resolve_by_evidence(db, w.org))["disputes_resolved"] == 0       # cùng một ngày dù đúng người
 
 
