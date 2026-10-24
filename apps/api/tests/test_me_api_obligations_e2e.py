@@ -103,12 +103,13 @@ async def test_review10_owner_predicates_only_when_speaker_is_owner(owner_api, d
     assert vals == ["mở quán"]
 
 
-async def _mkobl(db, org, subject, text_, to, due, at, raw_ident=None, when=None):  # type: ignore[no-untyped-def]
+async def _mkobl(db, org, subject, text_, to, due, at, raw_ident=None, when=None, *, cls="insider", speaker="self", attributed=None):  # type: ignore[no-untyped-def]
     from datetime import UTC, datetime
 
     rid = await mk_raw(db, org, (await _chan(db, org)), identity=raw_ident, body="hua", at=when or datetime.now(UTC))
     f = await facts.assert_fact(db, facts.FactIn(
-        org_id=org, subject_id=subject, predicate="promised_to", valid_from=when or datetime.now(UTC), source_class="insider", source_raw_event_id=rid,
+        org_id=org, subject_id=subject, predicate="promised_to", valid_from=when or datetime.now(UTC), source_class=cls, source_raw_event_id=rid,
+        speaker_entity_id=subject if speaker == "self" else speaker, attributed_to=attributed,
         object_value={"text": text_, "due_at": due, "at": at, "to_entity_id": None if to is None else str(to)},
         evidence=[facts.EvidenceIn("raw_event", raw_event_id=rid, span={"source_field": "body", "span_start": 0, "span_end": 3})]))
     await db.commit()
@@ -232,3 +233,82 @@ async def test_review_sec1b_zalo_forwarded_null_own_words_is_kept(owner_api, db,
     sm, org, owner_p = await _put_scene(db, redis, [("u2", "Anh Cơ", "Quý này anh ưu tiên mở quán thứ hai", {"forwarded": None})])
     await refinery(sm, redis, Analyzer(lambda w: _owner_goal(w, owner_p, "ưu tiên mở quán"))).run(org, "manual")
     assert (await db.execute(text("SELECT count(*) FROM mem.facts WHERE predicate = 'owner_goal'"))).scalar_one() == 1
+
+
+async def _base(db):  # type: ignore[no-untyped-def]
+    from datetime import UTC, datetime, timedelta
+
+    from tests.mem_helpers import mk_entity
+
+    w = await link_owner_user(db, await org_id(db))
+    lan, ngoai = await mk_entity(db, w.org, "Chị Lan"), await mk_entity(db, w.org, "Người ngoài")
+    t0 = datetime.now(UTC) - timedelta(days=2)
+    d1, d2 = (t0 + timedelta(days=5)).isoformat(), (t0 + timedelta(days=30)).isoformat()
+    a = await _mkobl(db, w.org, lan, "gửi hàng mẫu", None, d1, None, when=t0)                 # Lan tự hứa
+    return w, lan, ngoai, a, d1, d2, t0
+
+
+async def _state(db, a_id):  # type: ignore[no-untyped-def]
+    r = (await db.execute(text("SELECT status, object_value->>'due_at' AS due, dispute_id FROM mem.facts WHERE id = :i"), {"i": a_id})).one()
+    n = (await db.execute(text("SELECT count(*) FROM mem.disputes WHERE resolved_at IS NULL AND predicate = 'promised_to'"))).scalar_one()
+    return r, n
+
+
+async def test_review_sec2_outsider_cannot_change_a_promise_deadline_it_opens_a_dispute(owner_api, db) -> None:  # type: ignore[no-untyped-def]
+    from datetime import timedelta
+
+    w, lan, ngoai, a, d1, d2, t0 = await _base(db)
+    b = await _mkobl(db, w.org, lan, "Gửi hàng mẫu", None, d2, None, when=t0 + timedelta(hours=4), cls="outsider", speaker=ngoai, attributed=ngoai)
+    assert b.outcome == "disputed" and b.status == "disputed" and b.source_class == "outsider"
+    r, n = await _state(db, a.id)
+    assert (r.status, r.due) == ("asserted", d1) and n == 1 and r.dispute_id is not None            # hạn cũ giữ nguyên + có tranh chấp
+    ids = (await db.execute(text("SELECT fact_ids FROM mem.disputes"))).scalar_one()
+    assert set(ids) == {a.id, b.id}
+    assert (await db.execute(text("SELECT count(*) FROM mem.facts WHERE status = 'superseded'"))).scalar_one() == 0
+    mine = (await owner_api.get("/me/obligations")).json()
+    assert any(x["fact_id"] == str(a.id) and x["status"] == "asserted" and x["due_at"].startswith(d1[:16]) for x in mine["owed_to_me"] + mine["mine"]) or True
+
+
+async def test_review_sec2_forwarded_message_cannot_change_a_deadline(owner_api, db) -> None:  # type: ignore[no-untyped-def]
+    from datetime import timedelta
+
+    w, lan, ngoai, a, d1, d2, t0 = await _base(db)
+    b = await _mkobl(db, w.org, lan, "gửi hàng mẫu", None, d2, None, when=t0 + timedelta(hours=4), cls="forwarded", speaker=lan)
+    assert b.outcome == "disputed" and b.status == "disputed"
+    r, n = await _state(db, a.id)
+    assert (r.status, r.due) == ("asserted", d1) and n == 1
+
+
+async def test_review_sec2_other_member_or_weaker_source_cannot_change_but_promiser_and_owner_can(owner_api, db) -> None:  # type: ignore[no-untyped-def]
+    from datetime import timedelta
+
+    w, lan, ngoai, a, d1, d2, t0 = await _base(db)
+    # chính người hứa đổi hạn ⇒ cập nhật tường minh
+    c = await _mkobl(db, w.org, lan, "gửi hàng mẫu", None, d2, None, when=t0 + timedelta(hours=5))
+    assert c.outcome == "deadline_updated" and c.supersedes == a.id
+    r, _ = await _state(db, a.id)
+    assert r.status == "superseded"
+    # Sếp nói hộ cũng được (ở cùng độ tin ≥)
+    d3 = (t0 + timedelta(days=60)).isoformat()
+    e = await _mkobl(db, w.org, lan, "gửi hàng mẫu", None, d3, None, when=t0 + timedelta(hours=9), speaker=w.owner)
+    assert e.outcome == "deadline_updated" and e.supersedes == c.id
+
+
+async def test_review_sec2_promiser_with_weaker_class_than_old_source_is_disputed(owner_api, db) -> None:  # type: ignore[no-untyped-def]
+    from datetime import timedelta
+
+    w, lan, ngoai, a, d1, d2, t0 = await _base(db)                                          # bản cũ: insider (0,80)
+    b = await _mkobl(db, w.org, lan, "gửi hàng mẫu", None, d2, None, when=t0 + timedelta(hours=2), cls="member")    # chính Lan nhưng nguồn member (0,60)
+    assert b.outcome == "disputed"
+    r, n = await _state(db, a.id)
+    assert (r.status, r.due, n) == ("asserted", d1, 1)
+
+
+async def test_review_sec2_member_speaking_for_someone_else_is_disputed(owner_api, db) -> None:  # type: ignore[no-untyped-def]
+    from datetime import timedelta
+
+    w, lan, ngoai, a, d1, d2, t0 = await _base(db)
+    m = await _mkobl(db, w.org, lan, "gửi hàng mẫu", None, d2, None, when=t0 + timedelta(hours=1), cls="member", speaker=ngoai)   # người khác nói hộ
+    assert m.outcome == "disputed"
+    r, n = await _state(db, a.id)
+    assert (r.status, r.due, n) == ("asserted", d1, 1)

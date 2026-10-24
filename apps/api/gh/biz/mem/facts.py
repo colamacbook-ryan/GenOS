@@ -495,14 +495,27 @@ async def _assert(db: AsyncSession, fin: FactIn, pred: predicates.Predicate) -> 
               AND status IN ('proposed', 'asserted', 'owner_confirmed', 'disputed')
               AND (valid_to IS NULL OR valid_to >= :t) AND valid_from <= :t ORDER BY valid_from DESC LIMIT 1"""),  # noqa: S608
             {"o": org, "m": members, "p": fin.predicate, "k": key, "t": t})).one_or_none()
-        if (same is not None and not olds and base_status == "asserted" and same.status == "asserted" and t > same.valid_from
-                and _deadline_changed(fin.predicate, same.object_value, fin.object_value)):
-            # hạn/giờ của CÙNG lời hứa (cùng nội dung + cùng người nhận) đổi theo tin MỚI HƠN ⇒ cập nhật TƯỜNG MINH, bảo toàn hai thời gian:
-            # bản cũ `superseded` (+ `superseded_by`), bản mới trỏ `supersedes`. Sự thật Sếp đã xác nhận / tin cũ hơn không bao giờ đi đường này.
-            await db.execute(text("UPDATE mem.facts SET status = 'superseded', closed_recorded_at = now() WHERE id = :i"), {"i": same.id})
-            fid = await insert(base_status, t, None if fin.valid_to is None else _aware(fin.valid_to), supersedes=same.id)
-            await db.execute(text("UPDATE mem.facts SET superseded_by = :n WHERE id = :i"), {"n": fid, "i": same.id})
-            return await _load(db, fid, "deadline_updated")
+        changed = (same is not None and not olds and base_status == "asserted" and t > same.valid_from
+                   and _deadline_changed(fin.predicate, same.object_value, fin.object_value))
+        if changed and same is not None:
+            # Cổng tin cậy (như đường đơn trị): chỉ bản mới "tự đủ tư cách" — nguồn owner, hoặc chính người hứa/Sếp nói, không phải
+            # người ngoài/tin chuyển tiếp, độ tin nguồn ≥ bản cũ — mới được ĐỔI hạn. Thiếu một điều kiện ⇒ mở TRANH CHẤP (Sếp thấy có người báo hạn
+            # khác), bản cũ giữ nguyên.
+            owner_id = (await db.execute(text("SELECT id FROM mem.entities WHERE org_id = :o AND is_owner"), {"o": org})).scalar_one_or_none()
+            trusted = (not ext and fin.source_class != "forwarded"
+                       and (fin.source_class == "owner" or (speaker is not None and (speaker == subject_id or speaker == owner_id)))
+                       and RELIABILITY.get(fin.source_class, 0.0) >= RELIABILITY.get(same.source_class, 0.0))
+            if not trusted and same.status in LIVE:
+                fid = await insert("disputed", t, None if fin.valid_to is None else _aware(fin.valid_to))
+                await disputes.open(db, org, subject_id, fin.predicate, [same.id, fid], signal_kind=pred.dispute_signal_kind, note="han_khac")
+                return await _load(db, fid, "disputed")
+            if trusted and same.status == "asserted":
+                # hạn/giờ của CÙNG lời hứa (cùng nội dung + cùng người nhận) đổi theo tin MỚI HƠN ⇒ cập nhật TƯỜNG MINH, bảo toàn hai thời
+                # gian: bản cũ `superseded` (+ `superseded_by`), bản mới trỏ `supersedes`. Sự thật Sếp đã xác nhận không đi đường này.
+                await db.execute(text("UPDATE mem.facts SET status = 'superseded', closed_recorded_at = now() WHERE id = :i"), {"i": same.id})
+                fid = await insert(base_status, t, None if fin.valid_to is None else _aware(fin.valid_to), supersedes=same.id)
+                await db.execute(text("UPDATE mem.facts SET superseded_by = :n WHERE id = :i"), {"n": fid, "i": same.id})
+                return await _load(db, fid, "deadline_updated")
         if same is not None and not olds and not (base_status == "owner_confirmed" and same.status != "owner_confirmed"):
             await _add_evidence(db, org, same.id, fin.evidence)
             return _fact(same, "evidence_added")
