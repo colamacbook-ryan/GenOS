@@ -1781,7 +1781,7 @@ class GroupTurns:
                 except Exception as exc:  # noqa: BLE001 — sự thật đề xuất lỗi ghi: đơn vị đã ghi vẫn giữ
                     log.error("Ghi sự thật của lượt %s lỗi: %s", aid, err_code(exc))
                     errors.append({"code": "facts_write_failed", "n": len(fact_ins), "error": type(exc).__name__})
-            await self._promises_kept(db, org_id, aid, verified, window, evs, errors)
+            await self._promises_kept(db, org_id, aid, verified, window, evs, tk, errors)
             # trạng thái từng tin: có đơn vị trích ⇒ clean; còn lại ⇒ discarded (không có sự việc)
             held: set[uuid.UUID] = set()
             for e in evs:
@@ -1841,20 +1841,33 @@ class GroupTurns:
         await self.r._embed(org_id, unit_rows)
 
     async def _promises_kept(self, db: AsyncSession, org_id: uuid.UUID, aid: uuid.UUID, verified: Any, window: Any, evs: list[GEv],
-                             errors: list[dict[str, Any]]) -> None:
+                             tk: str, errors: list[dict[str, Any]]) -> None:
         """`memory_updates.promise_kept` ⇒ đóng hiệu lực lời hứa trong sổ qua cổng tin cậy của `facts.close_kept` (kỹ năng v2.1 §9.3:
-        [tin hứa, tin đã giữ]). Tin đã giữ chỉ lấy trong tin MỚI được nhận vào lượt này (`evs`), không lấy tin ngữ cảnh/lời xác nhận
-        đưa lại. Đếm `promise_kept_closed` / `promise_kept_untrusted` / `promise_kept_unmatched` (mã + số, không nội dung)."""
+        [tin hứa, tin đã giữ]). Cờ của từng tin được trích (tin mới của lượt? chuyển tiếp? có chữ? luồng, trả lời tin nào) lấy từ kho thô,
+        không từ model. Đếm `promise_kept_closed` / `promise_kept_untrusted` / `promise_kept_unmatched` (mã + số, không nội dung)."""
         by_mid = {e.message_id: e for e in window.all_events if e.raw_event_id is not None}
         mine = {e.event_id: e for e in evs}
         for mu in verified.memory_updates:
             if mu.type != "promise_kept":
                 continue
-            cited = [by_mid[i].raw_event_id for i in mu.message_ids if i in by_mid]
-            kept = [facts_mod.KeptMsg(mine[r].event_id, mine[r].occurred_at, mine[r].person_id) for r in dict.fromkeys(cited) if r in mine]
+            cited: list[Any] = []
+            for i in dict.fromkeys(mu.message_ids):
+                ge = by_mid.get(i)
+                if ge is None:
+                    continue
+                g = mine.get(ge.raw_event_id)
+                reply_raw = None
+                if g is not None and g.reply_ext:
+                    reply_raw = (await db.execute(text("""SELECT id FROM raw.events WHERE org_id = :o AND channel_id = :c AND external_msg_id = :x
+                                                          LIMIT 1"""), {"o": org_id, "c": g.channel_id, "x": g.reply_ext})).scalar_one_or_none()
+                cited.append(facts_mod.KeptMsg(
+                    ge.raw_event_id, ge.sent_at, g.person_id if g is not None else ge.sender_person_id, new=g is not None,
+                    forwarded=bool(g.forwarded if g is not None else ge.forwarded),
+                    has_text=bool(((g.body if g is not None else ge.body) or "").strip()), thread_key=tk if g is not None else None,
+                    reply_to_raw=reply_raw))
             try:
                 async with db.begin_nested():
-                    res = await facts_mod.close_kept(db, org_id, cited, kept)
+                    res = await facts_mod.close_kept(db, org_id, cited)
             except Exception as exc:  # noqa: BLE001 — đóng lời hứa lỗi: lượt vẫn ghi, mã lỗi vào analyses
                 log.error("Đóng lời hứa đã giữ của lượt %s lỗi: %s", aid, err_code(exc))
                 errors.append({"code": "promise_kept_failed", "error": type(exc).__name__})

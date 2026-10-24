@@ -636,17 +636,22 @@ KEPT_PREDICATES = ("promised_to", "owes")
 
 @dataclass(frozen=True)
 class KeptMsg:
-    """Tin MỚI của lượt (không phải tin ngữ cảnh) mà model trích làm bằng chứng đã giữ: id tin, giờ gửi, người gửi (hồ sơ người)."""
+    """Một tin model trích trong `promise_kept` (đã qua `verify`: mã có trong cửa sổ). Bên gọi điền các cờ từ kho thô, không từ model."""
 
     raw_event_id: uuid.UUID
     sent_at: datetime
     sender_person_id: uuid.UUID | None
+    new: bool                          # tin MỚI được nhận vào lượt này (không phải tin ngữ cảnh/lời xác nhận đưa lại)
+    forwarded: bool = False            # cờ chuyển tiếp của nền tảng (None/không biết ⇒ False; simhash xuyên nhóm là việc của T1)
+    has_text: bool = True              # có chữ (sticker/ảnh không chữ không chứng minh được "đã giữ")
+    thread_key: str | None = None      # luồng của tin (event_state.detail.thread_key)
+    reply_to_raw: uuid.UUID | None = None
 
 
 @dataclass
 class KeptResult:
     closed: list[uuid.UUID] = field(default_factory=list)
-    untrusted: int = 0                 # có lời hứa khớp nhưng không tin nào đủ tin cậy để đóng (người thứ ba, tin cũ hơn lời hứa…)
+    untrusted: int = 0                 # có lời hứa khớp nhưng bằng chứng không đủ tin cậy ⇒ KHÔNG đóng
 
 
 async def _beneficiary(db: AsyncSession, r: Any) -> uuid.UUID | None:
@@ -665,29 +670,36 @@ async def _beneficiary(db: AsyncSession, r: Any) -> uuid.UUID | None:
         return None
 
 
-async def close_kept(db: AsyncSession, org_id: uuid.UUID, cited_raw_ids: list[uuid.UUID], kept: list[KeptMsg]) -> KeptResult:
+async def close_kept(db: AsyncSession, org_id: uuid.UUID, cited: list[KeptMsg]) -> KeptResult:
     """`memory_updates.promise_kept` (model: [tin hứa, tin chứng minh đã giữ]) ⇒ ĐÓNG hiệu lực theo thời gian sự việc (`valid_to` = giờ
     gửi tin đã giữ, `closed_recorded_at = now()`, trạng thái GIỮ `asserted` — CNS-095; không xoá). Model đọc chữ người ngoài nên lời nó
-    nói là ĐỀ XUẤT; cổng tin cậy (cùng tinh thần `_assert` 6b/6e — chỉ người trong cuộc hoặc Sếp đổi được sự thật):
-    * chỉ sự thật có TIN NGUỒN (`source_raw_event_id`) nằm trong mã model trích — không đóng hàng loạt theo bằng chứng phụ;
-    * tin đã giữ phải là tin MỚI của lượt (`kept`, bên gọi chỉ đưa tin được nhận vào lượt), khác tin nguồn, gửi SAU lời hứa;
-    * người gửi tin đã giữ: Sếp, hoặc bên được hứa/chủ nợ; riêng `promised_to` thêm chính người hứa ("em gửi rồi"). `owes` (tiền): con nợ
-      hay người thứ ba nói "đã trả" KHÔNG đóng được. Không đạt ⇒ không đóng, đếm `untrusted`.
+    là ĐỀ XUẤT; cổng tin cậy (cùng tinh thần `_assert` 6b/6e — chỉ người trong cuộc hoặc Sếp đổi được sự thật, tin chuyển tiếp không đổi
+    được sự thật của người trong cuộc):
+    * chỉ sự thật có TIN NGUỒN (`source_raw_event_id`) nằm trong mã được trích — không đóng hàng loạt theo bằng chứng phụ;
+    * mỗi tin được trích khác tin nguồn/bằng chứng của chính sự thật là "bằng chứng đã giữ" và phải ĐỦ: tin mới của lượt, không chuyển
+      tiếp, có chữ, gửi SAU lời hứa, cùng luồng với tin hứa (hoặc trả lời đúng tin đó), người gửi là Sếp hoặc bên được hứa/chủ nợ
+      (`promised_to` thêm chính người hứa; `owes`: con nợ hay người thứ ba nói "đã trả" không đủ);
+    * có dù chỉ MỘT tin bằng chứng không đủ (vd model trích kèm tin người thứ ba) ⇒ KHÔNG đóng, đếm `untrusted` (không tự mở tranh
+      chấp: kẻ gian sẽ dùng chính đường đó để làm lung lay sự thật thật).
     `owner_confirmed` chỉ Sếp đóng (§4A.1 6f); `disputed` đi đường tranh chấp. Cùng khoá tư vấn với `assert_fact`."""
     out = KeptResult()
-    if not cited_raw_ids or not kept:
+    ids = list(dict.fromkeys(c.raw_event_id for c in cited))
+    if len(ids) < 2:
         return out
     rows = (await db.execute(text("""
-        SELECT f.id, f.subject_id, f.predicate, f.valid_from, f.source_raw_event_id, f.object_entity_id, f.object_value FROM mem.facts f
+        SELECT f.id, f.subject_id, f.predicate, f.valid_from, f.source_raw_event_id, f.object_entity_id, f.object_value,
+               (SELECT s.detail ->> 'thread_key' FROM refinery.event_state s WHERE s.event_id = f.source_raw_event_id LIMIT 1) AS tk,
+               ARRAY(SELECT x.raw_event_id FROM mem.fact_evidence x WHERE x.fact_id = f.id AND x.raw_event_id IS NOT NULL) AS ev
+        FROM mem.facts f
         WHERE f.org_id = :o AND f.predicate = ANY(:p) AND f.status = 'asserted' AND f.valid_to IS NULL AND f.source_raw_event_id = ANY(:r)
-        ORDER BY f.subject_id, f.predicate, f.id"""), {"o": org_id, "p": list(KEPT_PREDICATES), "r": cited_raw_ids})).all()
+        ORDER BY f.subject_id, f.predicate, f.id"""), {"o": org_id, "p": list(KEPT_PREDICATES), "r": ids})).all()
     if not rows:
         return out
     owner = (await entities.owner(db, org_id)).id
     speakers: dict[uuid.UUID, uuid.UUID] = {}
-    for k in kept:
-        if k.sender_person_id is not None and k.sender_person_id not in speakers:
-            speakers[k.sender_person_id] = (await entities.ensure_person(db, org_id, k.sender_person_id)).id
+    for c in cited:
+        if c.sender_person_id is not None and c.sender_person_id not in speakers:
+            speakers[c.sender_person_id] = (await entities.ensure_person(db, org_id, c.sender_person_id)).id
     plan: list[tuple[Any, datetime]] = []
     for r in rows:
         allowed = {owner}
@@ -695,10 +707,15 @@ async def close_kept(db: AsyncSession, org_id: uuid.UUID, cited_raw_ids: list[uu
             allowed.add(ben)
         if r.predicate == "promised_to":
             allowed.add(await entities.canonical(db, r.subject_id))
-        ok = [_aware(k.sent_at) for k in kept if k.raw_event_id != r.source_raw_event_id and _aware(k.sent_at) > r.valid_from
-              and k.sender_person_id is not None and speakers.get(k.sender_person_id) in allowed]
-        if ok:
-            plan.append((r, min(ok)))
+        own = {r.source_raw_event_id, *(r.ev or [])}
+        proofs = [c for c in cited if c.raw_event_id not in own]
+
+        def ok(c: KeptMsg, r: Any = r, allowed: set[uuid.UUID] = allowed) -> bool:
+            return (c.new and not c.forwarded and c.has_text and _aware(c.sent_at) > r.valid_from
+                    and (c.thread_key is not None and c.thread_key == r.tk or c.reply_to_raw == r.source_raw_event_id)
+                    and c.sender_person_id is not None and speakers.get(c.sender_person_id) in allowed)
+        if proofs and all(ok(c) for c in proofs):
+            plan.append((r, min(_aware(c.sent_at) for c in proofs)))
         else:
             out.untrusted += 1
     if not plan:

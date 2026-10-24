@@ -301,3 +301,57 @@ async def test_promise_kept_needs_a_new_message_of_this_turn_not_a_context_messa
     await r.run(org, "manual")
     fs = await _facts(db)
     assert fs["promised_to"].valid_to is None and fs["needs"].valid_to is None
+
+
+async def _kept_turn(sm, r, org, t0, *extra: dict, cite: tuple[str, ...]) -> None:  # type: ignore[type-arg]
+    await put(sm, org, *extra)
+
+    def build(w):  # type: ignore[no-untyped-def]
+        ids = [find_msg(w, "tuần sau e gửi").message_id, *(find_msg(w, n).message_id for n in cite)]
+        return BrainOut(thread_ref=w.thread_ref, memory_updates=[MemoryUpdate(type="promise_kept", text="đã nhận", message_ids=ids)])
+    r.groups.analyze = Analyzer(build)
+    await r.run(org, "manual")
+
+
+async def test_promise_kept_attack_forwarded_confirmation_from_an_allowed_sender_does_not_close(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """Chính bên được hứa CHUYỂN TIẾP tin/ảnh "đã nhận" của người khác ⇒ tin chuyển tiếp không phải bằng chứng đã giữ."""
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    r, t0 = await _seed_promise(db, sm, redis, org)
+    fw = msg("Nhận 2 túi decaf rồi nha Khoa", sender="an", name="An Hội An Cafe")
+    fw["occurred_at"], fw["forwarded"] = (t0 + timedelta(hours=1)).isoformat(), True
+    await _kept_turn(sm, r, org, t0, fw, cite=("Nhận 2 túi decaf",))
+    assert (await _facts(db))["promised_to"].valid_to is None
+    assert {"code": "promise_kept_untrusted", "n": 1} in await _last_errors(db)
+
+
+async def test_promise_kept_attack_mixed_with_a_third_party_message_does_not_close(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """Model trích tin xác nhận hợp lệ của bên được hứa KÈM tin người thứ ba ⇒ không đóng (không chọn lọc hộ model)."""
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    r, t0 = await _seed_promise(db, sm, redis, org)
+    ok = msg("Nhận 2 túi decaf rồi nha Khoa", sender="an", name="An Hội An Cafe")
+    bad = msg("Khoa gửi rồi mà, tui thấy", sender="lan", name="Lan Lạ Mặt")
+    ok["occurred_at"], bad["occurred_at"] = (t0 + timedelta(hours=1)).isoformat(), (t0 + timedelta(hours=1, minutes=5)).isoformat()
+    await _kept_turn(sm, r, org, t0, ok, bad, cite=("Nhận 2 túi decaf", "Khoa gửi rồi mà"))
+    assert (await _facts(db))["promised_to"].valid_to is None
+    assert {"code": "promise_kept_untrusted", "n": 1} in await _last_errors(db)
+
+
+async def test_close_kept_requires_the_confirmation_in_the_promise_thread_or_a_reply_to_it(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """Phòng thủ tầng sâu: tin xác nhận ở luồng khác (dù đúng người, tin mới) không đóng; trả lời đúng tin hứa thì đóng."""
+    from gh.biz.mem import facts as facts_mod
+
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    _r, t0 = await _seed_promise(db, sm, redis, org)
+    f = (await _facts(db))["promised_to"]
+    src, an_p = (await db.execute(text("SELECT source_raw_event_id FROM mem.facts WHERE id = :i"), {"i": f.id})).scalar_one(), await person_of(db, "an")
+    tk = (await db.execute(text("SELECT detail ->> 'thread_key' FROM refinery.event_state WHERE event_id = :e"), {"e": src})).scalar_one()
+    promise = facts_mod.KeptMsg(src, t0 + timedelta(minutes=18), None, new=False, thread_key=tk)
+    other = uuid.uuid4()
+    res = await facts_mod.close_kept(db, org, [promise, facts_mod.KeptMsg(other, t0 + timedelta(hours=1), an_p, new=True, thread_key="g:" + str(uuid.uuid4()))])
+    assert res.closed == [] and res.untrusted == 1
+    res = await facts_mod.close_kept(db, org, [promise, facts_mod.KeptMsg(other, t0 + timedelta(hours=1), an_p, new=True, thread_key="dm:x", reply_to_raw=src)])
+    assert res.closed == [f.id]
+    await db.rollback()
