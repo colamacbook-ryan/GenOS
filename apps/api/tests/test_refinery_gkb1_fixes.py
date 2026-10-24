@@ -279,3 +279,41 @@ async def test_notebook_and_mention_attribute_a_cited_context_message_to_its_own
     entries = (await db.execute(text("SELECT body FROM memory.entries"))).scalars().all()
     assert entries and all(b.startswith(f"theo lời {hang.code}: ") for b in entries)
     assert (await db.execute(text("SELECT raw_event_id FROM mem.mentions"))).scalars().all() == [old]
+
+
+async def test_write_errors_never_log_quotes_or_sql_parameters(app, db, redis, monkeypatch, caplog) -> None:  # type: ignore[no-untyped-def]
+    """Lỗi SQL của SQLAlchemy kèm `[parameters: ...]` (trích dẫn, summary — có thể chứa OTP/STK): log chỉ ghi loại lỗi + mã, không traceback."""
+    import logging
+
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    await put(sm, org, msg("Mã OTP của em là 482913 nha shop", sender="u1"))
+
+    real = runner.GroupTurns._notebook
+
+    async def bad_sql(self, db_, org_id_, uid, u, first_ev):  # type: ignore[no-untyped-def]
+        await db_.execute(text("SELECT CAST(CAST(:q AS text) AS int)"), {"q": u.summary})       # lỗi phía máy chủ, thông điệp có giá trị
+
+    monkeypatch.setattr(runner.GroupTurns, "_notebook", bad_sql)
+    caplog.set_level(logging.DEBUG)
+    an = Analyzer(lambda w: out_with(w, unit_for(w, "Mã OTP của em là 482913", kind="rui_ro_lua_dao", summary="Khách lộ OTP 482913")))
+    r = refinery(sm, redis, an)
+    await r.run(org, "manual")
+    assert "unit_write_failed" in str((await db.execute(text("SELECT errors FROM refinery.analyses"))).scalar_one())
+    # đường lỗi cả lượt: SQL lỗi mang thân tin làm tham số
+    monkeypatch.setattr(runner.GroupTurns, "_notebook", real)
+
+    async def bad_state(self, db_, e, *a, **k):  # type: ignore[no-untyped-def]
+        await db_.execute(text("SELECT CAST(CAST(:q AS text) AS int)"), {"q": e.body})
+
+    monkeypatch.setattr(Refinery, "_set_state", bad_state)
+    await clear_backoff(db)
+    await r.run(org, "manual")
+    assert "482913" not in caplog.text and "parameters" not in caplog.text
+    assert "Ghi đơn vị u1" in caplog.text and "Ghi lượt phân tích" in caplog.text and "InvalidTextRepresentation" in caplog.text
+
+
+def test_engine_hides_sql_parameters_in_errors(app) -> None:  # type: ignore[no-untyped-def]
+    from gh import db as dbmod
+
+    assert dbmod.get_engine().hide_parameters is True and dbmod.get_admin_engine().hide_parameters is True

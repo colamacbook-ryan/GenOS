@@ -16,7 +16,7 @@ _admin_sessionmaker: async_sessionmaker[AsyncSession] | None = None
 def get_engine() -> AsyncEngine:
     global _engine, _sessionmaker
     if _engine is None:
-        _engine = create_async_engine(get_settings().database_url, pool_pre_ping=True)
+        _engine = create_async_engine(get_settings().database_url, pool_pre_ping=True, hide_parameters=True)
         _sessionmaker = async_sessionmaker(_engine, expire_on_commit=False)
     return _engine
 
@@ -33,7 +33,7 @@ def get_admin_engine() -> AsyncEngine:
     đường request HTTP thường (route/service dùng `sessionmaker()` như cũ, qua role `gh_app`)."""
     global _admin_engine, _admin_sessionmaker
     if _admin_engine is None:
-        _admin_engine = create_async_engine(get_settings().effective_admin_database_url, pool_pre_ping=True)
+        _admin_engine = create_async_engine(get_settings().effective_admin_database_url, pool_pre_ping=True, hide_parameters=True)
         _admin_sessionmaker = async_sessionmaker(_admin_engine, expire_on_commit=False)
     return _admin_engine
 

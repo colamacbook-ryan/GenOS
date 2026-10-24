@@ -799,6 +799,20 @@ SAFETY_KINDS = frozenset({"rui_ro_lua_dao", "suc_khoe_an_toan"})
 SAFETY_GATES = frozenset({"lua_dao_dang_dien_ra", "an_toan"})
 
 
+def err_code(exc: BaseException) -> str:
+    """Mã lỗi an toàn để log: CHỈ tên lớp (+ lớp lỗi DBAPI gốc). Thông điệp/traceback của SQLAlchemy/asyncpg chứa tham số câu lệnh
+    (trích dẫn, summary — có thể có OTP/STK) nên không bao giờ được ghi ra log."""
+    parts = [type(exc).__name__]
+    orig = getattr(exc, "orig", None)
+    root = getattr(orig, "__cause__", None) or orig                 # adapter asyncpg của SQLAlchemy bọc lỗi asyncpg thật trong __cause__
+    if root is not None:
+        parts.append(type(root).__name__)
+    code = getattr(root, "sqlstate", None) or getattr(orig, "sqlstate", None)
+    if isinstance(code, str) and code.isalnum():
+        parts.append(code)
+    return "/".join(parts)
+
+
 def is_safety_unit(u: Any) -> bool:
     """Đơn vị lừa đảo/an toàn (loại hoặc cổng): ghi lỗi thì phải để lại dấu vết + giữ tin chờ (fail-high), không biến mất im lặng."""
     return getattr(u, "kind", None) in SAFETY_KINDS or getattr(u, "gate_candidate", None) in SAFETY_GATES
@@ -1337,7 +1351,7 @@ class GroupTurns:
             async with self.r.sm() as db:
                 window, pack, profile = await self._window(db, org_id, tk, claimed)
         except Exception as exc:  # noqa: BLE001 — dựng ngữ cảnh lỗi: trả tin về pending, không mất tin
-            log.exception("Dựng cửa sổ luồng %s lỗi", tk)
+            log.error("Dựng cửa sổ luồng %s lỗi: %s", tk, err_code(exc))
             await self._release(evs, st, f"dựng ngữ cảnh lỗi: {type(exc).__name__}", backoff=True)
             return
         since = datetime.now(UTC) - timedelta(seconds=2)
@@ -1361,7 +1375,7 @@ class GroupTurns:
         try:
             await self._write(org_id, st, tk, aid, kind, claimed, window, pack, profile, analysis, since, secrets)
         except Exception as exc:  # noqa: BLE001 — lỗi ngoài từng đơn vị ⇒ rollback cả giao dịch, tin về pending (tính lần thử, lùi nhịp)
-            log.exception("Ghi lượt phân tích %s lỗi", tk)
+            log.error("Ghi lượt phân tích %s lỗi: %s", tk, err_code(exc))
             await self._release(evs, st, f"ghi lượt lỗi: {type(exc).__name__}", count_error=True, backoff=True)
             await self._record_failed(org_id, tk, aid, window, "write_failed", st, kind=kind, since=since)
 
@@ -1689,7 +1703,7 @@ class GroupTurns:
                     async with db.begin_nested():
                         uid = await self._write_unit(db, org_id, st, aid, u, vqs, observed, first_ev, src0, srcs, persons)
                 except Exception as exc:  # noqa: BLE001 — lỗi ghi một đơn vị: ghi mã lỗi (không nội dung tin), đơn vị khác vẫn ghi
-                    log.exception("Ghi đơn vị %s của lượt %s lỗi", u.unit_ref, aid)
+                    log.error("Ghi đơn vị %s của lượt %s lỗi: %s", u.unit_ref, aid, err_code(exc))
                     safety = is_safety_unit(u)
                     errors.append({"code": "unit_write_failed_safety" if safety else "unit_write_failed", "unit_ref": u.unit_ref,
                                    "kind": u.kind, "gate": u.gate_candidate, "error": type(exc).__name__})
@@ -1713,7 +1727,7 @@ class GroupTurns:
                     st.facts_written += len(res.written)
                     errors.extend(res.errors)
                 except Exception as exc:  # noqa: BLE001 — sự thật đề xuất lỗi ghi: đơn vị đã ghi vẫn giữ
-                    log.exception("Ghi sự thật của lượt %s lỗi", aid)
+                    log.error("Ghi sự thật của lượt %s lỗi: %s", aid, err_code(exc))
                     errors.append({"code": "facts_write_failed", "n": len(fact_ins), "error": type(exc).__name__})
             # trạng thái từng tin: có đơn vị trích ⇒ clean; còn lại ⇒ discarded (không có sự việc)
             held: set[uuid.UUID] = set()
