@@ -1563,18 +1563,20 @@ class GroupTurns:
             for rid, rr in it.meta.get("evidence", ()):
                 if rid not in have and rid not in want and len(want) < HISTORY_EVIDENCE_MAX:
                     want[rid] = rr
-        if not want:
+        scope = await self._thread_scope(db, tk)
+        if not want or scope is None:
             return ctx_events
-        rows = (await db.execute(text("""
+        where, sp = scope
+        # phòng thủ nhiều lớp (CNS-086): chỉ tin CÙNG luồng (nhóm; 1-1 ⇒ đúng người + kênh) dù bằng chứng trỏ đi đâu
+        rows = (await db.execute(text(f"""
             SELECT e.id, e.received_at, e.occurred_at, e.kind, e.body_text, e.payload, e.external_msg_id, e.sender_identity_id,
                    pi.person_id, p.display_name
-            FROM unnest(CAST(:ids AS uuid[]), CAST(:rs AS timestamptz[])) AS u(id, r)
+            FROM unnest(CAST(:wids AS uuid[]), CAST(:wrs AS timestamptz[])) AS u(id, r)
             JOIN raw.events e ON e.id = u.id AND e.received_at = u.r
             LEFT JOIN core.person_identities pi ON pi.id = e.sender_identity_id
             LEFT JOIN core.persons p ON p.id = pi.person_id
-            WHERE e.org_id = :o AND e.group_id IS NOT DISTINCT FROM CAST(:g AS uuid)
-            ORDER BY e.occurred_at DESC"""), {"o": org_id, "ids": list(want), "rs": list(want.values()), "g": thread_group(tk)})).all()
-        # phòng thủ nhiều lớp (CNS-086): chỉ tin CÙNG nhóm (luồng 1-1 ⇒ chỉ tin không thuộc nhóm nào) dù bằng chứng trỏ đi đâu
+            WHERE e.org_id = :o AND {where}
+            ORDER BY e.occurred_at DESC"""), {"o": org_id, "wids": list(want), "wrs": list(want.values()), **sp})).all()  # noqa: S608 — `where` là hằng nội bộ
         extra: list[Any] = []
         used = 0
         for r in rows:
@@ -1620,30 +1622,34 @@ class GroupTurns:
                              sender_name=r.display_name, kind=r.kind or "text", forwarded=bool(_payload_get(r.payload, *FORWARD_KEYS)),
                              raw_event_id=r.id, received_at=r.received_at, context=True)
 
+    async def _thread_scope(self, db: AsyncSession, tk: str) -> tuple[str, dict[str, Any]] | None:
+        """Điều kiện SQL (alias `e` = raw.events) "tin thuộc luồng `tk`": nhóm ⇒ `group_id`; 1-1 ⇒ không nhóm + đúng kênh + người
+        đó gửi HOẶC gửi tới người đó. None = luồng không xác định được (không lấy tin nào)."""
+        gid = thread_group(tk)
+        if gid is not None:
+            return "e.group_id = :g", {"g": gid}
+        pid, chan = thread_dm(tk)
+        if chan is None or pid is None:
+            return None
+        ids: list[uuid.UUID] = []
+        ext: list[str] = []
+        for r in (await db.execute(text("SELECT id, external_id FROM core.person_identities WHERE person_id = :p AND channel_id = :c"),
+                                   {"p": pid, "c": chan})).all():
+            ids.append(r.id)
+            if (b := _bare(r.external_id)):
+                ext.append(b)
+        if not ids:
+            return None
+        return (f"e.group_id IS NULL AND e.channel_id = :c AND (e.sender_identity_id = ANY(:ids) OR "
+                f"{outbound_to_sql('e', 'CAST(:ids AS uuid[])', 'CAST(:ext AS text[])')})", {"c": chan, "ids": ids, "ext": ext})
+
     async def _context(self, db: AsyncSession, org_id: uuid.UUID, tk: str, blocks: list[GEv], first: datetime) -> list[Any]:
         """Cửa sổ gần: tối đa 30 tin VÀ trong 24 giờ trước tin mới đầu tiên, đã xử lý (không `pending`/`processing`), CÙNG luồng."""
-        gid = thread_group(tk)
-        params: dict[str, Any] = {"o": org_id, "first": first, "lo": first - CONTEXT_WINDOW, "n": CONTEXT_EVENTS}
-        if gid is not None:
-            where = "e.group_id = :g"
-            params["g"] = gid
-        else:
-            pid, chan = thread_dm(tk)
-            if chan is None:
-                return []
-            ids: list[uuid.UUID] = []
-            ext: list[str] = []
-            if pid is not None:
-                for r in (await db.execute(text("SELECT id, external_id FROM core.person_identities WHERE person_id = :p AND channel_id = :c"),
-                                           {"p": pid, "c": chan})).all():
-                    ids.append(r.id)
-                    if (b := _bare(r.external_id)):
-                        ext.append(b)
-            if not ids:
-                return []
-            where = (f"e.group_id IS NULL AND e.channel_id = :c AND (e.sender_identity_id = ANY(:ids) OR "
-                     f"{outbound_to_sql('e', 'CAST(:ids AS uuid[])', 'CAST(:ext AS text[])')})")
-            params |= {"c": chan, "ids": ids, "ext": ext}
+        scope = await self._thread_scope(db, tk)
+        if scope is None:
+            return []
+        where, sp = scope
+        params: dict[str, Any] = {"o": org_id, "first": first, "lo": first - CONTEXT_WINDOW, "n": CONTEXT_EVENTS, **sp}
         rows = (await db.execute(text(f"""
             SELECT e.id, e.received_at, e.occurred_at, e.kind, e.body_text, e.payload, e.external_msg_id, e.sender_identity_id,
                    pi.person_id, p.display_name

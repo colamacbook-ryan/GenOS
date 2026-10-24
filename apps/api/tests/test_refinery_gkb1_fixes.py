@@ -445,3 +445,31 @@ async def test_ack_bound_never_cuts_an_ack_inside_the_window_even_when_received_
     r.groups.analyze = an2
     await r.run(org, "manual")
     assert "Dạ e ghi nhận ạ" not in [e.body for e in an2.windows[-1].new_events]
+
+
+async def test_history_evidence_in_dm_never_pulls_another_persons_dm(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """Luồng 1-1 (`dm:`): `thread_group` = None nên lọc theo nhóm (`group_id IS NULL`) khớp MỌI tin 1-1 của tổ chức — phải lọc thêm
+    theo người + kênh của luồng."""
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    old = msg("Em giữ giá 320k/thùng cho chị tới hết tháng nhé", group=None, sender="p1", name="Anh Tư")
+    old["occurred_at"] = (datetime.now(UTC) - timedelta(days=5)).isoformat()
+    await put(sm, org, old)
+    other = msg("Chuyện riêng của em: nợ 50 triệu", group=None, sender="q1", name="Người Q")
+    other["occurred_at"] = (datetime.now(UTC) - timedelta(days=4)).isoformat()
+    [other_id] = await put(sm, org, other)
+    r = refinery(sm, redis, Analyzer(lambda w: out_with(w, *([unit_for(w, "giữ giá 320k/thùng", kind="nghia_vu_loi_hua")]
+                                                             if any("320k" in (e.body or "") for e in w.new_events) else []))))
+    await r.run(org, "manual")
+    rcv = (await db.execute(text("SELECT received_at FROM raw.events WHERE id = :e"), {"e": other_id})).scalar_one()
+    u = (await db.execute(text("SELECT id, observed_at FROM clean.meaning_units"))).one()
+    await db.execute(text("""INSERT INTO clean.evidence (meaning_unit_id, meaning_observed_at, raw_event_id, raw_received_at, quote, quote_status)
+                             VALUES (:m, :mo, :e, :r, 'x', 'verified')"""), {"m": u.id, "mo": u.observed_at, "e": other_id, "r": rcv})
+    await db.commit()
+    await put(sm, org, msg("Hoá đơn tuần này 345k/thùng nha chị", group=None, sender="p1", name="Anh Tư"))
+    an = Analyzer()
+    r.groups.analyze = an
+    await r.run(org, "manual")
+    w = an.windows[-1]
+    assert w.thread_ref.startswith("dm:") and an.packs[-1].history                   # đúng luồng 1-1 của Anh Tư, có lịch sử
+    assert other_id not in {c.raw_event_id for c in w.context_events}
