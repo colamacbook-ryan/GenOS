@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from sqlalchemy import text
@@ -11,6 +12,7 @@ from gh.biz.hooks import CronJob, Hook
 from gh.biz.mem import heat
 
 HOOKS: list[Hook] = []
+log = logging.getLogger("gh.mem.heat")
 
 
 async def mem_heat_weekly(ctx: dict[str, Any]) -> dict[str, dict[str, int]]:
@@ -21,9 +23,13 @@ async def mem_heat_weekly(ctx: dict[str, Any]) -> dict[str, dict[str, int]]:
     async with sm() as db:
         orgs = (await db.execute(text("SELECT id FROM core.organizations"))).scalars().all()
     for org in orgs:
-        async with sm() as db:
-            out[str(org)] = await heat.rebuild(db, org)
-            await db.commit()
+        try:
+            async with sm() as db:
+                out[str(org)] = await heat.rebuild(db, org)
+                await db.commit()
+        except Exception:                                       # noqa: BLE001 — một tổ chức lỗi không dừng cả đêm
+            log.exception("mem_heat_weekly lỗi ở một tổ chức")
+            out[str(org)] = {"error": 1}
     return out
 
 

@@ -90,26 +90,7 @@ async def _new_evidence(db, fact_id, org, hours_after_open: list[int]) -> None: 
     await db.commit()
 
 
-async def test_consolidate_resolves_dispute_only_with_two_newer_insider_evidences_on_two_days(fresh_db, db) -> None:  # type: ignore[no-untyped-def]
-    org = await mk_org(db)
-    a, _b, fa, fb = await _conflict(db, org)
-    await consolidate.reconcile_merged(db, org)
-    await _commit(db)
-    assert (await consolidate.resolve_by_evidence(db, org))["disputes_resolved"] == 0                 # chưa có bằng chứng mới
-    await _new_evidence(db, fa.id, org, [1, 2])                                                       # 2 bằng chứng nhưng CÙNG ngày
-    assert (await consolidate.resolve_by_evidence(db, org))["disputes_resolved"] == 0
-    await _new_evidence(db, fa.id, org, [30])                                                         # thêm một ngày khác
-    await _new_evidence(db, fb.id, org, [3])                                                          # bên kia cũng có bằng chứng mới ⇒ chưa đóng
-    assert (await consolidate.resolve_by_evidence(db, org))["disputes_resolved"] == 0
-    await db.execute(text("DELETE FROM mem.fact_evidence WHERE fact_id = :f AND created_at > (SELECT opened_at FROM mem.disputes LIMIT 1)"), {"f": fb.id})
-    await _commit(db)
-    assert (await consolidate.resolve_by_evidence(db, org))["disputes_resolved"] == 1
-    await _commit(db)
-    d = (await db.execute(text("SELECT resolved_by, winner_fact_id FROM mem.disputes"))).one()
-    assert (d.resolved_by, d.winner_fact_id) == ("consolidator", fa.id)
-    sts = {x.id: x.status for x in (await db.execute(text("SELECT id, status FROM mem.facts"))).all()}
-    assert sts == {fa.id: "asserted", fb.id: "superseded"}
-    _ = a
+# (đóng tranh chấp theo bằng chứng: xem test_consolidate_review.py — bằng chứng phải do chính chủ thể/Sếp nói, theo giờ tin)
 
 
 async def test_consolidate_never_auto_resolves_payment_account_or_owner_confirmed(fresh_db, db) -> None:  # type: ignore[no-untyped-def]

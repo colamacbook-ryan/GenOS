@@ -36,14 +36,26 @@ SECTIONS = profile_read.SECTIONS
 MAX_TEXT = 280
 PROPOSAL_EXTRACTOR = "profile-lexicon/1"
 FWD_KEYS = ("forwarded", "is_forwarded", "forward")
-_FACT_ID_FORGERY = re.compile(r"\[?\s*f_[0-9a-f]{8}-?[0-9a-f]{4}", re.IGNORECASE)
-_CTRL = re.compile(r"[\u0000-\u001f\u007f-\u009f  ​-‏‪-‮⁦-⁩]")
+_FACT_ID_FORGERY = profile_read.FACT_ID_FORGERY
+_CTRL = profile_read.CTRL
 
-#: Chạm lừa đảo / sức khoẻ-an toàn (khớp trên chữ bỏ dấu, chữ thường) — chỉ để quyết định đường ghi (Console + PIN), không để chấm điểm.
+#: Chạm lừa đảo / tài chính / sức khoẻ-an toàn (khớp THEO RANH GIỚI TỪ trên chữ bỏ dấu, chữ thường; 'lừa' và 'lúa' cùng ra "lua" — nghiêng về
+#: phía an toàn). Chỉ để quyết định đường ghi (Console + PIN), không để chấm điểm.
 DEFENSIVE_LEXICON = (
-    "lua dao", "scam", "gia mao", "chiem doat", "chuyen khoan", "doi stk", "doi so tai khoan", "otp", "mat khau",
-    "suc khoe", "cap cuu", "benh vien", "tai nan", "an toan", "nguy hiem", "dot quy", "ung thu", "cong an")
-QUIET_LEXICON = ("yen lang", "im lang", "khong lam phien", "dung bao", "khong bao", "tat thong bao", "ngu")
+    "lua dao", "lua", "scam", "gia mao", "chiem doat", "chuyen khoan", "doi stk", "stk", "so tai khoan", "tai khoan", "doi tai khoan",
+    "ngan hang", "otp", "mat khau", "suc khoe", "cap cuu", "benh", "benh vien", "tai nan", "an toan", "nguy hiem", "dot quy", "ung thu",
+    "cong an", "chay", "hoa hoan", "khan cap", "bat coc", "tong tien")
+QUIET_LEXICON = ("yen lang", "im lang", "khong lam phien", "dung bao", "khong bao", "tat thong bao", "gio ngu")
+
+
+def _word_re(words: tuple[str, ...]) -> re.Pattern[str]:
+    return re.compile(r"\b(?:" + "|".join(re.escape(w) for w in sorted(words, key=len, reverse=True)) + r")\b")
+
+
+_DEFENSIVE_RE = _word_re(DEFENSIVE_LEXICON)
+_QUIET_RE = _word_re(QUIET_LEXICON)
+#: "đừng/không (cần) báo …" — mọi sở thích TẮT báo đều có thể nuốt một cảnh báo thật ⇒ cần PIN bất kể nội dung (spec §4C, CNS-073).
+_NEGATIVE_REPORT_RE = re.compile(r"\b(?:dung|dung co|khong|khoi|ko)\s+(?:can\s+|can phai\s+)?bao\b")
 
 
 class ProfileError(Exception):
@@ -82,19 +94,19 @@ def _fold(s: str) -> str:
 
 
 def is_defensive(section: str, value_text: str) -> bool:
-    """Mục `report_prefs`/`rhythm` có nội dung chạm lừa đảo hoặc sức khoẻ-an toàn ⇒ chỉ ghi qua Console + PIN."""
+    """Mục `report_prefs`/`rhythm` chạm lừa đảo/tài chính/sức khoẻ-an toàn, hoặc (`report_prefs`) dạng "đừng/không báo …" ⇒ chỉ ghi qua
+    Console + PIN."""
     if section not in ("report_prefs", "rhythm"):
         return False
     f = _fold(value_text)
-    return any(w in f for w in DEFENSIVE_LEXICON)
+    return bool(_DEFENSIVE_RE.search(f)) or (section == "report_prefs" and bool(_NEGATIVE_REPORT_RE.search(f)))
 
 
 def is_quiet_hours(section: str, value_text: str) -> bool:
-    """Đổi giờ yên lặng (mục `rhythm` nhắc yên lặng/đừng báo) ⇒ báo kênh phụ (T10 móc vào cờ này, spec §4C)."""
-    if section != "rhythm":
+    """Đổi giờ yên lặng / tắt báo (mục `rhythm` hoặc `report_prefs`) ⇒ báo kênh phụ (T10 móc vào cờ này, spec §4C)."""
+    if section not in ("rhythm", "report_prefs"):
         return False
-    f = _fold(value_text)
-    return any(w in f for w in QUIET_LEXICON)
+    return bool(_QUIET_RE.search(_fold(value_text)))
 
 
 def needs_pin(section: str, value_text: str, predicate_sensitivity: str = "normal") -> bool:
@@ -329,6 +341,14 @@ async def decide(db: AsyncSession, org_id: uuid.UUID, fact_id: uuid.UUID, decisi
         except facts.FactWriteError as e:
             raise _wrap(e) from e
         return ItemResult(new, "rejected")
+    owner = await entities.owner(db, org_id)
+    have = await _live_confirmed(db, org_id, owner.id, old.predicate, old.object_key)
+    if have is not None and have.id != old.id:                # đã có bản owner_confirmed cùng khoá ⇒ không nhân đôi; đóng đề xuất thừa
+        try:
+            await facts.correct(db, org_id, fact_id, actor_user_id=user_id, retract=True, action_log_id=action_log_id)
+        except facts.FactWriteError as e:
+            raise _wrap(e) from e
+        return ItemResult(have, "existing", fact_id)
     return ItemResult(await _promote(db, org_id, old, user_id=user_id, action_log_id=action_log_id), "confirmed", fact_id)
 
 
@@ -349,24 +369,57 @@ async def owner_person_ids(db: AsyncSession, org_id: uuid.UUID) -> list[uuid.UUI
     return list(rows)
 
 
-def _forwarded(payload: Any) -> bool:
-    return isinstance(payload, dict) and any(payload.get(k) not in (None, "", False) for k in FWD_KEYS)
+def _fwd_state(payload: Any) -> bool | None:
+    """True = tin chuyển tiếp; False = cờ tường minh "không chuyển tiếp"; None = KHÔNG BIẾT (Zalo gửi null, hoặc không có cờ)."""
+    if not isinstance(payload, dict):
+        return None
+    if any(payload.get(k) not in (None, "", False) for k in FWD_KEYS):
+        return True
+    return False if any(payload.get(k) is False for k in FWD_KEYS) else None
+
+
+async def _copied_from_others(db: AsyncSession, org_id: uuid.UUID, row: Any, owner_identities: list[uuid.UUID]) -> bool:
+    """Có tin của NGƯỜI KHÁC (trước đó ≤ 7 ngày, hoặc ngay sau ≤ 1 giờ) trùng y hệt hoặc gần trùng (trigram ≥ 0,8) với tin này ⇒ nhiều khả năng
+    Sếp chuyển tiếp/dán lại lời người khác (Zalo không báo cờ chuyển tiếp)."""
+    n = (await db.execute(text("""
+        SELECT count(*) FROM raw.events o
+        WHERE o.org_id = :org AND o.id <> :i AND o.kind = 'text' AND o.body_text IS NOT NULL
+          AND o.occurred_at BETWEEN CAST(:t AS timestamptz) - interval '7 days' AND CAST(:t AS timestamptz) + interval '1 hour'
+          AND o.received_at >= CAST(:t AS timestamptz) - interval '10 days'
+          AND (o.sender_identity_id IS NULL OR o.sender_identity_id <> ALL(:ids))
+          AND (lower(regexp_replace(o.body_text, '\\s+', ' ', 'g')) = lower(regexp_replace(CAST(:b AS text), '\\s+', ' ', 'g'))
+               OR public.similarity(o.body_text, CAST(:b AS text)) >= 0.8)"""),
+                          {"org": org_id, "i": row.id, "t": row.occurred_at, "ids": owner_identities, "b": row.body_text})).scalar_one()
+    return int(n) > 0
 
 
 async def owner_authored(db: AsyncSession, org_id: uuid.UUID, raw_event_id: uuid.UUID) -> tuple[bool, Any]:
-    """Tin `raw_event_id` do CHÍNH Sếp viết (người gửi là hồ sơ người của Sếp — theo định danh, không theo tên), là chữ thường,
-    không phải tin chuyển tiếp. Trả (đúng?, dòng tin hoặc None)."""
+    """Tin `raw_event_id` do CHÍNH Sếp viết (người gửi là hồ sơ người của Sếp — theo định danh, không theo tên), là chữ thường, và KHÔNG phải
+    tin chuyển tiếp: cờ `forwarded` phải là False, hoặc (null/không có — Zalo) không có bản trùng/gần trùng của người khác. Trả (đúng?, dòng tin)."""
     people = await owner_person_ids(db, org_id)
     if not people:
         return False, None
+    idents = list((await db.execute(text("SELECT id FROM core.person_identities WHERE person_id = ANY(:p)"), {"p": people})).scalars().all())
     r = (await db.execute(text("""
         SELECT e.id, e.received_at, e.occurred_at, e.kind, e.body_text, e.payload, e.group_id
         FROM raw.events e JOIN core.person_identities pi ON pi.id = e.sender_identity_id
         WHERE e.org_id = :o AND e.id = :i AND pi.person_id = ANY(:p) AND e.direction = 'inbound'"""),
                           {"o": org_id, "i": raw_event_id, "p": people})).one_or_none()
-    if r is None or r.kind != "text" or not r.body_text or _forwarded(r.payload):
+    if r is None or r.kind != "text" or not r.body_text:
+        return False, r
+    state = _fwd_state(r.payload)
+    if state is True or (state is None and await _copied_from_others(db, org_id, r, idents)):
         return False, r
     return True, r
+
+
+async def _live_confirmed(db: AsyncSession, org_id: uuid.UUID, owner_id: uuid.UUID, predicate: str, object_key: str) -> facts.Fact | None:
+    """Mục `owner_confirmed` cùng khoá đang hiệu lực của Sếp (nếu có)."""
+    fid = (await db.execute(text("""
+        SELECT id FROM mem.facts WHERE org_id = :o AND subject_id = ANY(:m) AND predicate = :p AND object_key = :k AND status = 'owner_confirmed'
+          AND (valid_to IS NULL OR valid_to > now()) ORDER BY recorded_at LIMIT 1"""),
+                             {"o": org_id, "m": await entities.members(db, owner_id), "p": predicate, "k": object_key})).scalar_one_or_none()
+    return None if fid is None else await facts.get(db, org_id, fid)
 
 
 async def was_rejected(db: AsyncSession, org_id: uuid.UUID, owner_id: uuid.UUID, predicate: str, object_key: str) -> bool:
@@ -398,7 +451,11 @@ async def propose(db: AsyncSession, org_id: uuid.UUID, *, section: str, text_val
     if start < 0 or not q.strip():
         raise ProfileError("quote_not_found", "Trích dẫn không khớp nguyên văn tin gốc", detail="quote không là chuỗi con của body_text")
     owner = await entities.owner(db, org_id)
-    if await was_rejected(db, org_id, owner.id, pcode, facts.value_key(value)):
+    key = facts.value_key(value)
+    have = await _live_confirmed(db, org_id, owner.id, pcode, key)
+    if have is not None:                                      # Sếp đã xác nhận đúng mục này ⇒ không đề xuất lại
+        return ItemResult(have, "existing")
+    if await was_rejected(db, org_id, owner.id, pcode, key):
         return None
     ev = facts.EvidenceIn("raw_event", raw_event_id=raw_event_id, raw_received_at=row.received_at,
                           span={"source_field": "body", "span_start": start, "span_end": start + len(q)})
@@ -410,7 +467,7 @@ async def propose(db: AsyncSession, org_id: uuid.UUID, *, section: str, text_val
         fact = await facts.assert_fact(db, fin)
     except facts.FactWriteError as e:
         raise _wrap(e) from e
-    return ItemResult(fact, "proposed" if fact.outcome != "duplicate" else "existing")
+    return ItemResult(fact, "proposed" if (fact.status == "proposed" and fact.outcome == "inserted") else "existing")
 
 
 # ─── từ vựng đề xuất (xác định, không gọi model) ────────────────────────────

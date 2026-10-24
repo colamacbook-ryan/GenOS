@@ -28,6 +28,8 @@ SUMMARY_VERSION = 1
 SUMMARY_BATCH = 200
 SUMMARY_LINES = 12
 WINDOW_HOURS = (2, 5)                    # 02:00–05:00 giờ VN
+#: Vị từ không bao giờ tự đóng tranh chấp (để Sếp quyết): thông tin liên hệ / vai trò / nơi làm việc dễ bị giả mạo hoặc đổi thật.
+AUTO_CLOSE_EXCLUDED = frozenset({"contact_phone", "role_in_group", "works_at"})
 MIN_WINNER_EVIDENCE = 2
 MIN_WINNER_DAYS = 2
 PROPOSALS_PER_RUN = 2
@@ -113,9 +115,13 @@ async def reconcile_merged(db: AsyncSession, org_id: uuid.UUID) -> dict[str, int
 # ─── 3. tranh chấp ─────────────────────────────────────────────────────────
 
 async def resolve_by_evidence(db: AsyncSession, org_id: uuid.UUID) -> dict[str, int]:
-    """CNS-107 (ii): một bên có ≥ 2 bằng chứng `insider`/`owner` MỚI HƠN (ghi sau lúc mở tranh chấp) từ ≥ 2 ngày khác nhau và bên kia
-    không có bằng chứng mới ⇒ bên đó thắng (`resolved_by='consolidator'`). Không áp cho `payment_account` và tranh chấp có sự thật Sếp xác nhận."""
-    open_ = [d for d in await disputes.list(db, org_id, open_only=True, limit=500) if d.predicate not in disputes.ONLY_OWNER_PREDICATES]
+    """CNS-107 (ii): một bên có ≥ 2 bằng chứng MỚI do CHÍNH chủ thể hoặc Sếp nói (người gửi tin trong `raw.events` ↔ `person_identities` ↔
+    thực thể đích; "mới" theo giờ TIN `occurred_at` sau lúc mở tranh chấp, mỗi tin tính một lần), từ ≥ 2 ngày giờ VN khác nhau, và bên kia
+    không có bằng chứng mới thuộc loại đó ⇒ bên đó thắng (`resolved_by='consolidator'`). Bên thắng phải là nguồn `insider`/`owner`.
+    Không áp cho `payment_account`, `AUTO_CLOSE_EXCLUDED`, và tranh chấp có sự thật Sếp xác nhận. Người ngoài/thành viên khác lặp lại một
+    giá trị KHÔNG làm giá trị đó thắng."""
+    skip = disputes.ONLY_OWNER_PREDICATES | AUTO_CLOSE_EXCLUDED
+    open_ = [d for d in await disputes.list(db, org_id, open_only=True, limit=500) if d.predicate not in skip]
     resolved = 0
     for d in open_:
         ids = list(d.fact_ids)
@@ -123,9 +129,20 @@ async def resolve_by_evidence(db: AsyncSession, org_id: uuid.UUID) -> dict[str, 
             continue
         rows = (await db.execute(text("""
             SELECT f.id, f.status, f.source_class,
-                   count(e.id) FILTER (WHERE e.created_at > :t AND e.quote_status IN ('verified') ) AS n_new,
-                   count(DISTINCT (e.created_at AT TIME ZONE 'Asia/Ho_Chi_Minh')::date) FILTER (WHERE e.created_at > :t AND e.quote_status = 'verified') AS days_new
-            FROM mem.facts f LEFT JOIN mem.fact_evidence e ON e.fact_id = f.id
+                   count(DISTINCT r.id) AS n_new,
+                   count(DISTINCT (r.occurred_at AT TIME ZONE 'Asia/Ho_Chi_Minh')::date) AS days_new
+            FROM mem.facts f
+            JOIN mem.entities se ON se.id = f.subject_id
+            LEFT JOIN (
+              SELECT e.fact_id, r0.id, r0.occurred_at, coalesce(en.merged_into, en.id) AS speaker
+              FROM mem.fact_evidence e
+              JOIN raw.events r0 ON r0.id = e.raw_event_id AND r0.org_id = :o
+              JOIN core.person_identities pi ON pi.id = r0.sender_identity_id
+              JOIN mem.entities en ON en.org_id = :o AND en.person_id = pi.person_id
+              WHERE e.org_id = :o AND e.fact_id = ANY(:i) AND e.quote_status = 'verified' AND r0.occurred_at > :t
+            ) r ON r.fact_id = f.id
+             AND (r.speaker = coalesce(se.merged_into, se.id)
+                  OR r.speaker IN (SELECT c.id FROM mem.entities c WHERE c.org_id = :o AND c.is_owner))
             WHERE f.id = ANY(:i) AND f.org_id = :o GROUP BY f.id, f.status, f.source_class"""),
                                   {"i": ids, "o": org_id, "t": d.opened_at})).all()
         if len(rows) < 2 or any(r.status == "owner_confirmed" for r in rows):
@@ -176,14 +193,19 @@ async def propose_profile(db: AsyncSession, org_id: uuid.UUID, *, now: datetime 
 # ─── 5. lời hứa sắp tới hạn ────────────────────────────────────────────────
 
 async def count_promises_due_soon(db: AsyncSession, org_id: uuid.UUID, now: datetime | None = None) -> dict[str, int]:
+    """Lời hứa/nợ còn hiệu lực có `object_value.due_at` trong 48 giờ tới. Parse trong Python (một giá trị hỏng không làm hỏng cả đêm)."""
     now = now or datetime.now(UTC)
-    n = (await db.execute(text("""
-        SELECT count(*) FROM mem.facts f
+    rows = (await db.execute(text("""
+        SELECT f.object_value FROM mem.facts f
         WHERE f.org_id = :o AND f.predicate IN ('promised_to', 'owes') AND f.status IN ('owner_confirmed', 'asserted')
-          AND (f.valid_to IS NULL OR f.valid_to > :n) AND jsonb_typeof(f.object_value) = 'object'
-          AND (f.object_value->>'due_at') ~ '^\\d{4}-\\d\\d-\\d\\d'
-          AND (f.object_value->>'due_at')::timestamptz BETWEEN :n AND :e"""), {"o": org_id, "n": now, "e": now + DUE_SOON})).scalar_one()
-    return {"promises_due_soon": int(n)}
+          AND (f.valid_to IS NULL OR f.valid_to > :n) AND jsonb_typeof(f.object_value) = 'object' AND f.object_value ? 'due_at'
+        LIMIT 5000"""), {"o": org_id, "n": now})).scalars().all()
+    n = 0
+    for v in rows:
+        due = profile_read.parse_when(v.get("due_at")) if isinstance(v, dict) else None
+        if due is not None and now <= due <= now + DUE_SOON:
+            n += 1
+    return {"promises_due_soon": n}
 
 
 # ─── chạy một tổ chức ──────────────────────────────────────────────────────

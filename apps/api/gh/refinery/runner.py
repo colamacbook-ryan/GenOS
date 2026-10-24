@@ -777,6 +777,7 @@ GROUP_LOCK_S = 290
 MAX_PASSES = 4
 FACT_CONTENT_FACTOR = 0.85
 REPLY_KEYS = ("reply_to_msg_id", "reply_to", "quoted_msg_id", "replyTo")
+OBLIGATION_PREDICATES = frozenset({"promised_to", "owes", "deadline", "scheduled_event"})
 FORWARD_KEYS = ("forwarded", "is_forwarded", "forward")
 
 
@@ -1549,11 +1550,14 @@ class GroupTurns:
     async def _write(self, org_id: uuid.UUID, st: RunStats, tk: str, aid: uuid.UUID, kind: str, blocks: list[GEv], window: Any,
                      pack: Any, profile: Any, analysis: Any, since: datetime, secrets: tuple[str, ...] = ()) -> None:
         from gh.biz.mem import predicates
+        from gh.biz.mem import profile as profile_mod
 
         evs = [m for b in blocks for m in b.all_events]
         persons = {b.person_id for b in blocks if b.person_id} | {c.sender_person_id for c in window.context_events if c.sender_person_id}
         async with self.r.sm() as db:
             known_preds = await predicates.codes(db)
+            if not (persons & set(await profile_mod.owner_person_ids(db, org_id))):
+                known_preds = {p for p in known_preds if not p.startswith("owner_")}      # không có lời Sếp trong cửa sổ ⇒ không có vị từ Hồ sơ
         verified = self.verify(analysis.out, window.all_events, window.media_texts, now=clock.now(), tz=window.tz, thread_ref=tk,
                                profile_fact_ids=profile.fact_ids(), known_person_refs={f"u_{p}" for p in persons},
                                known_predicates=known_preds, secrets=secrets)
@@ -1699,7 +1703,10 @@ class GroupTurns:
         """`verified.facts` → `FactIn`. Chủ thể/đối tượng chỉ nối được khi `person_ref` là người CÓ mặt trong cửa sổ hoặc cách gọi khớp
         MỘT thực thể chính xác (không đoán). `payment_account` KHÔNG ghi từ model (STK chỉ qua luật (a) + bảng đã xác minh — T7)."""
         from gh.biz.mem import entities, predicates
+        from gh.biz.mem import profile as profile_mod
 
+        owner_people = set(await profile_mod.owner_person_ids(db, org_id))
+        units_by_ref = {vu.unit.unit_ref: vu for vu in verified.units}
         out: list[Any] = []
         for vf in verified.facts:
             f = vf.fact
@@ -1710,6 +1717,9 @@ class GroupTurns:
                 pred = await predicates.get(db, f.predicate)
             except predicates.UnknownPredicate:
                 verified.bump("unknown_predicate")
+                continue
+            if f.predicate.startswith("owner_") and (vf.speaker_person_id is None or vf.speaker_person_id not in owner_people):
+                verified.bump("fact_owner_predicate_non_owner")             # Hồ sơ Sếp chỉ nhận từ lời CHÍNH Sếp, không từ người khác
                 continue
             q0 = vf.evidence[0]
             first_ev = next((e for e in evs if e.event_id == q0.raw_event_id), None)
@@ -1730,6 +1740,14 @@ class GroupTurns:
                 if obj_val is None:
                     verified.bump("fact_value_missing")
                     continue
+                if f.predicate in OBLIGATION_PREDICATES:
+                    # hợp đồng đọc của /me/obligations + /me/time (L4): {"text", "due_at", "at", "to_entity_id"}; hạn/giờ do CODE tính (vi_time) ở đơn vị
+                    vu = units_by_ref.get(f.unit_ref)
+                    to_ent = await self._resolve(db, org_id, f.object.person_ref, None, gid, persons) if f.object.person_ref else None
+                    obj_val = {"text": obj_val if isinstance(obj_val, str) else (f.object.surface or str(obj_val)),
+                               "due_at": vu.deadline_at.isoformat() if vu is not None and vu.deadline_at is not None else None,
+                               "at": vu.event_at.isoformat() if vu is not None and vu.event_at is not None else None,
+                               "to_entity_id": None if to_ent is None else str(await entities.canonical(db, to_ent))}
             speaker = (await entities.ensure_person(db, org_id, vf.speaker_person_id)).id if vf.speaker_person_id else None
             same = speaker is not None and speaker == await entities.canonical(db, subj)
             fwd = bool(first_ev and first_ev.forwarded)

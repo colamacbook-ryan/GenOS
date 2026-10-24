@@ -10,7 +10,6 @@ Ghi Hồ sơ (thêm/sửa/xoá) cần PIN; xác nhận đề xuất cần PIN kh
 
 from __future__ import annotations
 
-import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
@@ -38,7 +37,6 @@ LANES: dict[str, tuple[str, ...]] = {
 }
 OPEN_PREDICATES = ("promised_to", "owes", "asked_waiting", "deadline")
 LIVE_STATUSES = ("owner_confirmed", "asserted", "disputed")
-_ISO = re.compile(r"^\d{4}-\d{2}-\d{2}")
 
 
 def _crumb(tier: str, id_: Any, label: str) -> dict[str, str]:
@@ -50,14 +48,7 @@ def _perr(e: profile.ProfileError) -> ApiError:
     return ApiError(e.status, e.code.upper(), e.message, detail=e.detail, **extra)
 
 
-def _when(v: Any) -> datetime | None:
-    if not isinstance(v, str) or not _ISO.match(v):
-        return None
-    try:
-        d = datetime.fromisoformat(v.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    return d if d.tzinfo is not None else d.replace(tzinfo=UTC)
+_when = profile_read.parse_when
 
 
 async def _owner(db: AsyncSession, org_id: uuid.UUID) -> entities.Entity:
@@ -226,7 +217,8 @@ async def decide_proposal(fact_id: uuid.UUID, body: DecideIn, user: service.Curr
         res = await profile.decide(db, user.org_id, fact_id, body.decision, user_id=user.id, action_log_id=log_id)
     except profile.ProfileError as e:
         raise _perr(e) from e
-    return await _item_body(db, user.org_id, res)
+    quiet = body.decision == "confirm" and profile.is_quiet_hours(prop.owner_section, profile._row_text(prop))
+    return await _item_body(db, user.org_id, res, {"notify_secondary": quiet})
 
 
 # ─── nghĩa vụ, quan hệ, thời gian ───────────────────────────────────────────

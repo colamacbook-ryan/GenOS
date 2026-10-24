@@ -190,9 +190,15 @@ def _norm(v: Any) -> Any:
     return v
 
 
+OBLIGATION_KEYS = frozenset({"text", "due_at", "at", "to_entity_id"})
+
+
 def value_key(value: Any) -> str:
     """Khoá so sánh của một giá trị: băm của giá trị đã chuẩn hoá (bỏ dấu, chữ thường, gộp khoảng trắng; khoá JSON sắp
-    xếp). Cùng ý khác cách gõ hoa/dấu ⇒ cùng khoá."""
+    xếp). Cùng ý khác cách gõ hoa/dấu ⇒ cùng khoá. Giá trị "lời hứa/hạn" `{"text", "due_at", "at", "to_entity_id"}` (runner ghi cho
+    `promised_to`/`owes`/`deadline`/`scheduled_event`) chỉ khoá theo `text` — cùng nội dung khác hạn không thành hai dòng lệch."""
+    if isinstance(value, dict) and isinstance(value.get("text"), str) and set(value) <= OBLIGATION_KEYS:
+        value = value["text"]
     raw = orjson.dumps(_norm(value), option=orjson.OPT_SORT_KEYS | orjson.OPT_NON_STR_KEYS)
     return "v:" + hashlib.sha256(raw).hexdigest()[:40]
 

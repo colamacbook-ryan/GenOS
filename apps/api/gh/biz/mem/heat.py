@@ -11,6 +11,7 @@ from __future__ import annotations
 import math
 import statistics
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -29,6 +30,7 @@ NO_REPLY_KINDS = ("reaction", "sticker", "system")
 DEFAULT_WEEKS = 12
 MAX_WEEKS = 52
 FALLBACK_INBOUND = timedelta(days=7)
+BATCH = 5000                           # số tin đọc mỗi lô (khoá theo (occurred_at, id)) — bộ nhớ không phụ thuộc cỡ cửa sổ
 
 
 def state_of(heat: float) -> str:
@@ -73,6 +75,30 @@ def _bare(v: Any) -> str | None:
     return s or None
 
 
+async def _messages(db: AsyncSession, org_id: uuid.UUID, since: datetime, until: datetime) -> AsyncIterator[Any]:
+    """Tin (không gồm reaction/nhãn dán/hệ thống) theo thứ tự thời gian, đọc từng lô `BATCH` bằng khoá (occurred_at, id) — không nạp cả
+    cửa sổ vào bộ nhớ; trạng thái phiên/trả lời do bên gọi giữ xuyên lô."""
+    ct: datetime | None = None
+    ci: uuid.UUID | None = None
+    while True:
+        rows = (await db.execute(text("""
+            SELECT e.id, e.occurred_at, e.group_id, e.channel_id, e.direction, e.sender_identity_id, pi.person_id AS sender_person,
+                   NULLIF(split_part(e.payload->>'threadId', '@', 1), '') AS k1,
+                   NULLIF(split_part(e.payload->'key'->>'remoteJid', '@', 1), '') AS k2,
+                   NULLIF(split_part(e.payload->'key'->>'remoteJidAlt', '@', 1), '') AS k3,
+                   NULLIF(split_part(e.payload->>'recipient', '@', 1), '') AS k4
+            FROM raw.events e LEFT JOIN core.person_identities pi ON pi.id = e.sender_identity_id
+            WHERE e.org_id = :o AND e.occurred_at >= :s AND e.occurred_at < :n AND e.received_at >= :s - interval '3 days'
+              AND e.kind <> ALL(:nr) AND (CAST(:ct AS timestamptz) IS NULL OR (e.occurred_at, e.id) > (CAST(:ct AS timestamptz), CAST(:ci AS uuid)))
+            ORDER BY e.occurred_at, e.id LIMIT :lim"""),
+                                  {"o": org_id, "s": since, "n": until, "nr": list(NO_REPLY_KINDS), "ct": ct, "ci": ci, "lim": BATCH})).all()
+        for r in rows:
+            yield r
+        if len(rows) < BATCH:
+            return
+        ct, ci = rows[-1].occurred_at, rows[-1].id
+
+
 async def rebuild(db: AsyncSession, org_id: uuid.UUID, *, weeks: int = DEFAULT_WEEKS, now: datetime | None = None) -> dict[str, int]:
     """Dựng lại độ nóng `weeks` tuần gần nhất (gồm tuần hiện tại). Trả {pairs, rows, deleted}. Bên gọi commit."""
     weeks = max(1, min(MAX_WEEKS, weeks))
@@ -81,16 +107,6 @@ async def rebuild(db: AsyncSession, org_id: uuid.UUID, *, weeks: int = DEFAULT_W
     since = datetime.combine(first_week, datetime.min.time(), tzinfo=VN).astimezone(UTC)
     owner = await entities.owner(db, org_id)
     owner_people = set(await profile.owner_person_ids(db, org_id))
-    rows = (await db.execute(text("""
-        SELECT e.id, e.occurred_at, e.group_id, e.channel_id, e.direction, e.sender_identity_id, pi.person_id AS sender_person,
-               NULLIF(split_part(e.payload->>'threadId', '@', 1), '') AS k1,
-               NULLIF(split_part(e.payload->'key'->>'remoteJid', '@', 1), '') AS k2,
-               NULLIF(split_part(e.payload->'key'->>'remoteJidAlt', '@', 1), '') AS k3,
-               NULLIF(split_part(e.payload->>'recipient', '@', 1), '') AS k4
-        FROM raw.events e LEFT JOIN core.person_identities pi ON pi.id = e.sender_identity_id
-        WHERE e.org_id = :o AND e.occurred_at >= :s AND e.occurred_at < :n AND e.received_at >= :s - interval '3 days'
-          AND e.kind <> ALL(:nr)
-        ORDER BY e.occurred_at, e.id"""), {"o": org_id, "s": since, "n": now, "nr": list(NO_REPLY_KINDS)})).all()
     ident = {(r.channel_id, r.external_id): r.person_id for r in (await db.execute(text("""
         SELECT i.channel_id, i.external_id, i.person_id FROM core.person_identities i JOIN core.persons p ON p.id = i.person_id
         WHERE p.org_id = :o"""), {"o": org_id})).all()}
@@ -119,7 +135,7 @@ async def rebuild(db: AsyncSession, org_id: uuid.UUID, *, weeks: int = DEFAULT_W
     cells: dict[tuple[uuid.UUID, date], _Cell] = {}
     last: dict[uuid.UUID, _Last] = {}
     last_inbound_dm: dict[uuid.UUID, tuple[uuid.UUID, datetime]] = {}      # kênh → (người, lúc) cho tin đi không ghi người nhận
-    for r in rows:
+    async for r in _messages(db, org_id, since, now):
         at = r.occurred_at
         owner_side = r.direction == "outbound" or (r.sender_person is not None and r.sender_person in owner_people)
         b: uuid.UUID | None
