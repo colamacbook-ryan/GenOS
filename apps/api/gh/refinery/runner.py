@@ -771,6 +771,7 @@ CONTEXT_WINDOW = timedelta(hours=24)
 RETRY_BACKOFF = timedelta(minutes=5)
 HISTORY_EVIDENCE_MAX = 10          # tin bằng chứng của khối Lịch sử thêm vào tin ngữ cảnh (để trích được)
 HISTORY_EVIDENCE_CHARS = 3000
+ACK_MAX = 30                        # lời xác nhận ngắn (đã loại khỏi lượt) đưa lại vào cửa sổ làm bằng chứng "đã xử lý"
 FREE_MODE_RETRY = timedelta(minutes=15)
 TEMPLATE_WINDOW = timedelta(days=7)
 UNVERIFIED_CONFIDENCE = 0.8              # §4D.4: đơn vị model có trích dẫn verified, chưa qua (d) — T1 tính lại độ chắc
@@ -1025,12 +1026,14 @@ class GroupTurns:
             risky = any(c.flag in prefilter.RISK_FLAGS for c in cands)
             if len(triage.normalize(body)) >= triage.BROADCAST_MIN_LEN and r.sender_identity_id is not None:
                 # Chỉ đếm trong CÙNG luồng và CÙNG người gửi (kẻ gian không "làm nóng" câu lừa đảo ở nhóm khác để tin ở nhóm Sếp bị bỏ).
+                # 7 ngày theo GIỜ GỬI (occurred_at), không theo giờ vào kho: tin nhập lịch sử/replay vào kho cùng lúc thì received_at dồn
+                # lại một chỗ và đơn hàng tuần nào cũng thành "mẫu lặp" (lỗi kb1 #4).
                 template_n = 1 + int((await db.execute(text("""
-                    SELECT count(*) FROM raw.events WHERE org_id = :o AND body_text = :b AND received_at < :r
-                      AND received_at >= CAST(:r AS timestamptz) - interval '7 days'
+                    SELECT count(*) FROM raw.events WHERE org_id = :o AND body_text = :b AND occurred_at < :t
+                      AND occurred_at >= CAST(:t AS timestamptz) - interval '7 days'
                       AND sender_identity_id = :s AND group_id IS NOT DISTINCT FROM CAST(:g AS uuid)
                       AND (CAST(:g AS uuid) IS NOT NULL OR channel_id = :c)"""),
-                                                         {"o": org_id, "b": body, "r": r.event_received_at, "s": r.sender_identity_id,
+                                                         {"o": org_id, "b": body, "t": r.occurred_at, "s": r.sender_identity_id,
                                                           "g": r.group_id, "c": r.channel_id})).scalar_one())
             # KHÔNG BAO GIỜ bỏ tin có ứng viên rủi ro (từ khoá lừa đảo, link, yêu cầu chuyển tiền, STK, SĐT, đã nhập OTP, cấp cứu…).
             skip = None if (gclass or risky) else prefilter.no_model_reason(r.kind, body, template_n=template_n)
@@ -1502,6 +1505,9 @@ class GroupTurns:
             if b.reply_ext and b.reply_ext in by_ext and by_ext[b.reply_ext] != b.message_id:
                 ge.reply_to = by_ext[b.reply_ext]
         first = min(b.occurred_at for b in blocks)
+        acks = await self._acks(db, org_id, tk, blocks, first)
+        if acks:
+            new_events = sorted([*new_events, *acks], key=lambda e: e.sent_at)
         ctx_events = await self._context(db, org_id, tk, blocks, first)
         pack = await retrieve.pack(db, org_id, tk, [{"sender_person_id": b.person_id, "raw_event_id": b.event_id, "text": b.body}
                                                     for b in blocks], now=clock.now())
@@ -1559,6 +1565,29 @@ class GroupTurns:
             used += n
             extra.append(self._ctx_event(r))
         return sorted([*ctx_events, *extra], key=lambda c: c.sent_at)
+
+    async def _acks(self, db: AsyncSession, org_id: uuid.UUID, tk: str, blocks: list[GEv], first: datetime) -> list[Any]:
+        """Lời xác nhận ngắn ("Dạ e ghi nhận ạ", "ok ạ") của CÙNG luồng, từ tin mới đầu tiên trở đi. Chúng không kích hoạt lượt, không
+        tính trần/đếm tin (vẫn `discarded`, lý do `ack`) nhưng là BẰNG CHỨNG "đã xử lý" — thiếu chúng model báo nhầm "đơn chưa được xác
+        nhận" (lỗi kb1 #4). Đưa vào cửa sổ đúng chỗ theo thời gian, tối đa `ACK_MAX` tin (mỗi tin ≤ 24 ký tự)."""
+        have = {m.event_id for b in blocks for m in b.all_events}
+        rows = (await db.execute(text("""
+            SELECT e.id, e.received_at, e.occurred_at, e.kind, e.body_text, e.payload, e.external_msg_id, e.sender_identity_id,
+                   pi.person_id, p.display_name
+            FROM refinery.event_state s JOIN raw.events e ON e.id = s.event_id AND e.received_at = s.event_received_at
+            LEFT JOIN core.person_identities pi ON pi.id = e.sender_identity_id
+            LEFT JOIN core.persons p ON p.id = pi.person_id
+            WHERE s.org_id = :o AND s.state = 'discarded' AND s.detail ->> 'thread_key' = :t AND s.detail ->> 'reason' = 'ack'
+              AND e.occurred_at >= :first AND e.occurred_at <= :now
+            ORDER BY e.occurred_at LIMIT :n"""), {"o": org_id, "t": tk, "first": first, "now": clock.now(), "n": ACK_MAX})).all()
+        out = []
+        for r in rows:
+            if r.id in have:
+                continue
+            ge = self._ctx_event(r)
+            ge.context = False
+            out.append(ge)
+        return out
 
     @staticmethod
     def _ctx_event(r: Any) -> Any:
@@ -1625,7 +1654,7 @@ class GroupTurns:
         errors: list[dict[str, Any]] = [{"code": e} for e in verified.errors[:12]]
         # nguồn của MỌI tin model được trích (tin mới + tin ngữ cảnh đã xử lý): received_at là một nửa khoá của raw.events
         srcs: dict[uuid.UUID, Src] = {c.raw_event_id: Src(c.received_at, thread_group(tk), c.sender_person_id, c.forwarded)
-                                      for c in window.context_events if c.raw_event_id is not None and c.received_at is not None}
+                                      for c in window.all_events if c.raw_event_id is not None and c.received_at is not None}
         srcs |= {e.event_id: Src(e.received_at, e.group_id, e.person_id, e.forwarded) for e in evs}
         failed_safety: list[str] = []                             # unit_ref của đơn vị lừa đảo/an toàn ghi lỗi (fail-high)
         hold: set[uuid.UUID] = set()                              # tin của các đơn vị đó: giữ chờ để thử lại, không bỏ

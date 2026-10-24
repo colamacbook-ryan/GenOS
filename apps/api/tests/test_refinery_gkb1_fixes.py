@@ -158,3 +158,64 @@ async def test_history_block_carries_subject_units_with_citable_evidence(app, db
     block = prompt[prompt.index("Lịch sử gần đây"):].split("\n\n")[0]
     assert block.count(UNTRUSTED_OPEN) == 1 and block.index(UNTRUSTED_OPEN) < block.index("320k")      # chữ người ngoài trong khối không tin cậy
     assert f"(tin: m_{old_id})" in block
+
+
+# ─── lỗi 4: bộ lọc không làm rơi tin cần cho nghiệp vụ ───────────────────────────────────────────────────────────────
+
+async def test_short_ack_stays_in_window_as_evidence_but_never_triggers_a_turn(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    order = msg("Thảo ơi tuần này a lấy 25kg Blend Honey nha", sender="u1", name="Anh Dũng")
+    ack = msg("Dạ e ghi nhận ạ", sender="u2", name="Thảo")
+    now = datetime.now(UTC)
+    order["occurred_at"], ack["occurred_at"] = (now - timedelta(minutes=3)).isoformat(), (now - timedelta(minutes=2)).isoformat()
+    an = Analyzer()
+    r = refinery(sm, redis, an)
+    await put(sm, org, ack)                                               # lời xác nhận một mình: không lượt model
+    await r.run(org, "manual")
+    assert an.windows == [] and await states(db, org) == {"discarded": 1}
+    await put(sm, org, order)
+    await r.run(org, "manual")
+    w = an.windows[-1]
+    assert [e.body for e in w.new_events] == ["Thảo ơi tuần này a lấy 25kg Blend Honey nha", "Dạ e ghi nhận ạ"]       # đúng thứ tự thời gian
+    assert await states(db, org) == {"discarded": 2}                      # lời xác nhận vẫn không tính là tin của lượt (không tốn trần)
+
+
+async def test_recurring_business_message_is_not_a_template_but_broadcast_is(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """Đơn định kỳ của một người (kể cả lặp 3 lần/7 ngày, kể cả nhập lịch sử cùng lúc ⇒ received_at dồn) không bị bỏ; tin rao lặp vẫn bỏ."""
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    now = datetime.now(UTC)
+    weekly, daily, ads = [], [], []
+    for k in range(3):
+        m = msg("Thứ 3 này 9h giữ giúp phòng họp nhỏ HC cho 6 người nha Mộc Rang", sender="u1", name="Chị Vy")
+        m["occurred_at"] = (now - timedelta(days=21 - 7 * k, minutes=5)).isoformat()                   # hằng tuần: 3 tin trải 14 ngày
+        weekly.append(m)
+        d = msg("Anh Dũng tuần này NHS tăng thêm 10 lít/ngày giúp em nha", sender="u2", name="Chị Hà")
+        d["occurred_at"] = (now - timedelta(days=3 - k)).isoformat()                                   # 3 lần trong 7 ngày, nghiệp vụ
+        daily.append(d)
+        a = msg("Thanh lý máy xay Fiorenzato còn mới 85%, ai cần ib em nhé cả nhà", sender="u3", name="Shop Máy")
+        a["occurred_at"] = (now - timedelta(days=3 - k, hours=1)).isoformat()
+        ads.append(a)
+    await put(sm, org, *weekly, *daily, *ads)                             # cùng lúc vào kho (như nhập lịch sử/replay)
+    await refinery(sm, redis, Analyzer()).groups.ensure_scanned(org)
+    rows = (await db.execute(text("""SELECT e.body_text, s.detail ->> 'reason' AS why FROM refinery.event_state s
+                                     JOIN raw.events e ON e.id = s.event_id ORDER BY e.occurred_at"""))).all()
+    why = {}
+    for x in rows:
+        why.setdefault(x.body_text.split()[0], []).append(x.why)
+    assert why["Thứ"] == [None, None, None]
+    assert why["Anh"] == [None, None, None]
+    assert why["Thanh"] == [None, None, "template"]               # rác rao vặt lặp lần 3 trong 7 ngày (theo giờ gửi)
+
+
+def test_is_broadcast_and_no_model_reason() -> None:
+    from gh.refinery import prefilter
+
+    assert prefilter.is_broadcast("Tuyển barista part-time ca tối Hải Châu, ib em nha")
+    assert prefilter.is_broadcast("Kính gửi quý khách, bảng giá thép cuộn tháng 10 đã cập nhật")
+    assert not prefilter.is_broadcast("Đợt ly + ống hút tháng này giao thứ 5 nha chị")
+    body = "Đợt ly + ống hút tháng này giao thứ 5 nha chị, nhớ giúp em"
+    assert prefilter.no_model_reason("text", body, template_n=5) is None
+    assert prefilter.no_model_reason("text", "Tuyển barista part-time ca tối Hải Châu, ib em nha nhé mọi người", template_n=3) == "template"
+    assert prefilter.no_model_reason("text", "Dạ e ghi nhận ạ") == "ack"
