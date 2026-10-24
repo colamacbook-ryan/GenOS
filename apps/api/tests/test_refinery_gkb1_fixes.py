@@ -416,3 +416,32 @@ async def test_whole_run_crash_logs_only_error_code_and_run_id(app, db, redis, m
     assert "482913" not in caplog.text and "Traceback" not in caplog.text
     assert str(st.run_id) in caplog.text and "InvalidTextRepresentation" in caplog.text
     assert "482913" not in (st.error or "")
+
+
+async def test_ack_bound_never_cuts_an_ack_inside_the_window_even_when_received_early(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """Cận dưới của `_acks` = mốc cũ hơn giữa giờ gửi tin mới đầu và giờ vào kho của tin mới − biên: ack thuộc cửa sổ theo giờ gửi
+    nhưng vào kho/được quét sớm hơn tin mới > 1 ngày (tin mới tới trễ, nhập lịch sử) vẫn có mặt; ack quét trước cận thì vắng."""
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    now = datetime.now(UTC)
+    order = msg("Thảo ơi tuần này a lấy 25kg Blend Honey nha", sender="u1", name="Anh Dũng")
+    ack = msg("Dạ e ghi nhận ạ", sender="u2", name="Thảo")
+    order["occurred_at"], ack["occurred_at"] = (now - timedelta(days=4, minutes=2)).isoformat(), (now - timedelta(days=4, minutes=1)).isoformat()
+    an = Analyzer()
+    r = refinery(sm, redis, an)
+    await put(sm, org, ack)
+    await r.groups.ensure_scanned(org)
+    # ack được quét 3 ngày TRƯỚC khi tin mới (tới trễ) vào kho — vẫn sau giờ gửi của tin mới
+    await db.execute(text("UPDATE refinery.event_state SET updated_at = now() - interval '3 days' WHERE state = 'discarded'"))
+    await db.commit()
+    await put(sm, org, order)
+    await r.run(org, "manual")
+    assert [e.body for e in an.windows[-1].new_events] == ["Thảo ơi tuần này a lấy 25kg Blend Honey nha", "Dạ e ghi nhận ạ"]
+    # chiều ngược: dấu quét cũ hơn cận (giờ gửi tin mới đầu − biên) ⇒ không lấy (truy vấn có cận thật)
+    await put(sm, org, msg("Mai a lấy thêm 5kg nữa nha", sender="u1", name="Anh Dũng"))
+    await db.execute(text("UPDATE refinery.event_state SET updated_at = now() - interval '30 days' WHERE state = 'discarded'"))
+    await db.commit()
+    an2 = Analyzer()
+    r.groups.analyze = an2
+    await r.run(org, "manual")
+    assert "Dạ e ghi nhận ạ" not in [e.body for e in an2.windows[-1].new_events]
