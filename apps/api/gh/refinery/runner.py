@@ -773,6 +773,7 @@ RETRY_BACKOFF = timedelta(minutes=5)
 HISTORY_EVIDENCE_MAX = 10          # tin bằng chứng của khối Lịch sử thêm vào tin ngữ cảnh (để trích được)
 HISTORY_EVIDENCE_CHARS = 3000
 ACK_LOOKBACK = timedelta(days=1)    # biên lệch giờ của cận dưới updated_at/received_at lời xác nhận (index org/state/updated_at + partition)
+BACKLOG_DONE_MAX = 500              # trần đếm "tin sau cửa sổ đã phân tích" (truy vấn có cận; dòng prompt ghi "N" tối đa giá trị này)
 ACK_MAX = 30                        # lời xác nhận ngắn (đã loại khỏi lượt) đưa lại vào cửa sổ làm bằng chứng "đã xử lý"
 FREE_MODE_RETRY = timedelta(minutes=15)
 TEMPLATE_WINDOW = timedelta(days=7)
@@ -1523,10 +1524,11 @@ class GroupTurns:
                 ge.reply_to = by_ext[b.reply_ext]
         first = min(b.occurred_at for b in blocks)
         backlog, next_unseen = await self._backlog(db, org_id, tk, blocks)
-        acks = await self._acks(db, org_id, tk, blocks, first, until=next_unseen)
+        acks = await self._acks(db, org_id, tk, blocks, await self._ack_from(db, org_id, tk, first), until=next_unseen)
         if acks:
             new_events = sorted([*new_events, *acks], key=lambda e: e.sent_at)
-        ctx_events = await self._context(db, org_id, tk, blocks, first)
+        ack_ids = {a.raw_event_id for a in acks}
+        ctx_events = [c for c in await self._context(db, org_id, tk, blocks, first) if c.raw_event_id not in ack_ids]
         pack = await retrieve.pack(db, org_id, tk, [{"sender_person_id": b.person_id, "raw_event_id": b.event_id, "text": b.body}
                                                     for b in blocks], now=clock.now())
         ctx_events = await self._history_evidence(db, org_id, tk, blocks, ctx_events, pack)
@@ -1571,13 +1573,15 @@ class GroupTurns:
         scope = await self._thread_scope(db, tk)
         if scope is not None:
             where, sp = scope
+            # chỉ tin MODEL đã phân tích (có analysis_id) — tin bị bộ lọc/luật loại không phải "đã được phân tích"; trần BACKLOG_DONE_MAX dòng
             d = (await db.execute(text(f"""
-                SELECT count(*) AS n, min(e.occurred_at) AS lo
-                FROM raw.events e JOIN refinery.event_state s ON s.event_id = e.id AND s.event_received_at = e.received_at
-                WHERE e.org_id = :o AND {where} AND e.occurred_at > :last AND NOT (e.id = ANY(:mine))
-                  AND s.state NOT IN ('pending', 'processing', 'error') AND s.detail ->> 'thread_key' = :t
-                  AND COALESCE(s.detail ->> 'discarded_by', '') <> 'no_model'"""),  # noqa: S608 — `where` là hằng + outbound_to_sql nội bộ
-                                  {"o": org_id, "t": tk, "mine": mine, "last": last, **sp})).one()
+                SELECT count(*) AS n, min(x.occurred_at) AS lo FROM (
+                    SELECT e.occurred_at
+                    FROM raw.events e JOIN refinery.event_state s ON s.event_id = e.id AND s.event_received_at = e.received_at
+                    WHERE e.org_id = :o AND {where} AND e.occurred_at > :last AND NOT (e.id = ANY(:mine))
+                      AND s.state NOT IN ('pending', 'processing', 'error') AND s.detail ->> 'thread_key' = :t AND s.detail ? 'analysis_id'
+                    ORDER BY e.occurred_at LIMIT :cap) x"""),  # noqa: S608 — `where` là hằng + outbound_to_sql nội bộ
+                                  {"o": org_id, "t": tk, "mine": mine, "last": last, "cap": BACKLOG_DONE_MAX, **sp})).one()
             d_n, d_at = int(d.n), d.lo
         if not p.n and not d_n:
             return None, None
@@ -1619,9 +1623,24 @@ class GroupTurns:
             extra.append(self._ctx_event(r))
         return sorted([*ctx_events, *extra], key=lambda c: c.sent_at)
 
+    async def _ack_from(self, db: AsyncSession, org_id: uuid.UUID, tk: str, first: datetime) -> datetime:
+        """Cận dưới lời xác nhận ngắn của lượt: ngay SAU tin đã phân tích gần nhất trước cửa sổ (tối đa `CONTEXT_WINDOW` trước tin mới
+        đầu). Lời xác nhận đến giữa hai lượt ("Dạ chị nhận được rồi nha" trước tin kích hoạt) không tự kích hoạt lượt nào; trước đây nó chỉ
+        hiện ở tin ngữ cảnh ("đã xử lý") nên không bao giờ là tin mới của lượt nào (review fix-gkb2 M2)."""
+        lo = first - CONTEXT_WINDOW
+        scope = await self._thread_scope(db, tk)
+        if scope is None:
+            return first
+        where, sp = scope
+        prev = (await db.execute(text(f"""
+            SELECT e.occurred_at FROM raw.events e JOIN refinery.event_state s ON s.event_id = e.id AND s.event_received_at = e.received_at
+            WHERE e.org_id = :o AND {where} AND e.occurred_at < :first AND e.occurred_at >= :lo AND s.detail ? 'analysis_id'
+            ORDER BY e.occurred_at DESC LIMIT 1"""), {"o": org_id, "first": first, "lo": lo, **sp})).scalar_one_or_none()  # noqa: S608
+        return (prev + timedelta(microseconds=1)) if prev is not None else lo
+
     async def _acks(self, db: AsyncSession, org_id: uuid.UUID, tk: str, blocks: list[GEv], first: datetime, *,
                     until: datetime | None = None) -> list[Any]:
-        """Lời xác nhận ngắn ("Dạ e ghi nhận ạ", "ok ạ") của CÙNG luồng, từ tin mới đầu tiên trở đi (cận dưới updated_at/received_at = mốc cũ hơn
+        """Lời xác nhận ngắn ("Dạ e ghi nhận ạ", "ok ạ") của CÙNG luồng, từ `first` (= `_ack_from`: ngay sau tin đã phân tích gần nhất) trở đi (cận dưới updated_at/received_at = mốc cũ hơn
         giữa giờ gửi và giờ vào kho của tin mới đầu, trừ `ACK_LOOKBACK` — truy vấn có cận theo cột có index, không cắt ack thuộc cửa sổ). Chúng không kích hoạt lượt, không
         tính trần/đếm tin (vẫn `discarded`, lý do `ack`) nhưng là BẰNG CHỨNG "đã xử lý" — thiếu chúng model báo nhầm "đơn chưa được xác
         nhận" (lỗi kb1 #4). Đưa vào cửa sổ đúng chỗ theo thời gian, tối đa `ACK_MAX` tin (mỗi tin ≤ 24 ký tự). `until` = giờ gửi tin chờ đầu
@@ -1856,14 +1875,16 @@ class GroupTurns:
                 if ge is None:
                     continue
                 g = mine.get(ge.raw_event_id)
+                # tin mới của lượt = tin được nhận vào lượt + lời xác nhận ngắn đưa vào cửa sổ (`_acks`, context=False, cùng luồng)
+                fresh = g is not None or not ge.context
                 reply_raw = None
                 if g is not None and g.reply_ext:
                     reply_raw = (await db.execute(text("""SELECT id FROM raw.events WHERE org_id = :o AND channel_id = :c AND external_msg_id = :x
                                                           LIMIT 1"""), {"o": org_id, "c": g.channel_id, "x": g.reply_ext})).scalar_one_or_none()
                 cited.append(facts_mod.KeptMsg(
-                    ge.raw_event_id, ge.sent_at, g.person_id if g is not None else ge.sender_person_id, new=g is not None,
+                    ge.raw_event_id, ge.sent_at, g.person_id if g is not None else ge.sender_person_id, new=fresh,
                     forwarded=bool(g.forwarded if g is not None else ge.forwarded),
-                    has_text=bool(((g.body if g is not None else ge.body) or "").strip()), thread_key=tk if g is not None else None,
+                    has_text=bool(((g.body if g is not None else ge.body) or "").strip()), thread_key=tk if fresh else None,
                     reply_to_raw=reply_raw))
             try:
                 async with db.begin_nested():
@@ -1874,9 +1895,11 @@ class GroupTurns:
                 continue
             if res.closed:
                 verified.bump("promise_kept_closed", len(res.closed))
-            if res.untrusted:
-                verified.bump("promise_kept_untrusted", res.untrusted)
-            if not res.closed and not res.untrusted:
+            for code, n in (("promise_kept_untrusted", res.untrusted), ("promise_kept_ambiguous", res.ambiguous),
+                            ("promise_kept_self_report", res.self_report)):
+                if n:
+                    verified.bump(code, n)
+            if not (res.closed or res.untrusted or res.ambiguous or res.self_report):
                 verified.bump("promise_kept_unmatched")
 
     async def _ctx_gevs(self, org_id: uuid.UUID, ids: list[tuple[uuid.UUID, datetime]]) -> dict[uuid.UUID, GEv]:

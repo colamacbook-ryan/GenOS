@@ -200,7 +200,7 @@ def validate(raw_text: str, refs: set[str], rule_codes: set[str]) -> Extraction:
 # ═══ Đường theo luồng (L3, spec §4D.1–§4D.2 (b)) ═════════════════════════════════════════════════════════════════════════
 
 AGENT_KEY = "core.refinery"
-EXTRACTOR_VERSION = "intel-v2.1"
+EXTRACTOR_VERSION = "intel-v2.1.1"            # .1: promise_kept kèm mã tin hứa (review fix-gkb2 m6)
 PROMPT_PATH = Path(__file__).with_name("prompts") / "intel_v2_1.md"
 MAX_BODY_CHARS = 4000                 # một tin dài hơn bị cắt TRONG PROMPT (trích dẫn vẫn kiểm với bản gốc)
 MAX_SCHEMA_ERRORS = 12
