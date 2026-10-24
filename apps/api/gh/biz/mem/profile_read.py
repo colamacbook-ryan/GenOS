@@ -4,9 +4,10 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import orjson
@@ -16,6 +17,31 @@ from sqlalchemy.ext.asyncio import AsyncSession
 SECTIONS = ("goals", "resources", "key_relations", "values_limits", "rhythm", "report_prefs")
 SECTION_LABEL_VI = {"goals": "Mục tiêu & ưu tiên", "resources": "Nguồn lực", "key_relations": "Vai trò & quan hệ quan trọng",
                     "values_limits": "Giá trị & giới hạn", "rhythm": "Lịch & nhịp sống", "report_prefs": "Cách báo"}
+
+
+#: Ký tự điều khiển/định dạng ẩn (gồm xuống dòng, ZW*, bidi) và mã giả `[f_<id>]` — chữ nào vào prompt cũng qua `safe_text`.
+CTRL = re.compile(r"[\u0000-\u001f\u007f-\u009f\u2028\u2029\u200b-\u200f\u202a-\u202e\u2066-\u2069]")
+FACT_ID_FORGERY = re.compile(r"(?<![A-Za-z0-9])\[?\s*f_[0-9a-f]{8}(?:-?[0-9a-f]{4}(?:-?[0-9a-f]{0,12})?)?\]?", re.IGNORECASE)
+MAX_SAFE_TEXT = 300
+
+
+def safe_text(s: str) -> str:
+    """Rửa một chuỗi trước khi đưa vào prompt: bỏ ký tự điều khiển/xuống dòng, gộp khoảng trắng, chặn mã giả `[f_<id>]` (không cho tên
+    hiển thị/giá trị giả mạo một dòng Hồ sơ), cắt `MAX_SAFE_TEXT`."""
+    s = CTRL.sub(" ", s)
+    s = FACT_ID_FORGERY.sub(" ", s)
+    return " ".join(s.split())[:MAX_SAFE_TEXT]
+
+
+def parse_when(v: Any) -> datetime | None:
+    """Chuỗi ISO (hoặc ngày) → datetime có múi giờ; không hợp lệ ⇒ None (không bao giờ ném lỗi)."""
+    if not isinstance(v, str) or len(v) < 10 or not v[:4].isdigit():
+        return None
+    try:
+        d = datetime.fromisoformat(v.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return d if d.tzinfo is not None else d.replace(tzinfo=UTC)
 
 
 def value_text(value: Any) -> str:
@@ -71,7 +97,7 @@ class ProfileSnapshot:
         for s, items in self.by_section().items():
             if items:
                 lines.append(f"{SECTION_LABEL_VI.get(s, s)}:")
-                lines.extend(f"- [f_{i.fact_id}] {i.text}" for i in items)
+                lines.extend(f"- [f_{i.fact_id}] {safe_text(i.text)}" for i in items)
         return "\n".join(lines)
 
 
@@ -88,6 +114,6 @@ async def snapshot(db: AsyncSession, org_id: uuid.UUID) -> ProfileSnapshot:
         WHERE v.org_id = :o AND v.status = 'owner_confirmed'
         ORDER BY v.owner_section, v.valid_from, v.fact_id"""), {"o": org_id})).all()
     items = tuple(ProfileItem(r.fact_id, r.owner_section, r.predicate,
-                              r.obj_name if r.object_entity_id is not None else value_text(r.object_value),
+                              safe_text(r.obj_name if r.object_entity_id is not None else value_text(r.object_value)),
                               r.object_entity_id, r.valid_from, r.evidence_n) for r in rows)
     return ProfileSnapshot(org_id, int(ver or 0), owner, items)
