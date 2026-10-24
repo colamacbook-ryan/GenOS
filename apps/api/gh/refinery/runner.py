@@ -1656,6 +1656,8 @@ class GroupTurns:
         srcs: dict[uuid.UUID, Src] = {c.raw_event_id: Src(c.received_at, thread_group(tk), c.sender_person_id, c.forwarded)
                                       for c in window.all_events if c.raw_event_id is not None and c.received_at is not None}
         srcs |= {e.event_id: Src(e.received_at, e.group_id, e.person_id, e.forwarded) for e in evs}
+        ctx_gev = await self._ctx_gevs(org_id, [(c.raw_event_id, c.received_at) for c in window.all_events
+                                                if c.raw_event_id is not None and c.received_at is not None and c.raw_event_id not in block_of])
         failed_safety: list[str] = []                             # unit_ref của đơn vị lừa đảo/an toàn ghi lỗi (fail-high)
         hold: set[uuid.UUID] = set()                              # tin của các đơn vị đó: giữ chờ để thử lại, không bỏ
         async with self.r.sm() as db:
@@ -1678,7 +1680,8 @@ class GroupTurns:
                     continue
                 vqs = vu.verified_quotes
                 first_q = vqs[0]
-                first_ev = next((e for e in evs if e.event_id == first_q.raw_event_id), evs[0])
+                # nguồn = tin trích ĐẦU TIÊN (tin mới hoặc tin ngữ cảnh/bằng chứng): người/nhóm của đơn vị, mention và "theo lời" của sổ tay
+                first_ev = next((e for e in evs if e.event_id == first_q.raw_event_id), None) or ctx_gev.get(first_q.raw_event_id) or evs[0]
                 src0 = srcs.get(first_q.raw_event_id) if first_q.raw_event_id is not None else None
                 observed = vu.event_at or vu.msg_at or first_q.sent_at or first_ev.occurred_at
                 try:
@@ -1769,6 +1772,23 @@ class GroupTurns:
             await self.r._raw_state(org_id, e, "clean" if ok else "discarded", cited.get(e.event_id) or ("Noise" if not ok else None),
                                     UNVERIFIED_CONFIDENCE if ok else None)
         await self.r._embed(org_id, unit_rows)
+
+    async def _ctx_gevs(self, org_id: uuid.UUID, ids: list[tuple[uuid.UUID, datetime]]) -> dict[uuid.UUID, GEv]:
+        """`GEv` đầy đủ (người gửi + mã người, nhóm, hướng) cho tin ngữ cảnh/bằng chứng của cửa sổ — để đơn vị trích chúng được ghi
+        đúng người nói, không mượn người gửi tin mới đầu tiên."""
+        if not ids:
+            return {}
+        async with self.r.sm() as db:
+            rows = (await db.execute(text("""
+                SELECT e.id, e.received_at, e.occurred_at, e.seq, e.kind, e.body_text, e.direction, e.group_id, e.channel_id,
+                       e.sender_identity_id, pi.person_id, p.display_name, p.code
+                FROM unnest(CAST(:ids AS uuid[]), CAST(:rs AS timestamptz[])) AS u(id, r)
+                JOIN raw.events e ON e.id = u.id AND e.received_at = u.r
+                LEFT JOIN core.person_identities pi ON pi.id = e.sender_identity_id
+                LEFT JOIN core.persons p ON p.id = pi.person_id
+                WHERE e.org_id = :o"""), {"o": org_id, "ids": [i for i, _ in ids], "rs": [r for _, r in ids]})).all()
+        return {r.id: GEv(r.id, r.received_at, r.occurred_at, r.seq or 0, r.kind or "text", r.body_text or "", r.direction, r.group_id,
+                          r.channel_id, r.sender_identity_id, r.person_id, r.display_name, r.code) for r in rows}
 
     async def _write_unit(self, db: AsyncSession, org_id: uuid.UUID, st: RunStats, aid: uuid.UUID, u: Any, vqs: list[Any],
                           observed: datetime, first_ev: GEv, src0: "Src | None", srcs: dict[uuid.UUID, "Src"],

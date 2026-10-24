@@ -9,6 +9,7 @@ from sqlalchemy import text
 from gh.biz.mem import profile_read
 from gh.db import sessionmaker
 from gh.refinery import extract, runner
+from gh.refinery.brain_contract import PersonMention
 from gh.refinery.runner import Refinery
 from gh.untrusted import UNTRUSTED_OPEN
 from tests.phase2 import FakeRouter, listen, msg, org_id, put, states
@@ -259,3 +260,22 @@ async def test_safety_unit_citing_only_context_keeps_the_turns_new_messages_pend
     await r.run(org, "manual")
     rows = dict((await db.execute(text("SELECT event_id, state FROM refinery.event_state"))).all())
     assert rows[new] == "pending" and rows[old] == "discarded"
+
+
+async def test_notebook_and_mention_attribute_a_cited_context_message_to_its_own_sender(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    [old] = await put(sm, org, msg("Tuần sau em nghỉ phép 3 ngày nha anh", sender="u9", name="Chị Hằng"))
+    r = refinery(sm, redis, Analyzer())
+    await r.run(org, "manual")
+    await put(sm, org, msg("Ok để anh sắp ca", sender="u1", name="Anh Tư"))
+    r.groups.analyze = Analyzer(lambda w: out_with(w, unit_for(w, "nghỉ phép 3 ngày", kind="viec_han", summary="Hằng nghỉ phép 3 ngày",
+                                                                people=[PersonMention(surface="Chị Hằng", person_ref=None, role="nguoi_gui")])))
+    await r.run(org, "manual")
+    hang = (await db.execute(text("""SELECT p.code, p.id FROM core.persons p JOIN core.person_identities i ON i.person_id = p.id
+                                     WHERE i.external_id LIKE 'u9%'"""))).one()
+    u = (await db.execute(text("SELECT person_id FROM clean.meaning_units"))).scalar_one()
+    assert u == hang.id
+    entries = (await db.execute(text("SELECT body FROM memory.entries"))).scalars().all()
+    assert entries and all(b.startswith(f"theo lời {hang.code}: ") for b in entries)
+    assert (await db.execute(text("SELECT raw_event_id FROM mem.mentions"))).scalars().all() == [old]
