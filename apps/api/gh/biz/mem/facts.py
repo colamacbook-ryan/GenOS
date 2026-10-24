@@ -652,7 +652,7 @@ class KeptMsg:
 class KeptResult:
     closed: list[uuid.UUID] = field(default_factory=list)
     untrusted: int = 0                 # có lời hứa khớp nhưng bằng chứng không đủ tin cậy ⇒ KHÔNG đóng
-    ambiguous: int = 0                 # một tin hứa sinh ≥ 2 nghĩa vụ đang mở ⇒ không biết đóng cái nào ⇒ KHÔNG đóng
+    ambiguous: int = 0                 # tập trích chứa tin nguồn của ≥ 2 nghĩa vụ đang mở ⇒ không biết đóng cái nào ⇒ KHÔNG đóng
     self_report: int = 0               # chỉ người hứa/con nợ tự báo "đã giữ" ⇒ KHÔNG đóng
 
 
@@ -678,9 +678,11 @@ async def close_kept(db: AsyncSession, org_id: uuid.UUID, cited: list[KeptMsg]) 
     là ĐỀ XUẤT; cổng tin cậy (cùng tinh thần `_assert` 6b/6e — chỉ người trong cuộc hoặc Sếp đổi được sự thật, tin chuyển tiếp không đổi
     được sự thật của người trong cuộc):
     * chỉ sự thật có TIN NGUỒN (`source_raw_event_id`) nằm trong mã được trích — không đóng theo bằng chứng phụ; một tin nguồn sinh
-      ≥ 2 nghĩa vụ đang mở ("thứ 6 em chuyển 20tr, thứ 7 em qua lấy 50kg") ⇒ không biết đóng cái nào ⇒ KHÔNG đóng (`ambiguous`);
+      ≥ 2 nghĩa vụ đang mở ("thứ 6 em chuyển 20tr, thứ 7 em qua lấy 50kg"), hay tập trích chứa tin nguồn của ≥ 2 nghĩa vụ ⇒ không biết
+      đóng cái nào ⇒ KHÔNG đóng (`ambiguous`, xét trên toàn bộ tập trích);
     * người được đóng: Sếp hoặc bên được hứa/chủ nợ. Người hứa/con nợ tự báo "em gửi rồi/em trả rồi" là TRUNG TÍNH: không đóng
-      (chỉ có nó ⇒ `self_report`), cũng không chặn xác nhận của bên được hứa đi kèm;
+      (chỉ có nó ⇒ `self_report`), cũng không chặn xác nhận của bên được hứa đi kèm — nhưng chỉ khi nó qua kiểm cơ bản (tin mới, không
+      chuyển tiếp, gửi sau lời hứa, cùng luồng) và không là nguồn/bằng chứng của sự thật đang mở khác; không thì KHÔNG đóng;
     * mọi tin bằng chứng còn lại phải ĐỦ: tin mới của lượt (kể cả lời xác nhận ngắn trong cửa sổ), không chuyển tiếp, có chữ, gửi SAU
       lời hứa, cùng luồng với tin hứa (hoặc trả lời đúng tin đó), người gửi được phép. Một tin không đủ (vd tin người thứ ba) ⇒ KHÔNG
       đóng, đếm `untrusted` (không tự mở tranh chấp: kẻ gian sẽ dùng chính đường đó để làm lung lay sự thật thật).
@@ -699,13 +701,21 @@ async def close_kept(db: AsyncSession, org_id: uuid.UUID, cited: list[KeptMsg]) 
         ORDER BY f.subject_id, f.predicate, f.id"""), {"o": org_id, "p": list(KEPT_PREDICATES), "r": ids})).all()
     if not rows:
         return out
-    per_src: dict[uuid.UUID, int] = {}
-    for r in rows:
-        per_src[r.source_raw_event_id] = per_src.get(r.source_raw_event_id, 0) + 1
-    out.ambiguous = sum(1 for n in per_src.values() if n > 1)
-    rows = [r for r in rows if per_src[r.source_raw_event_id] == 1]
-    if not rows:
+    if len(rows) > 1:
+        # mơ hồ xét trên TOÀN BỘ tập trích: chứa tin nguồn của ≥ 2 nghĩa vụ đang mở (một tin hứa hai việc, hoặc hai tin hứa) ⇒ không
+        # biết đóng cái nào; kẻ gian cũng không lách được bằng cách trích kèm tin nguồn của nghĩa vụ khác
+        out.ambiguous = 1
         return out
+    # tin được trích là nguồn/bằng chứng của sự thật ĐANG MỞ nào (mọi vị từ) — tin tự báo dính sự thật khác không được coi là trung tính
+    refs: dict[uuid.UUID, set[uuid.UUID]] = {}
+    for x in (await db.execute(text("""
+        SELECT f.source_raw_event_id AS raw, f.id FROM mem.facts f
+        WHERE f.org_id = :o AND f.source_raw_event_id = ANY(:r) AND f.valid_to IS NULL AND f.status IN ('asserted', 'owner_confirmed', 'disputed', 'proposed')
+        UNION
+        SELECT x.raw_event_id, f.id FROM mem.fact_evidence x JOIN mem.facts f ON f.id = x.fact_id
+        WHERE f.org_id = :o AND x.raw_event_id = ANY(:r) AND f.valid_to IS NULL AND f.status IN ('asserted', 'owner_confirmed', 'disputed', 'proposed')"""),
+                               {"o": org_id, "r": ids})).all():
+        refs.setdefault(x.raw, set()).add(x.id)
     owner = (await entities.owner(db, org_id)).id
     speakers: dict[uuid.UUID, uuid.UUID] = {}
     for c in cited:
@@ -722,11 +732,18 @@ async def close_kept(db: AsyncSession, org_id: uuid.UUID, cited: list[KeptMsg]) 
         selfs = [c for c in proofs if c.sender_person_id is not None and speakers.get(c.sender_person_id) == subj and subj not in allowed]
         others = [c for c in proofs if c not in selfs]
 
-        def ok(c: KeptMsg, r: Any = r, allowed: set[uuid.UUID] = allowed) -> bool:
-            return (c.new and not c.forwarded and c.has_text and _aware(c.sent_at) > r.valid_from
-                    and (c.thread_key is not None and c.thread_key == r.tk or c.reply_to_raw == r.source_raw_event_id)
-                    and c.sender_person_id is not None and speakers.get(c.sender_person_id) in allowed)
-        if not others:
+        def basic(c: KeptMsg, r: Any = r) -> bool:
+            return (c.new and not c.forwarded and _aware(c.sent_at) > r.valid_from
+                    and (c.thread_key is not None and c.thread_key == r.tk or c.reply_to_raw == r.source_raw_event_id))
+
+        def ok(c: KeptMsg, allowed: set[uuid.UUID] = allowed) -> bool:
+            return basic(c) and c.has_text and c.sender_person_id is not None and speakers.get(c.sender_person_id) in allowed
+
+        def neutral(c: KeptMsg, r: Any = r) -> bool:     # lời tự báo chỉ trung tính khi qua kiểm cơ bản và không dính sự thật đang mở khác
+            return basic(c) and not (refs.get(c.raw_event_id, set()) - {r.id})
+        if not all(neutral(c) for c in selfs):
+            out.untrusted += 1
+        elif not others:
             if selfs:
                 out.self_report += 1
             else:

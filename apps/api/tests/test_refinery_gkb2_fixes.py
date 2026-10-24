@@ -423,7 +423,20 @@ async def test_promiser_self_report_never_closes_but_the_promisee_does(app, db, 
     ok = msg("Nhận 2 túi decaf rồi nha Khoa", sender="an", name="An Hội An Cafe")
     ok_at = t0 + timedelta(hours=2)
     ok["occurred_at"] = ok_at.isoformat()
-    await _kept_turn(sm, r, org, t0, ok, cite=("Em gửi 2 túi decaf", "Nhận 2 túi decaf"))       # lời tự báo kèm theo là trung tính
+    await _kept_turn(sm, r, org, t0, ok, cite=("Nhận 2 túi decaf",))
+    assert (await _facts(db))["promised_to"].valid_to == ok_at
+
+
+async def test_fresh_self_report_beside_the_promisee_confirmation_is_neutral(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """Cùng lượt: Khoa "em gửi rồi" + An "nhận rồi" (cả hai tin mới, cùng luồng) ⇒ lời tự báo trung tính, xác nhận của An đóng lời hứa."""
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    r, t0 = await _seed_promise(db, sm, redis, org)
+    selfm = msg("Em gửi 2 túi decaf cho chị rồi đó", sender="khoa", name="Khoa Rang Xay MR")
+    ok = msg("Nhận 2 túi decaf rồi nha Khoa", sender="an", name="An Hội An Cafe")
+    ok_at = t0 + timedelta(hours=1, minutes=5)
+    selfm["occurred_at"], ok["occurred_at"] = (t0 + timedelta(hours=1)).isoformat(), ok_at.isoformat()
+    await _kept_turn(sm, r, org, t0, selfm, ok, cite=("Em gửi 2 túi decaf", "Nhận 2 túi decaf"))
     assert (await _facts(db))["promised_to"].valid_to == ok_at
 
 
@@ -494,3 +507,67 @@ async def test_done_after_counts_only_model_analysed_messages_not_filtered_ones(
     w2 = an.windows[1]
     analysed = sum(1 for e in an.windows[0].new_events if (e.body or "").startswith(("Tin thường", "Em lỡ")))
     assert w2.backlog is not None and w2.backlog.done_after == analysed
+
+
+async def test_promise_kept_attack_citing_a_second_promise_source_is_ambiguous_over_the_whole_set(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """Tập trích chứa tin nguồn của HAI nghĩa vụ đang mở (hai tin hứa khác nhau) ⇒ mơ hồ trên toàn tập ⇒ không đóng cái nào."""
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    r, t0 = await _seed_promise(db, sm, redis, org)
+    an_p, khoa = await person_of(db, "an"), await person_of(db, "khoa")
+    p2 = msg("Mai em gửi chị bảng giá Culi mới nha", sender="khoa", name="Khoa Rang Xay MR")
+    p2["occurred_at"] = (t0 + timedelta(minutes=30)).isoformat()
+    await put(sm, org, p2)
+
+    def build(w):  # type: ignore[no-untyped-def]
+        return out_with(w, unit_for(w, "Mai em gửi chị bảng giá", kind="nghia_vu_loi_hua"), facts=[
+            FactProposed(unit_ref="u1", subject=FactSubject(surface="Khoa", person_ref=f"u_{khoa}"), predicate="promised_to",
+                         object=FactObject(value="gửi bảng giá Culi", person_ref=f"u_{an_p}"), quote_refs=[find_msg(w, "Mai em gửi chị bảng giá").message_id])])
+    r.groups.analyze = Analyzer(build)
+    await r.run(org, "manual")
+    assert sum(1 for x in (await db.execute(text("SELECT 1 FROM mem.facts WHERE predicate = 'promised_to' AND valid_to IS NULL"))).all()) == 2
+    ok = msg("Nhận 2 túi decaf rồi nha Khoa", sender="an", name="An Hội An Cafe")
+    ok["occurred_at"] = (t0 + timedelta(hours=1)).isoformat()
+    await _kept_turn(sm, r, org, t0, ok, cite=("Mai em gửi chị bảng giá", "Nhận 2 túi decaf"))
+    assert sum(1 for x in (await db.execute(text("SELECT 1 FROM mem.facts WHERE predicate = 'promised_to' AND valid_to IS NULL"))).all()) == 2
+    assert {"code": "promise_kept_ambiguous", "n": 1} in await _last_errors(db)
+
+
+async def test_promise_kept_attack_self_report_tied_to_another_open_fact_blocks_closing(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """Tin tự báo của người hứa là nguồn của sự thật đang mở KHÁC ⇒ không còn trung tính ⇒ không đóng (dù bên được hứa xác nhận kèm)."""
+    from tests.refinery_group_helpers import phone_fact
+
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    r, t0 = await _seed_promise(db, sm, redis, org)
+    khoa = await person_of(db, "khoa")
+    selfm = msg("Em gửi rồi nha, số em 0901234567", sender="khoa", name="Khoa Rang Xay MR")
+    ok = msg("Nhận 2 túi decaf rồi nha Khoa", sender="an", name="An Hội An Cafe")
+    selfm["occurred_at"], ok["occurred_at"] = (t0 + timedelta(hours=1)).isoformat(), (t0 + timedelta(hours=1, minutes=5)).isoformat()
+    await put(sm, org, selfm, ok)
+
+    def build(w):  # type: ignore[no-untyped-def]
+        ids = [find_msg(w, "tuần sau e gửi").message_id, find_msg(w, "Em gửi rồi nha").message_id, find_msg(w, "Nhận 2 túi decaf").message_id]
+        out = out_with(w, unit_for(w, "số em 0901234567", kind=None), facts=[phone_fact(w, "số em 0901234567", khoa)])
+        return out.model_copy(update={"memory_updates": [MemoryUpdate(type="promise_kept", text="đã nhận", message_ids=ids)]})
+    r.groups.analyze = Analyzer(build)
+    await r.run(org, "manual")
+    assert (await _facts(db))["promised_to"].valid_to is None
+    assert {"code": "promise_kept_untrusted", "n": 1} in await _last_errors(db)
+
+
+async def test_promise_kept_attack_old_self_report_from_context_blocks_closing(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """Tin tự báo cũ (tin ngữ cảnh, không phải tin mới của lượt) trích kèm ⇒ không qua kiểm cơ bản ⇒ không đóng."""
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    r, t0 = await _seed_promise(db, sm, redis, org)
+    selfm = msg("Em gửi 2 túi decaf cho chị rồi đó", sender="khoa", name="Khoa Rang Xay MR")
+    selfm["occurred_at"] = (t0 + timedelta(hours=1)).isoformat()
+    await put(sm, org, selfm)
+    r.groups.analyze = Analyzer()
+    await r.run(org, "manual")                                                     # lượt riêng: tin tự báo thành tin ngữ cảnh
+    ok = msg("Nhận 2 túi decaf rồi nha Khoa", sender="an", name="An Hội An Cafe")
+    ok["occurred_at"] = (t0 + timedelta(hours=2)).isoformat()
+    await _kept_turn(sm, r, org, t0, ok, cite=("Em gửi 2 túi decaf", "Nhận 2 túi decaf"))
+    assert (await _facts(db))["promised_to"].valid_to is None
+    assert {"code": "promise_kept_untrusted", "n": 1} in await _last_errors(db)
