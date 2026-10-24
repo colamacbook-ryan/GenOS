@@ -316,4 +316,4 @@ async def test_write_errors_never_log_quotes_or_sql_parameters(app, db, redis, m
 def test_engine_hides_sql_parameters_in_errors(app) -> None:  # type: ignore[no-untyped-def]
     from gh import db as dbmod
 
-    assert dbmod.get_engine().hide_parameters is True and dbmod.get_admin_engine().hide_parameters is True
+    assert dbmod.get_engine().sync_engine.hide_parameters is True and dbmod.get_admin_engine().sync_engine.hide_parameters is True
