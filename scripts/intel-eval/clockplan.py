@@ -137,6 +137,21 @@ def compress_gaps(msgs: list[Msg], max_gap_s: float, burst_idx: tuple[int, int] 
     return t
 
 
+def data_time(msgs: list[Msg], times: list[float], t: float) -> datetime:
+    """Giờ của DỮ LIỆU ứng với thời điểm giả `t` (giây): giờ gốc của tin cuối cùng đã đến (`times[i] ≤ t`) + phần giây giả đã trôi
+    sau tin đó, chặn trước giờ gốc của tin kế. Chế độ realtime ⇒ đúng bằng đồng hồ giả; chế độ nén ⇒ giờ thật của lượt (đồng hồ giả
+    nén chỉ dùng để lập lượt — đưa nó cho pipeline làm "bây giờ" thì mốc "quá hạn/dưới 24 giờ/hôm nay" và cửa sổ truy hồi sai)."""
+    import bisect
+
+    i = bisect.bisect_right(times, t + 1e-9) - 1
+    if i < 0:
+        return msgs[0].ts - timedelta(seconds=times[0] - t)
+    at = msgs[i].ts + timedelta(seconds=max(0.0, t - times[i]))
+    if i + 1 < len(msgs) and at > msgs[i + 1].ts:
+        at = msgs[i + 1].ts
+    return at
+
+
 def realtime_times(msgs: list[Msg]) -> list[float]:
     t0 = msgs[0].ts
     return [(m.ts - t0).total_seconds() for m in msgs]

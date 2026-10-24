@@ -324,7 +324,7 @@ def event_line(e: GroupEvent, media: Mapping[str, Sequence[MediaText]], tz: str,
     return orjson.dumps(d).decode()
 
 
-def pack_blocks(pack: ContextPack, secrets: Sequence[str] = ()) -> list[str]:
+def pack_blocks(pack: ContextPack, secrets: Sequence[str] = (), cite_ids: set[uuid.UUID] | None = None) -> list[str]:
     """Gói nhóm (`retrieve.pack`) ngoài Hồ sơ Sếp và chính sách: sự thật, quan hệ, lịch sử. Những chữ này có gốc từ người ngoài
     (giá trị sự thật trích từ tin, `display_name` do người ngoài đặt, kết luận do model tóm tắt từ tin) nên MỌI phần đều nằm trong khối
     `wrap_untrusted`; mã `f_…`/`u_…` giữ trong khối để model nối `owner_relevance`/`conflicts`. Không dùng `ContextPack.render_for_prompt`
@@ -341,8 +341,12 @@ def pack_blocks(pack: ContextPack, secrets: Sequence[str] = ()) -> list[str]:
     if pack.related:
         out.append("Quan hệ liên quan (dữ liệu):\n" + wrap_untrusted("quan hệ liên quan", "\n".join(line("", i) for i in pack.related)))
     if pack.history:
-        out.append("Lịch sử gần đây của nhóm (dữ liệu):\n" + wrap_untrusted(
-            "lịch sử gần đây", "\n".join(line(f"[u_{i.meaning_unit_id}] ", i) for i in pack.history)))
+        def hist(i: Any) -> str:
+            # id tin bằng chứng CHỈ khi tin đó có trong prompt (tin ngữ cảnh) — model chỉ được trích mã có trong prompt
+            ids = [f"m_{r}" for r in i.evidence_raw_ids if cite_ids is not None and r in cite_ids]
+            return line(f"[u_{i.meaning_unit_id}] ", i) + (f" (tin: {', '.join(ids)})" if ids else "")
+        out.append("Lịch sử gần đây của nhóm (dữ liệu; việc trước đó — trích bằng tin ngữ cảnh có mã ghi kèm):\n" + wrap_untrusted(
+            "lịch sử gần đây", "\n".join(hist(i) for i in pack.history)))
     return out
 
 
@@ -353,7 +357,7 @@ def build_user_prompt(window: GroupWindow, pack: ContextPack, profile: ProfileSn
     now = window.now or datetime.now(UTC)
     parts: list[str] = [profile.render_for_prompt()]
     parts.append(contexts.render_for_prompt(policy))                 # chính sách do CODE render ⇒ tin cậy
-    parts.extend(pack_blocks(pack, secrets))
+    parts.extend(pack_blocks(pack, secrets, {e.raw_event_id for e in window.all_events if e.raw_event_id is not None}))
     if window.predicates:
         parts.append("Danh mục vị từ (`facts_proposed[].predicate` chỉ dùng các mã này):\n" +
                      "\n".join(f"- {c}: {d}" for c, d in window.predicates))

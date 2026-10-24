@@ -341,6 +341,28 @@ async def test_contract_error_counts_attempts_then_errors(app, db, redis) -> Non
 
 
 async def test_write_failure_rolls_back_whole_turn(app, db, redis, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Lỗi NGOÀI từng đơn vị (ghi trạng thái tin) ⇒ rollback cả giao dịch, tin về pending (tính một lần thử) để lượt sau thử lại."""
+    sm = sessionmaker()
+    org, _ = await setup(db, sm)
+    await put(sm, org, msg("Em hứa giao hàng chiều nay nhé", sender="u1"))
+    lan = await person_of(db, "u1")
+
+    async def boom(*a, **k):  # type: ignore[no-untyped-def]
+        raise RuntimeError("hỏng giữa chừng")
+
+    monkeypatch.setattr(runner.Refinery, "_set_state", boom)
+    an = Analyzer(lambda w: out_with(w, unit_for(w, "giao hàng chiều nay", kind="nghia_vu_loi_hua", summary="hứa"),
+                                     facts=[phone_fact(w, "giao hàng", lan)]))
+    await refinery(sm, redis, an).run(org, "manual")
+    assert (await db.execute(text("SELECT count(*) FROM clean.meaning_units"))).scalar_one() == 0
+    assert (await db.execute(text("SELECT count(*) FROM memory.entries"))).scalar_one() == 0
+    assert await states(db, org) == {"pending": 1}
+    assert (await db.execute(text("SELECT status FROM refinery.analyses"))).scalar_one() == "failed"
+    assert (await db.execute(text("SELECT attempts FROM refinery.event_state"))).scalar_one() == 1      # lỗi ghi tính lần thử (không lặp vô hạn)
+
+
+async def test_facts_write_failure_keeps_units(app, db, redis, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Ghi sự thật lỗi (savepoint riêng) không huỷ đơn vị đã ghi: lượt 'ok', mã lỗi `facts_write_failed` trong analyses.errors."""
     sm = sessionmaker()
     org, _ = await setup(db, sm)
     await put(sm, org, msg("Em hứa giao hàng chiều nay nhé", sender="u1"))
@@ -353,11 +375,11 @@ async def test_write_failure_rolls_back_whole_turn(app, db, redis, monkeypatch) 
     an = Analyzer(lambda w: out_with(w, unit_for(w, "giao hàng chiều nay", kind="nghia_vu_loi_hua", summary="hứa"),
                                      facts=[phone_fact(w, "giao hàng", lan)]))
     await refinery(sm, redis, an).run(org, "manual")
-    # giao dịch ghi bị rollback: không có đơn vị/sự thật/phân tích 'ok'; tin về pending để lượt sau thử lại
-    assert (await db.execute(text("SELECT count(*) FROM clean.meaning_units"))).scalar_one() == 0
-    assert (await db.execute(text("SELECT count(*) FROM memory.entries"))).scalar_one() == 0
-    assert await states(db, org) == {"pending": 1}
-    assert (await db.execute(text("SELECT status FROM refinery.analyses"))).scalar_one() == "failed"
+    assert (await db.execute(text("SELECT count(*) FROM clean.meaning_units"))).scalar_one() == 1
+    assert (await db.execute(text("SELECT count(*) FROM clean.evidence"))).scalar_one() == 1
+    assert await states(db, org) == {"clean": 1}
+    a = (await db.execute(text("SELECT status, errors FROM refinery.analyses"))).one()
+    assert a.status == "ok" and any(e.get("code") == "facts_write_failed" for e in a.errors)
 
 
 async def test_unreadable_media_is_counted_not_guessed(app, db, redis) -> None:  # type: ignore[no-untyped-def]

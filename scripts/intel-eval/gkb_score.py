@@ -86,6 +86,7 @@ class Run:
         self.contract_errors = 0
         self.contract_retries = 0
         self.turn_errors: list[dict[str, Any]] = []
+        self.write_errors: list[dict[str, Any]] = []          # lượt model trả đúng nhưng pipeline ghi lỗi (cả lượt / từng đơn vị)
         self.normalization_notes = 0
         self.turns = 0
         self.unreadable = {"voice": 0, "image": 0, "file": 0}
@@ -116,6 +117,8 @@ class Run:
             if int(rec.get("attempts") or 1) > 1:
                 self.contract_retries += 1
             raw = rec.get("output")
+            if rec.get("write_error"):
+                self.write_errors.append({"turn": rec.get("turn"), "error": rec["write_error"]})
             if rec.get("error") or raw is None:
                 self.contract_errors += 1
                 self.turn_errors.append({"turn": rec.get("turn"), "error": rec.get("error") or "no_output"})
@@ -274,7 +277,7 @@ def score_run(run: Run, key: dict[str, Any], manual: dict[str, str] | None = Non
         "unmatched_units": [u["key"] for u in unmatched], "manual_pending": [u["key"] for u in pending], "manual_bad": [u["key"] for u in reviewed_bad],
         "hard_trap_hits": hard_hits, "privacy_hits": priv_hits, "opportunity_family_hits": opp_family,
         "opportunity_outside_gate": opp_outside_gate if unconfirmed else [], "people_eval_suspect": eval_people if unconfirmed else [],
-        "evidence": wilson(ev_ok, ev_total), "contract_errors": run.contract_errors, "contract_retries": run.contract_retries,
+        "evidence": wilson(ev_ok, ev_total), "contract_errors": run.contract_errors, "write_errors": len(run.write_errors), "contract_retries": run.contract_retries,
         "normalization_notes": run.normalization_notes, "facts_recall": wilson(len(f_hit), len(kfacts)),
         "unreadable": run.unreadable,
         "event_status": {events[i]["id"]: ("tight" if i in tight else ("kind_mismatch" if i in loose else "miss")) for i in range(n)},

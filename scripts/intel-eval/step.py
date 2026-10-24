@@ -28,7 +28,7 @@ import re
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +47,8 @@ OWNER = {"display_name": "Anh Cơ", "email": "owner@example.vn", "password": "ma
 SETUP_TOKEN = "step-setup-token"
 MAX_ROUNDS = 6                 # tối đa lượt pipeline cho MỘT lượt kế hoạch (an toàn/cổng nối nhau + một lượt thường)
 IMMEDIATE = ("safety", "gate", "fast")
+DRAIN_ROUNDS = 8               # vòng thử lại tin còn chờ sau lượt kế hoạch cuối (mỗi vòng tiến đồng hồ qua RETRY_BACKOFF)
+WRITE_ERROR_CODES = ("write_failed", "unit_write_failed", "unit_write_failed_safety", "facts_write_failed")
 WAIT_S = float(os.environ.get("GH_STEP_WAIT_S", "900"))
 
 
@@ -235,7 +237,10 @@ def cmd_submit(a: argparse.Namespace) -> None:
     if st["status"] == "waiting" and st.get("turn") == turn:
         print(json.dumps({"turn": turn, "result": "gọi lại (câu trả lời trước sai hợp đồng hoặc JSON hỏng; pipeline thật thử lại MỘT lần kèm lỗi)"}, ensure_ascii=False))
     else:
-        print(json.dumps(st.get("last") or {}, ensure_ascii=False))
+        last = st.get("last") or {}
+        print(json.dumps(last, ensure_ascii=False))
+        if last.get("write_error") or "failed" in (last.get("analysis_status") or []):
+            print(f"step: LƯỢT LỖI GHI — {last.get('write_error') or 'failed'} (model trả đúng hợp đồng nhưng pipeline không ghi trọn; xem daemon.log)", file=sys.stderr)
     if st["status"] == "error":
         raise SystemExit(f"step: lỗi: {st.get('error')}")
     print("DONE" if st["status"] == "done" else f"tiếp: {run / st['pending'] / 'prompt.json'}")
@@ -354,9 +359,8 @@ class PipelineAnalyzer:
         ngữ cảnh), rồi MỘT lượt thường nhận phần tồn đọng — đúng thứ tự `GroupTurns.run` (phần "ứng viên đến trong lúc chạy"). Mỗi lượt pipeline có
         bản ghi riêng (`self.records`) để chấm; phần còn quá 60 tin / lượt lỗi hợp đồng (đang lùi nhịp) chờ lượt kế hoạch sau của luồng."""
         from gh.refinery import clock
-        from gh.refinery.runner import RunStats
 
-        clock.freeze(datetime.fromisoformat(inp.now_iso))
+        clock.freeze(datetime.fromisoformat(inp.now_iso))      # giờ của lượt theo DỮ LIỆU (replay: clockplan.data_time), không phải đồng hồ nén
         tk = await self.thread_key(inp.thread_ref.removeprefix("g:"))
         empty = {"contract_version": "brain-out/1", "thread_ref": inp.thread_ref, "units": [], "facts_proposed": []}
         usage_sum = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0, "model": "agent-step", "calls": 0}
@@ -372,42 +376,77 @@ class PipelineAnalyzer:
             plan = await g.plan(self.org, only=[tk])
             progressed, immediate = False, False
             for ts, reason in plan:
-                self.captured.clear()
-                self.ex.begin_turn(inp.thread_ref)
-                calls0 = self.ex.calls
-                run_id = await self.r.start_run(self.org, "step")
-                await g.turn(self.org, RunStats(run_id, "step"), ts, reason)
-                if not self.captured:
+                rec = await self._pipeline_turn(ts, reason, inp.thread_ref, inp.n, inp.turn.get("thread"))
+                if rec is None:
                     continue            # lượt không gọi model (không còn tin tới hạn / đang lùi nhịp)
                 progressed = True
                 immediate = immediate or reason in IMMEDIATE
-                kind, v, w = self.captured[-1]
-                usage = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0, "model": "agent-step", "calls": self.ex.calls - calls0}
-                out: Any = None
-                err: str | None = None
-                if kind == "ok":
-                    out = v.out.model_dump(mode="json") | {"thread_ref": inp.thread_ref}
-                    attempts = v.attempts
-                else:
-                    err = f"{type(v).__name__}:{';'.join(getattr(v, 'errors', [str(v)[:200]])[:5])}"
-                    attempts = 2
-                usage |= {"input": (v.tokens_in or 0) if kind == "ok" else (getattr(v, "tokens_in", 0) or 0),
-                          "output": (v.tokens_out or 0) if kind == "ok" else (getattr(v, "tokens_out", 0) or 0)}
-                info = await self.outcome(run_id)
-                rec = {"turn": self.ex.turn, "plan_turn": inp.n, "thread_ref": inp.thread_ref, "thread": inp.turn.get("thread"), "reason": reason, "output": out, "error": err,
-                       "attempts": attempts, "usage": usage, "new_n": len(w.new_events), "recent_n": len(w.context_events), "new_msg_refs": [e.message_id for e in w.new_events]}
-                self.records.append(rec)
                 for k in ("input", "output", "calls"):
-                    usage_sum[k] += usage[k]
-                last_out, last_err = (out if out is not None else last_out), err
-                write_state(self.ex.run, last={"turn": self.ex.turn, "plan_turn": inp.n, "thread": inp.thread_ref, "reason": reason, "attempts": attempts,
-                                               "calls": usage["calls"], "units": len(out["units"]) if out else None,
-                                               "facts_proposed": len(out["facts_proposed"]) if out else None, "error": err, **info})
+                    usage_sum[k] += rec["usage"][k]
+                last_out, last_err = (rec["output"] if rec["output"] is not None else last_out), rec["error"]
                 if reason not in IMMEDIATE:
                     break               # lượt thường xong: phần còn lại chờ nhịp kế (lượt kế hoạch sau của luồng)
             if not progressed or not immediate:
                 break
         return replay.AnalysisResult(output=last_out if last_out is not None else empty, usage=usage_sum, attempts=1, error=last_err)
+
+    async def _pipeline_turn(self, ts: Any, reason: str, thread_ref: str, plan_turn: int | None, thread: str | None) -> dict[str, Any] | None:
+        """MỘT lượt pipeline thật (`GroupTurns.turn`) + bản ghi để chấm; None nếu lượt không gọi model."""
+        from gh.refinery.runner import RunStats
+
+        g = self.r.groups
+        self.captured.clear()
+        self.ex.begin_turn(thread_ref)
+        calls0 = self.ex.calls
+        run_id = await self.r.start_run(self.org, "step")
+        await g.turn(self.org, RunStats(run_id, "step"), ts, reason)
+        if not self.captured:
+            return None
+        kind, v, w = self.captured[-1]
+        usage = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0, "model": "agent-step", "calls": self.ex.calls - calls0}
+        out: Any = None
+        err: str | None = None
+        if kind == "ok":
+            out = v.out.model_dump(mode="json") | {"thread_ref": thread_ref}
+            attempts = v.attempts
+        else:
+            err = f"{type(v).__name__}:{';'.join(getattr(v, 'errors', [str(v)[:200]])[:5])}"
+            attempts = 2
+        usage |= {"input": (v.tokens_in or 0) if kind == "ok" else (getattr(v, "tokens_in", 0) or 0),
+                  "output": (v.tokens_out or 0) if kind == "ok" else (getattr(v, "tokens_out", 0) or 0)}
+        info = await self.outcome(run_id)
+        werr = write_error(info)
+        rec = {"turn": self.ex.turn, "plan_turn": plan_turn, "thread_ref": thread_ref, "thread": thread, "reason": reason, "output": out, "error": err,
+               "write_error": werr, "attempts": attempts, "usage": usage, "new_n": len(w.new_events), "recent_n": len(w.context_events),
+               "new_msg_refs": [e.message_id for e in w.new_events]}
+        self.records.append(rec)
+        write_state(self.ex.run, last={"turn": self.ex.turn, "plan_turn": plan_turn, "thread": thread_ref, "reason": reason, "attempts": attempts,
+                                       "calls": usage["calls"], "units": len(out["units"]) if out else None,
+                                       "facts_proposed": len(out["facts_proposed"]) if out else None, "error": err, "write_error": werr, **info})
+        return rec
+
+    async def drain(self, max_rounds: int = DRAIN_ROUNDS) -> int:
+        """Sau lượt kế hoạch cuối: tin còn `pending` (lượt ghi lỗi/lùi nhịp, tin đuôi) được thử lại như scheduler thật — tiến đồng hồ qua
+        `RETRY_BACKOFF` rồi chạy mọi luồng đến hạn, tới khi hết tin chờ nhận được hoặc không còn tiến triển. Bản ghi có `plan_turn = None`,
+        `reason = "drain:<lý do>"`. Trả số lượt pipeline đã chạy."""
+        from gh.refinery import clock
+        from gh.refinery.runner import RETRY_BACKOFF
+
+        g = self.r.groups
+        back = {v: k for k, v in self.tk.items()}
+        n = 0
+        for _ in range(max_rounds):
+            clock.advance(RETRY_BACKOFF + timedelta(minutes=1))
+            while await g.ensure_scanned(self.org) >= 500:
+                pass
+            progressed = False
+            for ts, reason in await g.plan(self.org, manual=True):
+                gk = back.get(ts.thread_key)
+                if await self._pipeline_turn(ts, f"drain:{reason}", f"g:{gk}" if gk else ts.thread_key, None, gk) is not None:
+                    progressed, n = True, n + 1
+            if not progressed:
+                break
+        return n
 
     async def outcome(self, run_id: Any) -> dict[str, Any]:
         from sqlalchemy import text  # noqa: PLC0415
@@ -416,7 +455,18 @@ class PipelineAnalyzer:
             an = (await db.execute(text("SELECT status, errors FROM refinery.analyses WHERE run_id = :r ORDER BY started_at"), {"r": run_id})).all()
             units = (await db.execute(text("SELECT count(*) FROM clean.meaning_units WHERE run_id = :r"), {"r": run_id})).scalar_one()
             states = (await db.execute(text("SELECT state, count(*) FROM refinery.event_state WHERE run_id = :r GROUP BY 1"), {"r": run_id})).all()
-        return {"analysis_status": [r.status for r in an], "written_units": int(units), "event_states": {r.state: int(r[1]) for r in states}}
+        codes = [e.get("code") for r in an for e in (r.errors or []) if isinstance(e, dict) and e.get("code") in WRITE_ERROR_CODES]
+        return {"analysis_status": [r.status for r in an], "written_units": int(units), "event_states": {r.state: int(r[1]) for r in states},
+                "write_errors": codes}
+
+
+def write_error(info: dict[str, Any]) -> str | None:
+    """Lượt ghi lỗi (cả lượt `write_failed` hoặc từng đơn vị/sự thật) ⇒ chuỗi mã lỗi; None = ghi trọn vẹn. Model trả đúng hợp đồng
+    nhưng sản phẩm không ghi được vẫn là lượt LỖI — không được hiện `error: null`."""
+    codes = info.get("write_errors") or []
+    if not codes:
+        return None
+    return ",".join(f"{c}×{codes.count(c)}" for c in dict.fromkeys(codes))
 
 
 class IngestSink:
@@ -530,6 +580,7 @@ async def serve(run: Path) -> None:
                 sink = IngestSink(org)
                 summary = await replay.run_replay(ds, run, mode="compressed", analyzer=an, sink=sink, seeder=StepSeeder(client), contexts=cfg["contexts"],
                                                   engine=replay.FakeMediaEngine(), label="step")
+                summary["drain_turns"] = await an.drain()
                 # idmap: m_<uuid kho thô> → id dữ liệu (bộ chấm chuẩn hoá id trích dẫn qua đây)
                 idmap = json.loads((run / "idmap.json").read_text(encoding="utf-8"))
                 async with sm() as db:
@@ -557,7 +608,7 @@ def write_records(run: Path, records: list[dict[str, Any]], idmap: dict[str, str
     with open(run / "outputs.jsonl", "w", encoding="utf-8") as fo, open(run / "tokens.jsonl", "w", encoding="utf-8") as ft:
         for r in records:
             fo.write(json.dumps({"turn": r["turn"], "plan_turn": r["plan_turn"], "thread_ref": r["thread_ref"], "thread": r["thread"], "output": r["output"], "error": r["error"],
-                                 "attempts": r["attempts"], "reason": r["reason"], "new_ids": [idmap.get(x, x) for x in r["new_msg_refs"]]}, ensure_ascii=False) + "\n")
+                                 "write_error": r.get("write_error"), "attempts": r["attempts"], "reason": r["reason"], "new_ids": [idmap.get(x, x) for x in r["new_msg_refs"]]}, ensure_ascii=False) + "\n")
             ft.write(json.dumps({"turn": r["turn"], "plan_turn": r["plan_turn"], "thread": r["thread"], "new_n": r["new_n"], "recent_n": r["recent_n"], "chars": chars.get(r["turn"], 0),
                                  "reason": r["reason"], "usage": r["usage"], "latency_s": wait.get(r["turn"], 0.0), "attempts": r["attempts"], "mode": summary["mode"]}) + "\n")
     write_json(run / "summary.json", {**summary, "pipeline_turns": len(records), "plan_turns": summary["turns_n"]})
@@ -595,10 +646,14 @@ def cmd_export(a: argparse.Namespace) -> None:
         return {k: (sorted(v) if isinstance(v, set) else v) for k, v in u.items()}
 
     write_json(out, {"format": "gkb-step-signals/1", "dataset": st.get("dataset"), "turns": r.turns, "contract_errors": r.contract_errors,
-                     "contract_retries": r.contract_retries, "turn_errors": r.turn_errors, "unreadable": r.unreadable,
+                     "contract_retries": r.contract_retries, "turn_errors": r.turn_errors, "write_errors": r.write_errors, "unreadable": r.unreadable,
                      "units": [js(u) for u in r.units], "facts": [js(f) for f in r.facts], "db": db_counts(cfg),
                      "note": "định dạng nội bộ của gkb_score.Run; chấm đầy đủ: gkb_score.py --runs <run_dir> --key <đáp án ngoài repo>"})
-    print(f"đã ghi {out}: {len(r.units)} đơn vị ({len(r.signals)} có kind), {len(r.facts)} sự thật đề xuất, {r.contract_errors} lỗi hợp đồng / {r.turns} lượt")
+    print(f"đã ghi {out}: {len(r.units)} đơn vị ({len(r.signals)} có kind), {len(r.facts)} sự thật đề xuất, {r.contract_errors} lỗi hợp đồng, {len(r.write_errors)} lượt lỗi ghi / {r.turns} lượt")
+    db = db_counts(cfg)
+    stuck = db["event_state"].get("pending", 0) + db["event_state"].get("processing", 0)
+    if r.write_errors or stuck:
+        print(f"step: CẢNH BÁO — {len(r.write_errors)} lượt lỗi ghi, {stuck} tin còn chờ/đang xử lý sau lần chạy", file=sys.stderr)
 
 
 def cmd_stats(a: argparse.Namespace) -> None:

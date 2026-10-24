@@ -769,6 +769,8 @@ BURST_WINDOW = timedelta(minutes=10)
 CONTEXT_EVENTS = 30
 CONTEXT_WINDOW = timedelta(hours=24)
 RETRY_BACKOFF = timedelta(minutes=5)
+HISTORY_EVIDENCE_MAX = 10          # tin bằng chứng của khối Lịch sử thêm vào tin ngữ cảnh (để trích được)
+HISTORY_EVIDENCE_CHARS = 3000
 FREE_MODE_RETRY = timedelta(minutes=15)
 TEMPLATE_WINDOW = timedelta(days=7)
 UNVERIFIED_CONFIDENCE = 0.8              # §4D.4: đơn vị model có trích dẫn verified, chưa qua (d) — T1 tính lại độ chắc
@@ -779,6 +781,26 @@ FACT_CONTENT_FACTOR = 0.85
 REPLY_KEYS = ("reply_to_msg_id", "reply_to", "quoted_msg_id", "replyTo")
 OBLIGATION_PREDICATES = frozenset({"promised_to", "owes", "deadline", "scheduled_event"})
 FORWARD_KEYS = ("forwarded", "is_forwarded", "forward")
+
+
+@dataclass(frozen=True)
+class Src:
+    """Nguồn của một tin được trích trong lượt (tin mới HOẶC tin ngữ cảnh): đủ để ghi bằng chứng/sự thật đúng khoá raw.events."""
+
+    received_at: datetime | None
+    group_id: uuid.UUID | None
+    person_id: uuid.UUID | None
+    forwarded: bool = False
+
+
+_NO_SRC = Src(None, None, None)
+SAFETY_KINDS = frozenset({"rui_ro_lua_dao", "suc_khoe_an_toan"})
+SAFETY_GATES = frozenset({"lua_dao_dang_dien_ra", "an_toan"})
+
+
+def is_safety_unit(u: Any) -> bool:
+    """Đơn vị lừa đảo/an toàn (loại hoặc cổng): ghi lỗi thì phải để lại dấu vết + giữ tin chờ (fail-high), không biến mất im lặng."""
+    return getattr(u, "kind", None) in SAFETY_KINDS or getattr(u, "gate_candidate", None) in SAFETY_GATES
 
 
 @dataclass
@@ -1335,9 +1357,9 @@ class GroupTurns:
             return
         try:
             await self._write(org_id, st, tk, aid, kind, claimed, window, pack, profile, analysis, since, secrets)
-        except Exception as exc:  # noqa: BLE001 — ghi lỗi ⇒ rollback cả giao dịch, tin về pending
+        except Exception as exc:  # noqa: BLE001 — lỗi ngoài từng đơn vị ⇒ rollback cả giao dịch, tin về pending (tính lần thử, lùi nhịp)
             log.exception("Ghi lượt phân tích %s lỗi", tk)
-            await self._release(evs, st, f"ghi lượt lỗi: {type(exc).__name__}", backoff=True)
+            await self._release(evs, st, f"ghi lượt lỗi: {type(exc).__name__}", count_error=True, backoff=True)
             await self._record_failed(org_id, tk, aid, window, "write_failed", st, kind=kind, since=since)
 
     def _call(self, org_id: uuid.UUID, kind: str) -> Callable[[list[Message]], Awaitable[Any]]:
@@ -1481,6 +1503,9 @@ class GroupTurns:
                 ge.reply_to = by_ext[b.reply_ext]
         first = min(b.occurred_at for b in blocks)
         ctx_events = await self._context(db, org_id, tk, blocks, first)
+        pack = await retrieve.pack(db, org_id, tk, [{"sender_person_id": b.person_id, "raw_event_id": b.event_id, "text": b.body}
+                                                    for b in blocks], now=clock.now())
+        ctx_events = await self._history_evidence(db, org_id, blocks, ctx_events, pack)
         all_ids = [m.event_id for b in blocks for m in b.all_events] + [c.raw_event_id for c in ctx_events if c.raw_event_id]
         media: dict[str, list[Any]] = {}
         for r in (await db.execute(text("""
@@ -1498,13 +1523,48 @@ class GroupTurns:
         gname = None
         if (gid := thread_group(tk)) is not None:
             gname = (await db.execute(text("SELECT name FROM core.groups WHERE id = :g"), {"g": gid})).scalar_one_or_none()
-        pack = await retrieve.pack(db, org_id, tk, [{"sender_person_id": b.person_id, "raw_event_id": b.event_id, "text": b.body}
-                                                    for b in blocks], now=clock.now())
         profile = await profile_read.snapshot(db, org_id)
         preds = [(p.code, p.description_vi) for p in await predicates.all_predicates(db)]
         window = l3.GroupWindow(thread_ref=tk, new_events=new_events, context_events=ctx_events, media_texts=media,
                                 unreadable=unreadable, now=clock.now(), group_name=gname, predicates=preds)
         return window, pack, profile
+
+    async def _history_evidence(self, db: AsyncSession, org_id: uuid.UUID, blocks: list[GEv], ctx_events: list[Any], pack: Any) -> list[Any]:
+        """Tin bằng chứng của các đơn vị trong khối "Lịch sử" (`retrieve.pack`, cùng luồng) được thêm vào tin ngữ cảnh — để model
+        TRÍCH được việc trước đó (lời hứa giữ giá, đợt thanh toán…) và code kiểm được trích dẫn. Trần `HISTORY_EVIDENCE_MAX` tin /
+        `HISTORY_EVIDENCE_CHARS` ký tự (một phần trần lịch sử ≈ 2.400 token); tin đã có trong cửa sổ không lặp lại."""
+        have = {m.event_id for b in blocks for m in b.all_events} | {c.raw_event_id for c in ctx_events if c.raw_event_id}
+        want: dict[uuid.UUID, datetime] = {}
+        for it in reversed(pack.history):                       # mới nhất trước: trần cắt tin cũ hơn
+            for rid, rr in it.meta.get("evidence", ()):
+                if rid not in have and rid not in want and len(want) < HISTORY_EVIDENCE_MAX:
+                    want[rid] = rr
+        if not want:
+            return ctx_events
+        rows = (await db.execute(text("""
+            SELECT e.id, e.received_at, e.occurred_at, e.kind, e.body_text, e.payload, e.external_msg_id, e.sender_identity_id,
+                   pi.person_id, p.display_name
+            FROM unnest(CAST(:ids AS uuid[]), CAST(:rs AS timestamptz[])) AS u(id, r)
+            JOIN raw.events e ON e.id = u.id AND e.received_at = u.r
+            LEFT JOIN core.person_identities pi ON pi.id = e.sender_identity_id
+            LEFT JOIN core.persons p ON p.id = pi.person_id
+            WHERE e.org_id = :o
+            ORDER BY e.occurred_at DESC"""), {"o": org_id, "ids": list(want), "rs": list(want.values())})).all()
+        extra: list[Any] = []
+        used = 0
+        for r in rows:
+            n = len(r.body_text or "")
+            if used + n > HISTORY_EVIDENCE_CHARS:
+                continue
+            used += n
+            extra.append(self._ctx_event(r))
+        return sorted([*ctx_events, *extra], key=lambda c: c.sent_at)
+
+    @staticmethod
+    def _ctx_event(r: Any) -> Any:
+        return l3.GroupEvent(message_id=f"m_{r.id}", sent_at=r.occurred_at, body=r.body_text or None, sender_person_id=r.person_id,
+                             sender_name=r.display_name, kind=r.kind or "text", forwarded=bool(_payload_get(r.payload, *FORWARD_KEYS)),
+                             raw_event_id=r.id, received_at=r.received_at, context=True)
 
     async def _context(self, db: AsyncSession, org_id: uuid.UUID, tk: str, blocks: list[GEv], first: datetime) -> list[Any]:
         """Cửa sổ gần: tối đa 30 tin VÀ trong 24 giờ trước tin mới đầu tiên, đã xử lý (không `pending`/`processing`), CÙNG luồng."""
@@ -1539,9 +1599,7 @@ class GroupTurns:
             WHERE e.org_id = :o AND {where} AND e.occurred_at < :first AND e.occurred_at >= :lo
               AND s.state NOT IN ('pending', 'processing')
             ORDER BY e.occurred_at DESC LIMIT :n"""), params)).all()  # noqa: S608 — `where` là hằng + outbound_to_sql nội bộ
-        out = [l3.GroupEvent(message_id=f"m_{r.id}", sent_at=r.occurred_at, body=r.body_text or None, sender_person_id=r.person_id,
-                             sender_name=r.display_name, kind=r.kind or "text", forwarded=bool(_payload_get(r.payload, *FORWARD_KEYS)),
-                             raw_event_id=r.id, received_at=r.received_at, context=True) for r in rows]
+        out = [self._ctx_event(r) for r in rows]
         out.reverse()
         return out
 
@@ -1565,6 +1623,12 @@ class GroupTurns:
         cited: dict[uuid.UUID, str] = {}                          # event_id → nhãn (kind) của đơn vị đầu tiên trích tin đó
         unit_rows: list[tuple[uuid.UUID, datetime, str]] = []
         errors: list[dict[str, Any]] = [{"code": e} for e in verified.errors[:12]]
+        # nguồn của MỌI tin model được trích (tin mới + tin ngữ cảnh đã xử lý): received_at là một nửa khoá của raw.events
+        srcs: dict[uuid.UUID, Src] = {c.raw_event_id: Src(c.received_at, thread_group(tk), c.sender_person_id, c.forwarded)
+                                      for c in window.context_events if c.raw_event_id is not None and c.received_at is not None}
+        srcs |= {e.event_id: Src(e.received_at, e.group_id, e.person_id, e.forwarded) for e in evs}
+        failed_safety: list[str] = []                             # unit_ref của đơn vị lừa đảo/an toàn ghi lỗi (fail-high)
+        hold: set[uuid.UUID] = set()                              # tin của các đơn vị đó: giữ chờ để thử lại, không bỏ
         async with self.r.sm() as db:
             await db.execute(text("""
                 INSERT INTO refinery.analyses (id, org_id, thread_key, run_id, window_from, window_to, new_n, context_n, facts_in_n,
@@ -1586,47 +1650,55 @@ class GroupTurns:
                 vqs = vu.verified_quotes
                 first_q = vqs[0]
                 first_ev = next((e for e in evs if e.event_id == first_q.raw_event_id), evs[0])
+                src0 = srcs.get(first_q.raw_event_id) if first_q.raw_event_id is not None else None
                 observed = vu.event_at or vu.msg_at or first_q.sent_at or first_ev.occurred_at
-                uid = (await db.execute(text("""
-                    INSERT INTO clean.meaning_units (org_id, observed_at, group_id, person_id, event_type, side, conclusion, entities,
-                                                     confidence, run_id, extractor_version, kind_hint, analysis_id, flags, gate_candidate,
-                                                     level_hint, harm)
-                    VALUES (:o, :obs, :g, :p, 'GroupUnit', NULL, :c, CAST(:ent AS jsonb), :conf, :run, :ev, :kh, :a, CAST(:fl AS jsonb),
-                            :gc, :lh, CAST(:hm AS jsonb))
-                    RETURNING id"""),
-                                         {"o": org_id, "obs": observed, "g": first_ev.group_id, "p": first_ev.person_id,
-                                          "c": u.summary[:400], "ent": orjson.dumps({"unit_ref": u.unit_ref, "event_ref": u.event_ref,
-                                                                                    "kind": u.kind}).decode(),
-                                          "conf": UNVERIFIED_CONFIDENCE, "run": st.run_id, "ev": l3.EXTRACTOR_VERSION, "kh": u.kind,
-                                          "a": aid, "fl": orjson.dumps(u.flags.model_dump()).decode(), "gc": u.gate_candidate,
-                                          "lh": u.level_hint if u.level_hint in ("red", "amber", "grey") else None,
-                                          "hm": orjson.dumps(u.harm.model_dump()).decode() if u.harm is not None else None})).scalar_one()
+                try:
+                    # Cách ly TỪNG đơn vị (savepoint): một đơn vị/bằng chứng ghi lỗi chỉ loại chính nó, không huỷ cả lượt.
+                    async with db.begin_nested():
+                        uid = await self._write_unit(db, org_id, st, aid, u, vqs, observed, first_ev, src0, srcs, persons)
+                except Exception as exc:  # noqa: BLE001 — lỗi ghi một đơn vị: ghi mã lỗi (không nội dung tin), đơn vị khác vẫn ghi
+                    log.exception("Ghi đơn vị %s của lượt %s lỗi", u.unit_ref, aid)
+                    safety = is_safety_unit(u)
+                    errors.append({"code": "unit_write_failed_safety" if safety else "unit_write_failed", "unit_ref": u.unit_ref,
+                                   "kind": u.kind, "gate": u.gate_candidate, "error": type(exc).__name__})
+                    if safety:
+                        failed_safety.append(u.unit_ref)
+                        hold.update(q.raw_event_id for q in vqs if q.raw_event_id is not None)
+                    continue
                 unit_ids[u.unit_ref] = (uid, observed)
                 unit_rows.append((uid, observed, u.summary[:400]))
                 st.unit_ids.append(str(uid))
                 for q in vqs:
-                    await db.execute(text("""
-                        INSERT INTO clean.evidence (meaning_unit_id, meaning_observed_at, raw_event_id, raw_received_at, quote, quote_status,
-                                                    source_field, span_start, span_end, verified_at, extractor_version)
-                        VALUES (:m, :mo, :e, :r, :q, 'verified', :sf, :ss, :se, now(), :ev) ON CONFLICT DO NOTHING"""),
-                                     {"m": uid, "mo": observed, "e": q.raw_event_id, "r": next((e.received_at for e in evs
-                                                                                               if e.event_id == q.raw_event_id), None),
-                                      "q": q.text[:280], "sf": q.field, "ss": q.span_start, "se": q.span_end, "ev": l3.EXTRACTOR_VERSION})
                     if q.raw_event_id is not None and q.raw_event_id not in cited:
                         cited[q.raw_event_id] = u.kind or "GroupUnit"
-                for pm in u.people:
-                    await self._mention(db, org_id, uid, observed, first_ev, pm, persons)
-                await self._notebook(db, org_id, uid, u, first_ev)
-            fact_ins = await self._facts(db, org_id, verified, unit_ids, evs, persons)
+            fact_ins = await self._facts(db, org_id, verified, unit_ids, evs, persons, srcs=srcs, thread_gid=thread_group(tk))
             if fact_ins:
-                res = await facts_mod.assert_facts(db, fact_ins, analysis_id=aid)
-                st.facts_written += len(res.written)
-                errors.extend(res.errors)
+                try:
+                    async with db.begin_nested():
+                        res = await facts_mod.assert_facts(db, fact_ins, analysis_id=aid)
+                    st.facts_written += len(res.written)
+                    errors.extend(res.errors)
+                except Exception as exc:  # noqa: BLE001 — sự thật đề xuất lỗi ghi: đơn vị đã ghi vẫn giữ
+                    log.exception("Ghi sự thật của lượt %s lỗi", aid)
+                    errors.append({"code": "facts_write_failed", "n": len(fact_ins), "error": type(exc).__name__})
             # trạng thái từng tin: có đơn vị trích ⇒ clean; còn lại ⇒ discarded (không có sự việc)
+            held: set[uuid.UUID] = set()
             for e in evs:
                 head = block_of[e.event_id]
                 is_cited = any(x.event_id in cited for x in head.all_events)
                 label = next((cited[x.event_id] for x in head.all_events if x.event_id in cited), None)
+                if not is_cited and any(x.event_id in hold for x in head.all_events):
+                    # Đơn vị lừa đảo/an toàn của tin này ghi lỗi ⇒ KHÔNG bỏ tin (fail-high): giữ chờ, tính một lần thử, lùi nhịp; đủ
+                    # MAX_ATTEMPTS ⇒ `error` (bộ hẹn giờ F055 nhận lại). Ứng viên luật (a) vẫn ở detail.cands cho T1.
+                    await db.execute(text("""
+                        UPDATE refinery.event_state SET state = CASE WHEN attempts >= :mx THEN 'error' ELSE 'pending' END, updated_at = now(),
+                               detail = detail || CAST(:d AS jsonb)
+                        WHERE event_id = :e AND event_received_at = :r"""),
+                                     {"mx": MAX_ATTEMPTS, "e": e.event_id, "r": e.received_at,
+                                      "d": orjson.dumps({"last_error": "unit_write_failed_safety", "analysis_id": str(aid),
+                                                         "next_try_at": (clock.now() + RETRY_BACKOFF).isoformat()}).decode()})
+                    held.add(e.event_id)
+                    continue
                 await self.r._set_state(db, e, "clean" if is_cited else "discarded", st.run_id, label=label if is_cited else "Noise",
                                         confidence=UNVERIFIED_CONFIDENCE if is_cited else None,
                                         detail={"analysis_id": str(aid), "model": analysis.model, "thread_key": tk,
@@ -1652,12 +1724,55 @@ class GroupTurns:
                               "le": evs[-1].event_id, "now": clock.now()})
             await ai_cost.tag_calls(db, org_id, thread_key=tk, analysis_id=aid, purpose=budget.PURPOSE[kind], since=since)
             await db.commit()
+        if failed_safety:
+            await self.alert_once(org_id, "intel_write_failed_safety", alert_type="intel_write_failed_safety", priority="P1",
+                                  title="Cảnh báo lừa đảo/an toàn chưa ghi được",
+                                  summary=f"Lượt phân tích {aid} có {len(failed_safety)} đơn vị lừa đảo/an toàn ghi lỗi; tin liên quan được giữ chờ "
+                                          "để phân tích lại.",
+                                  suggested="Xem Hệ thống › Nhật ký (refinery.analyses.errors) và luồng đó trong Hộp thư.")
         for e in evs:
+            if e.event_id in held:
+                continue
             head = block_of[e.event_id]
             ok = any(x.event_id in cited for x in head.all_events)
             await self.r._raw_state(org_id, e, "clean" if ok else "discarded", cited.get(e.event_id) or ("Noise" if not ok else None),
                                     UNVERIFIED_CONFIDENCE if ok else None)
         await self.r._embed(org_id, unit_rows)
+
+    async def _write_unit(self, db: AsyncSession, org_id: uuid.UUID, st: RunStats, aid: uuid.UUID, u: Any, vqs: list[Any],
+                          observed: datetime, first_ev: GEv, src0: "Src | None", srcs: dict[uuid.UUID, "Src"],
+                          persons: set[uuid.UUID]) -> uuid.UUID:
+        """Ghi MỘT đơn vị + bằng chứng + mention + sổ tay (bên gọi bọc savepoint). Tin được trích có thể là tin ngữ cảnh (đã xử lý ở
+        lượt trước): `received_at` lấy từ `srcs` (đủ cả tin mới lẫn tin ngữ cảnh) — thiếu ⇒ ném lỗi rõ ràng thay vì chèn NULL."""
+        uid = (await db.execute(text("""
+            INSERT INTO clean.meaning_units (org_id, observed_at, group_id, person_id, event_type, side, conclusion, entities,
+                                             confidence, run_id, extractor_version, kind_hint, analysis_id, flags, gate_candidate,
+                                             level_hint, harm)
+            VALUES (:o, :obs, :g, :p, 'GroupUnit', NULL, :c, CAST(:ent AS jsonb), :conf, :run, :ev, :kh, :a, CAST(:fl AS jsonb),
+                    :gc, :lh, CAST(:hm AS jsonb))
+            RETURNING id"""),
+                                 {"o": org_id, "obs": observed, "g": first_ev.group_id if src0 is None else (src0.group_id or first_ev.group_id),
+                                  "p": first_ev.person_id if src0 is None else src0.person_id,
+                                  "c": u.summary[:400], "ent": orjson.dumps({"unit_ref": u.unit_ref, "event_ref": u.event_ref,
+                                                                            "kind": u.kind}).decode(),
+                                  "conf": UNVERIFIED_CONFIDENCE, "run": st.run_id, "ev": l3.EXTRACTOR_VERSION, "kh": u.kind,
+                                  "a": aid, "fl": orjson.dumps(u.flags.model_dump()).decode(), "gc": u.gate_candidate,
+                                  "lh": u.level_hint if u.level_hint in ("red", "amber", "grey") else None,
+                                  "hm": orjson.dumps(u.harm.model_dump()).decode() if u.harm is not None else None})).scalar_one()
+        for q in vqs:
+            src = srcs.get(q.raw_event_id) if q.raw_event_id is not None else None
+            if q.raw_event_id is not None and src is None:
+                raise LookupError("evidence_source_unknown")       # trích tin ngoài cửa sổ: không đoán received_at
+            await db.execute(text("""
+                INSERT INTO clean.evidence (meaning_unit_id, meaning_observed_at, raw_event_id, raw_received_at, quote, quote_status,
+                                            source_field, span_start, span_end, verified_at, extractor_version)
+                VALUES (:m, :mo, :e, :r, :q, 'verified', :sf, :ss, :se, now(), :ev) ON CONFLICT DO NOTHING"""),
+                             {"m": uid, "mo": observed, "e": q.raw_event_id, "r": src.received_at if src else None,
+                              "q": q.text[:280], "sf": q.field, "ss": q.span_start, "se": q.span_end, "ev": l3.EXTRACTOR_VERSION})
+        for pm in u.people:
+            await self._mention(db, org_id, uid, observed, first_ev, pm, persons)
+        await self._notebook(db, org_id, uid, u, first_ev)
+        return uid
 
     async def _notebook(self, db: AsyncSession, org_id: uuid.UUID, uid: uuid.UUID, u: Any, first_ev: GEv) -> None:
         ev = Ev(first_ev.event_id, first_ev.received_at, first_ev.seq, first_ev.occurred_at, first_ev.kind, first_ev.body,
@@ -1699,7 +1814,8 @@ class GroupTurns:
         return None
 
     async def _facts(self, db: AsyncSession, org_id: uuid.UUID, verified: Any, unit_ids: dict[str, tuple[uuid.UUID, datetime]],
-                     evs: list[GEv], persons: set[uuid.UUID]) -> list[Any]:
+                     evs: list[GEv], persons: set[uuid.UUID], *, srcs: dict[uuid.UUID, "Src"] | None = None,
+                     thread_gid: uuid.UUID | None = None) -> list[Any]:
         """`verified.facts` → `FactIn`. Chủ thể/đối tượng chỉ nối được khi `person_ref` là người CÓ mặt trong cửa sổ hoặc cách gọi khớp
         MỘT thực thể chính xác (không đoán). `payment_account` KHÔNG ghi từ model (STK chỉ qua luật (a) + bảng đã xác minh — T7)."""
         from gh.biz.mem import entities, predicates
@@ -1731,7 +1847,8 @@ class GroupTurns:
                     continue
             q0 = quotes[0]
             first_ev = next((e for e in evs if e.event_id == q0.raw_event_id), None)
-            gid = first_ev.group_id if first_ev else None
+            src0 = (srcs or {}).get(q0.raw_event_id) if q0.raw_event_id is not None else None      # cả tin ngữ cảnh đã xử lý
+            gid = first_ev.group_id if first_ev else (src0.group_id if src0 else thread_gid)
             subj = await self._resolve(db, org_id, f.subject.person_ref, f.subject.surface, gid, persons)
             if subj is None:
                 verified.bump("fact_subject_unresolved")
@@ -1759,15 +1876,17 @@ class GroupTurns:
                                "to_entity_id": None if to_ent is None else str(await entities.canonical(db, to_ent))}
             speaker = (await entities.ensure_person(db, org_id, vf.speaker_person_id)).id if vf.speaker_person_id else None
             same = speaker is not None and speaker == await entities.canonical(db, subj)
-            fwd = bool(first_ev and first_ev.forwarded)
+            fwd = bool(first_ev.forwarded) if first_ev else bool(src0 and src0.forwarded)
             cls = "forwarded" if fwd else "insider" if same else "member"
             rel = facts_mod.RELIABILITY[cls]
             out.append(facts_mod.FactIn(
                 org_id=org_id, subject_id=subj, predicate=f.predicate, valid_from=q0.sent_at or (first_ev.occurred_at if first_ev else clock.now()),
                 object_entity_id=obj_ent, object_value=obj_val, source_class=cls, speaker_entity_id=speaker,
-                attributed_to=None if same else speaker, source_raw_event_id=q0.raw_event_id, source_received_at=first_ev.received_at if first_ev else None,
+                attributed_to=None if same else speaker, source_raw_event_id=q0.raw_event_id,
+                source_received_at=first_ev.received_at if first_ev else (src0.received_at if src0 else None),
                 confidence_exist=UNVERIFIED_CONFIDENCE, confidence_content=round(FACT_CONTENT_FACTOR * rel, 3), context_code=None,
                 extractor_version=l3.EXTRACTOR_VERSION, created_by="extractor",
                 evidence=[facts_mod.EvidenceIn("raw_event", raw_event_id=q.raw_event_id, raw_received_at=next(
-                    (e.received_at for e in evs if e.event_id == q.raw_event_id), None), span=q.span) for q in quotes if q.raw_event_id]))
+                    (e.received_at for e in evs if e.event_id == q.raw_event_id), (srcs or {}).get(q.raw_event_id, _NO_SRC).received_at),
+                    span=q.span) for q in quotes if q.raw_event_id]))
         return out
