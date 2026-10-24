@@ -1692,7 +1692,9 @@ class GroupTurns:
                                    "kind": u.kind, "gate": u.gate_candidate, "error": type(exc).__name__})
                     if safety:
                         failed_safety.append(u.unit_ref)
-                        hold.update(q.raw_event_id for q in vqs if q.raw_event_id is not None)
+                        mine = {q.raw_event_id for q in vqs if q.raw_event_id is not None} & set(block_of)
+                        # chỉ trích tin ngữ cảnh/tin bằng chứng (không thuộc lượt) ⇒ giữ MỌI tin mới của lượt để thử lại cả lượt
+                        hold.update(mine or set(block_of))
                     continue
                 unit_ids[u.unit_ref] = (uid, observed)
                 unit_rows.append((uid, observed, u.summary[:400]))
@@ -1716,8 +1718,8 @@ class GroupTurns:
                 head = block_of[e.event_id]
                 is_cited = any(x.event_id in cited for x in head.all_events)
                 label = next((cited[x.event_id] for x in head.all_events if x.event_id in cited), None)
-                if not is_cited and any(x.event_id in hold for x in head.all_events):
-                    # Đơn vị lừa đảo/an toàn của tin này ghi lỗi ⇒ KHÔNG bỏ tin (fail-high): giữ chờ, tính một lần thử, lùi nhịp; đủ
+                if any(x.event_id in hold for x in head.all_events):
+                    # Đơn vị lừa đảo/an toàn của tin này ghi lỗi ⇒ KHÔNG bỏ/đóng tin (fail-high), kể cả khi đơn vị thường khác đã trích nó: giữ chờ, tính một lần thử, lùi nhịp; đủ
                     # MAX_ATTEMPTS ⇒ `error` (bộ hẹn giờ F055 nhận lại). Ứng viên luật (a) vẫn ở detail.cands cho T1.
                     await db.execute(text("""
                         UPDATE refinery.event_state SET state = CASE WHEN attempts >= :mx THEN 'error' ELSE 'pending' END, updated_at = now(),

@@ -219,3 +219,43 @@ def test_is_broadcast_and_no_model_reason() -> None:
     assert prefilter.no_model_reason("text", body, template_n=5) is None
     assert prefilter.no_model_reason("text", "Tuyển barista part-time ca tối Hải Châu, ib em nha nhé mọi người", template_n=3) == "template"
     assert prefilter.no_model_reason("text", "Dạ e ghi nhận ạ") == "ack"
+
+
+# ─── review: fail-high không được thua đơn vị thường cùng tin / đơn vị an toàn chỉ trích tin ngữ cảnh ─────────────────
+
+def _fail_unit(monkeypatch, ref: str) -> None:  # type: ignore[no-untyped-def]
+    real = runner.GroupTurns._notebook
+
+    async def flaky(self, db_, org_id_, uid, u, first_ev):  # type: ignore[no-untyped-def]
+        if u.unit_ref == ref:
+            raise RuntimeError("ghi sổ tay hỏng")
+        return await real(self, db_, org_id_, uid, u, first_ev)
+
+    monkeypatch.setattr(runner.GroupTurns, "_notebook", flaky)
+
+
+async def test_safety_unit_failing_beside_a_normal_unit_on_the_same_message_keeps_it_pending(app, db, redis, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    await put(sm, org, msg("Chị đặt 5kg hạt nhé, à shop gửi link nhận voucher bảo nhập OTP", sender="u1"))
+    _fail_unit(monkeypatch, "u2")
+    an = Analyzer(lambda w: out_with(w, unit_for(w, "Chị đặt 5kg hạt", kind="nghia_vu_loi_hua", unit_ref="u1"),
+                                     unit_for(w, "bảo nhập OTP", kind="rui_ro_lua_dao", unit_ref="u2")))
+    await refinery(sm, redis, an).run(org, "manual")
+    assert (await db.execute(text("SELECT kind_hint FROM clean.meaning_units"))).scalars().all() == ["nghia_vu_loi_hua"]
+    s = (await db.execute(text("SELECT state, detail FROM refinery.event_state"))).one()
+    assert s.state == "pending" and s.detail["last_error"] == "unit_write_failed_safety"       # không thành clean ⇒ đơn vị 🔴 được thử lại
+
+
+async def test_safety_unit_citing_only_context_keeps_the_turns_new_messages_pending(app, db, redis, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    [old] = await put(sm, org, msg("Shop gửi link voucher bảo nhập OTP để nhận quà", sender="u9", name="Shop"))
+    r = refinery(sm, redis, Analyzer())
+    await r.run(org, "manual")
+    [new] = await put(sm, org, msg("Mọi người đừng bấm nha", sender="u1"))
+    _fail_unit(monkeypatch, "u1")
+    r.groups.analyze = Analyzer(lambda w: out_with(w, unit_for(w, "bảo nhập OTP", kind="rui_ro_lua_dao", unit_ref="u1")))
+    await r.run(org, "manual")
+    rows = dict((await db.execute(text("SELECT event_id, state FROM refinery.event_state"))).all())
+    assert rows[new] == "pending" and rows[old] == "discarded"
