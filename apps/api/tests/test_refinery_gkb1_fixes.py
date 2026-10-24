@@ -310,7 +310,7 @@ async def test_write_errors_never_log_quotes_or_sql_parameters(app, db, redis, m
     await clear_backoff(db)
     await r.run(org, "manual")
     assert "482913" not in caplog.text and "parameters" not in caplog.text
-    assert "Ghi đơn vị u1" in caplog.text and "Ghi lượt phân tích" in caplog.text and "InvalidTextRepresentation" in caplog.text
+    assert "Ghi đơn vị u1" in caplog.text and "ghi lượt phân tích" in caplog.text and "InvalidTextRepresentation" in caplog.text
 
 
 def test_engine_hides_sql_parameters_in_errors(app) -> None:  # type: ignore[no-untyped-def]
@@ -393,3 +393,26 @@ def test_broadcast_cues_do_not_match_ordinary_words() -> None:
         assert not prefilter.is_broadcast(body), body
     for body in ("Tuyển dụng barista ca tối, ib em", "Tuyển nhân viên phục vụ part-time", "Sale 50% cuối tuần này", "Thanh lý máy xay còn mới"):
         assert prefilter.is_broadcast(body), body
+
+
+async def test_whole_run_crash_logs_only_error_code_and_run_id(app, db, redis, monkeypatch, caplog) -> None:  # type: ignore[no-untyped-def]
+    """Cả lượt sập (vd lỗi Postgres `invalid input syntax for type uuid: "482913"` — hide_parameters không che được thông điệp của
+    chính Postgres): log chỉ có hàm/mã lỗi/id lượt, không thông điệp, không traceback."""
+    import logging
+
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    await put(sm, org, msg("Mã OTP của em là 482913 nha shop", sender="u1"))
+    r = refinery(sm, redis, Analyzer())
+
+    async def crash(*a, **k):  # type: ignore[no-untyped-def]
+        async with sm() as d:
+            await d.execute(text("SELECT CAST(CAST(:q AS text) AS uuid)"), {"q": "482913"})
+
+    monkeypatch.setattr(r.groups, "run", crash)
+    caplog.set_level(logging.DEBUG)
+    st = await r.run(org, "manual")
+    assert st.status == "failed"
+    assert "482913" not in caplog.text and "Traceback" not in caplog.text
+    assert str(st.run_id) in caplog.text and "InvalidTextRepresentation" in caplog.text
+    assert "482913" not in (st.error or "")

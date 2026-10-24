@@ -353,8 +353,9 @@ class Refinery:
             else:
                 await self._run(org_id, st, event_ids, limit)
         except Exception as exc:  # noqa: BLE001 — lượt lỗi không làm chết worker; tin đang xử lý trả về pending
-            log.exception("Lượt sàng lọc %s lỗi", run_id)
-            st.status, st.error = "failed", str(exc)[:500]
+            # KHÔNG traceback/thông điệp: lỗi Postgres mang giá trị dữ liệu (vd `invalid input syntax for type uuid: "<giá trị>"`)
+            log.error("run: lượt sàng lọc %s (tổ chức %s) lỗi: %s", run_id, org_id, err_code(exc))
+            st.status, st.error = "failed", f"Lượt sàng lọc lỗi ({err_code(exc)})"
             async with self.sm() as db:
                 # Lỗi hạ tầng của cả lượt: hoàn lại lần thử đã tính lúc nhận (chỉ JSON sai định dạng mới tính — F055),
                 # nhưng ĐẾM số lần sập: đủ MAX_CRASHES ⇒ `error`, không thử lại vô hạn.
@@ -451,14 +452,14 @@ class Refinery:
             return to_model
         try:
             kept, skipped = await self._prefilter_apply(org_id, st, to_model)
-        except Exception:  # noqa: BLE001 — lọc trước là tối ưu chi phí, không được làm hỏng lượt sàng lọc
-            log.exception("Lọc trước (J2) lỗi — trích xuất như cũ")
+        except Exception as exc:  # noqa: BLE001 — lọc trước là tối ưu chi phí, không được làm hỏng lượt sàng lọc
+            log.error("_prefilter: lọc trước (J2) lượt %s lỗi — trích xuất như cũ: %s", st.run_id, err_code(exc))
             return to_model
         for ev, _reason in skipped:
             try:
                 await self._raw_state(org_id, ev, "discarded", "Noise", None)
-            except Exception:  # noqa: BLE001 — chỉ là sự kiện thời gian thực
-                log.warning("Không phát được raw.state cho tin lọc trước", exc_info=True)
+            except Exception as exc:  # noqa: BLE001 — chỉ là sự kiện thời gian thực
+                log.warning("_prefilter: không phát được raw.state cho tin %s: %s", ev.event_id, err_code(exc))
         return kept
 
     async def _prefilter_apply(self, org_id: uuid.UUID, st: RunStats,
@@ -1020,8 +1021,8 @@ class GroupTurns:
             try:
                 await self._scan_one(org_id, r)
                 done += 1
-            except Exception:  # noqa: BLE001 — một tin lỗi không được chặn các tin khác
-                log.warning("Quét luật (a) lỗi cho một tin — bỏ qua, lượt sau thử lại", exc_info=True)
+            except Exception as exc:  # noqa: BLE001 — một tin lỗi không được chặn các tin khác
+                log.warning("ensure_scanned: quét luật (a) tin %s lỗi — bỏ qua, lượt sau thử lại: %s", r.event_id, err_code(exc))
         return done
 
     async def _scan_one(self, org_id: uuid.UUID, r: Any) -> None:
@@ -1353,7 +1354,7 @@ class GroupTurns:
             async with self.r.sm() as db:
                 window, pack, profile = await self._window(db, org_id, tk, claimed)
         except Exception as exc:  # noqa: BLE001 — dựng ngữ cảnh lỗi: trả tin về pending, không mất tin
-            log.error("Dựng cửa sổ luồng %s lỗi: %s", tk, err_code(exc))
+            log.error("turn: dựng cửa sổ luồng %s lỗi: %s", tk, err_code(exc))
             await self._release(evs, st, f"dựng ngữ cảnh lỗi: {type(exc).__name__}", backoff=True)
             return
         since = datetime.now(UTC) - timedelta(seconds=2)
@@ -1377,7 +1378,7 @@ class GroupTurns:
         try:
             await self._write(org_id, st, tk, aid, kind, claimed, window, pack, profile, analysis, since, secrets)
         except Exception as exc:  # noqa: BLE001 — lỗi ngoài từng đơn vị ⇒ rollback cả giao dịch, tin về pending (tính lần thử, lùi nhịp)
-            log.error("Ghi lượt phân tích %s lỗi: %s", tk, err_code(exc))
+            log.error("turn: ghi lượt phân tích %s (luồng %s) lỗi: %s", aid, tk, err_code(exc))
             await self._release(evs, st, f"ghi lượt lỗi: {type(exc).__name__}", count_error=True, backoff=True)
             await self._record_failed(org_id, tk, aid, window, "write_failed", st, kind=kind, since=since)
 
@@ -1502,8 +1503,8 @@ class GroupTurns:
                                   "er": orjson.dumps([{"code": code}, *({"code": e} for e in (errors or [])[:12])]).decode()})
                 await ai_cost.tag_calls(db, org_id, thread_key=tk, analysis_id=aid, purpose=budget.PURPOSE[kind], since=since)
                 await db.commit()
-        except Exception:  # noqa: BLE001 — sổ phân tích là phụ; không che lỗi gốc
-            log.warning("Không ghi được refinery.analyses cho lượt lỗi", exc_info=True)
+        except Exception as exc:  # noqa: BLE001 — sổ phân tích là phụ; không che lỗi gốc
+            log.warning("_record_failed: không ghi được refinery.analyses cho lượt %s (luồng %s): %s", aid, tk, err_code(exc))
 
     # ─── dựng cửa sổ ───────────────────────────────────────────────────────────────────────────────────────────────
 
