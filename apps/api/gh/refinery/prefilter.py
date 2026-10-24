@@ -664,9 +664,10 @@ def is_ack(text: str | None) -> bool:
 
 
 # Dấu hiệu tin rao/thông báo hàng loạt (trên chữ đã bỏ dấu, chữ thường): chỉ những tin này mới bị coi là "mẫu lặp".
-_BROADCAST = re.compile(r"\b(?:ib|inbox|ibx|lien he|tuyen|thanh ly|quan nao can|ai can|co ai|khuyen mai|giam gia|sale|uu dai|"
-                        r"quy khach|bang gia|thong bao|moi nguoi oi|ca nha oi|cac quan|cac ban|lich rang|zalo|follow|dang ky|"
-                        r"mien phi|qua tang|voucher)\b")
+# Chỉ cụm đặc trưng (không từ đơn dễ khớp nhầm: "tuyen" ⊂ "tuyến"/"trực tuyến", "co ai", "cac ban"); `\b` hai đầu ⇒ "sale" ≠ "Salem".
+_BROADCAST = re.compile(r"\b(?:ib|inbox|ibx|lien he|tuyen dung|tuyen nhan vien|tuyen gap|can tuyen|thanh ly|quan nao can|ai can|"
+                        r"khuyen mai|giam gia|sale|uu dai|quy khach|bang gia|thong bao|moi nguoi oi|ca nha oi|cac quan|lich rang|"
+                        r"follow|dang ky|mien phi|qua tang|voucher)\b")
 
 
 def is_broadcast(body: str | None) -> bool:

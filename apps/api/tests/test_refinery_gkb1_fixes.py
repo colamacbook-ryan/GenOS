@@ -384,3 +384,12 @@ async def test_history_evidence_never_crosses_groups(app, db, redis) -> None:  #
     w = an.windows[-1]
     assert other_id not in {c.raw_event_id for c in w.context_events}
 
+
+def test_broadcast_cues_do_not_match_ordinary_words() -> None:
+    from gh.refinery import prefilter
+
+    for body in ("Xe tuyến 5 giờ sáng mai em đón chị ở bến nha", "Lớp học trực tuyến tối nay dời sang 8h", "Có ai thấy chìa khoá kho đâu không",
+                 "Các bạn nhân viên ca tối nhớ khoá cửa", "Chị Salem đặt 3 hộp nhé"):
+        assert not prefilter.is_broadcast(body), body
+    for body in ("Tuyển dụng barista ca tối, ib em", "Tuyển nhân viên phục vụ part-time", "Sale 50% cuối tuần này", "Thanh lý máy xay còn mới"):
+        assert prefilter.is_broadcast(body), body
