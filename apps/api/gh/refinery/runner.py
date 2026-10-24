@@ -1044,11 +1044,12 @@ class GroupTurns:
                 # 7 ngày theo GIỜ GỬI (occurred_at), không theo giờ vào kho: tin nhập lịch sử/replay vào kho cùng lúc thì received_at dồn
                 # lại một chỗ và đơn hàng tuần nào cũng thành "mẫu lặp" (lỗi kb1 #4).
                 template_n = 1 + int((await db.execute(text("""
-                    SELECT count(*) FROM raw.events WHERE org_id = :o AND body_text = :b AND occurred_at < :t
+                    SELECT count(*) FROM raw.events WHERE org_id = :o AND body_text = :b AND occurred_at < :t AND received_at <= :r
                       AND occurred_at >= CAST(:t AS timestamptz) - interval '7 days'
                       AND sender_identity_id = :s AND group_id IS NOT DISTINCT FROM CAST(:g AS uuid)
                       AND (CAST(:g AS uuid) IS NOT NULL OR channel_id = :c)"""),
-                                                         {"o": org_id, "b": body, "t": r.occurred_at, "s": r.sender_identity_id,
+                                                         {"o": org_id, "b": body, "t": r.occurred_at, "r": r.event_received_at,
+                                                          "s": r.sender_identity_id,
                                                           "g": r.group_id, "c": r.channel_id})).scalar_one())
             # KHÔNG BAO GIỜ bỏ tin có ứng viên rủi ro (từ khoá lừa đảo, link, yêu cầu chuyển tiền, STK, SĐT, đã nhập OTP, cấp cứu…).
             skip = None if (gclass or risky) else prefilter.no_model_reason(r.kind, body, template_n=template_n)
@@ -1526,7 +1527,7 @@ class GroupTurns:
         ctx_events = await self._context(db, org_id, tk, blocks, first)
         pack = await retrieve.pack(db, org_id, tk, [{"sender_person_id": b.person_id, "raw_event_id": b.event_id, "text": b.body}
                                                     for b in blocks], now=clock.now())
-        ctx_events = await self._history_evidence(db, org_id, blocks, ctx_events, pack)
+        ctx_events = await self._history_evidence(db, org_id, tk, blocks, ctx_events, pack)
         all_ids = [m.event_id for b in blocks for m in b.all_events] + [c.raw_event_id for c in ctx_events if c.raw_event_id]
         media: dict[str, list[Any]] = {}
         for r in (await db.execute(text("""
@@ -1550,7 +1551,8 @@ class GroupTurns:
                                 unreadable=unreadable, now=clock.now(), group_name=gname, predicates=preds)
         return window, pack, profile
 
-    async def _history_evidence(self, db: AsyncSession, org_id: uuid.UUID, blocks: list[GEv], ctx_events: list[Any], pack: Any) -> list[Any]:
+    async def _history_evidence(self, db: AsyncSession, org_id: uuid.UUID, tk: str, blocks: list[GEv], ctx_events: list[Any],
+                                pack: Any) -> list[Any]:
         """Tin bằng chứng của các đơn vị trong khối "Lịch sử" (`retrieve.pack`, cùng luồng) được thêm vào tin ngữ cảnh — để model
         TRÍCH được việc trước đó (lời hứa giữ giá, đợt thanh toán…) và code kiểm được trích dẫn. Trần `HISTORY_EVIDENCE_MAX` tin /
         `HISTORY_EVIDENCE_CHARS` ký tự (một phần trần lịch sử ≈ 2.400 token); tin đã có trong cửa sổ không lặp lại."""
@@ -1569,8 +1571,9 @@ class GroupTurns:
             JOIN raw.events e ON e.id = u.id AND e.received_at = u.r
             LEFT JOIN core.person_identities pi ON pi.id = e.sender_identity_id
             LEFT JOIN core.persons p ON p.id = pi.person_id
-            WHERE e.org_id = :o
-            ORDER BY e.occurred_at DESC"""), {"o": org_id, "ids": list(want), "rs": list(want.values())})).all()
+            WHERE e.org_id = :o AND e.group_id IS NOT DISTINCT FROM CAST(:g AS uuid)
+            ORDER BY e.occurred_at DESC"""), {"o": org_id, "ids": list(want), "rs": list(want.values()), "g": thread_group(tk)})).all()
+        # phòng thủ nhiều lớp (CNS-086): chỉ tin CÙNG nhóm (luồng 1-1 ⇒ chỉ tin không thuộc nhóm nào) dù bằng chứng trỏ đi đâu
         extra: list[Any] = []
         used = 0
         for r in rows:

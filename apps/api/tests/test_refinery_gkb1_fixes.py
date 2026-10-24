@@ -337,3 +337,50 @@ async def test_ack_lookup_is_bounded_by_indexed_time_columns(app, db, redis) -> 
     await put(sm, org, order)
     await r.run(org, "manual")
     assert [e.body for e in an.windows[-1].new_events] == ["Thảo ơi tuần này a lấy 25kg Blend Honey nha"]
+
+
+async def test_template_count_only_sees_copies_received_before(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """Đếm mẫu lặp chỉ trên tin đã vào kho TRƯỚC tin đang quét (`received_at <= r`: nhân quả + cắt partition raw.events)."""
+    sm = sessionmaker()
+    org, _ = await setup(db)
+    now = datetime.now(UTC)
+    body = "Thanh lý máy xay Fiorenzato còn mới 85%, ai cần ib em nhé cả nhà"
+    copies = []
+    for k in (0, 1, 2):
+        m = msg(body, sender="u3", name="Shop Máy")
+        m["occurred_at"] = (now - timedelta(days=1, hours=k)).isoformat()       # bản vào kho ĐẦU là bản gửi MUỘN nhất
+        copies.append(m)
+    [first, *_] = await put(sm, org, copies[0])
+    await put(sm, org, copies[1], copies[2])
+    await refinery(sm, redis, Analyzer()).groups.ensure_scanned(org)
+    why = (await db.execute(text("SELECT detail ->> 'reason' FROM refinery.event_state WHERE event_id = :e"), {"e": first})).scalar_one()
+    assert why is None
+
+
+async def test_history_evidence_never_crosses_groups(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    sm = sessionmaker()
+    org = await org_id(db)
+    await listen(db, org, "g1")
+    await listen(db, org, "g2")
+    await enable_groups(db, org)
+    old = msg("Em giữ giá 320k/thùng cho chị tới hết tháng nhé", sender="u1", name="Anh Tư")
+    old["occurred_at"] = (datetime.now(UTC) - timedelta(days=5)).isoformat()
+    await put(sm, org, old)
+    other = msg("Bí mật nhóm khác: giá nhập 250k", group="g2", sender="u5", name="Người B")
+    other["occurred_at"] = (datetime.now(UTC) - timedelta(days=4)).isoformat()
+    [other_id] = await put(sm, org, other)
+    r = refinery(sm, redis, Analyzer(lambda w: out_with(w, *([unit_for(w, "giữ giá 320k/thùng", kind="nghia_vu_loi_hua")] if "g1" in str(w.group_name) else []))))
+    await r.run(org, "manual")
+    # bằng chứng giả trỏ sang tin của nhóm khác (dữ liệu hỏng/độc): không bao giờ được kéo vào cửa sổ nhóm g1
+    rcv = (await db.execute(text("SELECT received_at FROM raw.events WHERE id = :e"), {"e": other_id})).scalar_one()
+    u = (await db.execute(text("SELECT id, observed_at FROM clean.meaning_units"))).one()
+    await db.execute(text("""INSERT INTO clean.evidence (meaning_unit_id, meaning_observed_at, raw_event_id, raw_received_at, quote, quote_status)
+                             VALUES (:m, :mo, :e, :r, 'x', 'verified')"""), {"m": u.id, "mo": u.observed_at, "e": other_id, "r": rcv})
+    await db.commit()
+    await put(sm, org, msg("Hoá đơn tuần này 345k/thùng nha chị", sender="u1", name="Anh Tư"))
+    an = Analyzer()
+    r.groups.analyze = an
+    await r.run(org, "manual")
+    w = an.windows[-1]
+    assert other_id not in {c.raw_event_id for c in w.context_events}
+
