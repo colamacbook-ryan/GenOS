@@ -1721,7 +1721,15 @@ class GroupTurns:
             if f.predicate.startswith("owner_") and (vf.speaker_person_id is None or vf.speaker_person_id not in owner_people):
                 verified.bump("fact_owner_predicate_non_owner")             # Hồ sơ Sếp chỉ nhận từ lời CHÍNH Sếp, không từ người khác
                 continue
-            q0 = vf.evidence[0]
+            quotes = vf.evidence
+            if f.predicate.startswith("owner_"):
+                # MỌI trích dẫn làm bằng chứng cho Hồ sơ Sếp phải là tin do CHÍNH Sếp viết (định danh người gửi), không phải tin chuyển tiếp;
+                # `forwarded=null` (Zalo) còn phải qua phép kiểm "không phải bản dán lại lời người khác". Trích dẫn không đạt bị loại.
+                quotes = [q for q in quotes if q.raw_event_id is not None and (await profile_mod.owner_authored(db, org_id, q.raw_event_id))[0]]
+                if not quotes:
+                    verified.bump("fact_owner_predicate_untrusted_evidence")
+                    continue
+            q0 = quotes[0]
             first_ev = next((e for e in evs if e.event_id == q0.raw_event_id), None)
             gid = first_ev.group_id if first_ev else None
             subj = await self._resolve(db, org_id, f.subject.person_ref, f.subject.surface, gid, persons)
@@ -1746,7 +1754,8 @@ class GroupTurns:
                     to_ent = await self._resolve(db, org_id, f.object.person_ref, None, gid, persons) if f.object.person_ref else None
                     obj_val = {"text": obj_val if isinstance(obj_val, str) else (f.object.surface or str(obj_val)),
                                "due_at": vu.deadline_at.isoformat() if vu is not None and vu.deadline_at is not None else None,
-                               "at": vu.event_at.isoformat() if vu is not None and vu.event_at is not None else None,
+                               "at": vu.event_at.isoformat() if vu is not None and vu.event_at is not None and vu.unit.event_time is not None
+                                     and vu.unit.event_time.text else None,          # giờ chỉ khi tin nói rõ (mặc định giờ-tin là nhiễu)
                                "to_entity_id": None if to_ent is None else str(await entities.canonical(db, to_ent))}
             speaker = (await entities.ensure_person(db, org_id, vf.speaker_person_id)).id if vf.speaker_person_id else None
             same = speaker is not None and speaker == await entities.canonical(db, subj)
@@ -1760,5 +1769,5 @@ class GroupTurns:
                 confidence_exist=UNVERIFIED_CONFIDENCE, confidence_content=round(FACT_CONTENT_FACTOR * rel, 3), context_code=None,
                 extractor_version=l3.EXTRACTOR_VERSION, created_by="extractor",
                 evidence=[facts_mod.EvidenceIn("raw_event", raw_event_id=q.raw_event_id, raw_received_at=next(
-                    (e.received_at for e in evs if e.event_id == q.raw_event_id), None), span=q.span) for q in vf.evidence if q.raw_event_id]))
+                    (e.received_at for e in evs if e.event_id == q.raw_event_id), None), span=q.span) for q in quotes if q.raw_event_id]))
         return out

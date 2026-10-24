@@ -191,14 +191,18 @@ def _norm(v: Any) -> Any:
 
 
 OBLIGATION_KEYS = frozenset({"text", "due_at", "at", "to_entity_id"})
+OBLIGATION_PREDICATES = frozenset({"promised_to", "owes", "deadline", "scheduled_event"})
 
 
-def value_key(value: Any) -> str:
+def value_key(value: Any, predicate: str | None = None) -> str:
     """Khoá so sánh của một giá trị: băm của giá trị đã chuẩn hoá (bỏ dấu, chữ thường, gộp khoảng trắng; khoá JSON sắp
-    xếp). Cùng ý khác cách gõ hoa/dấu ⇒ cùng khoá. Giá trị "lời hứa/hạn" `{"text", "due_at", "at", "to_entity_id"}` (runner ghi cho
-    `promised_to`/`owes`/`deadline`/`scheduled_event`) chỉ khoá theo `text` — cùng nội dung khác hạn không thành hai dòng lệch."""
-    if isinstance(value, dict) and isinstance(value.get("text"), str) and set(value) <= OBLIGATION_KEYS:
-        value = value["text"]
+    xếp). Cùng ý khác cách gõ hoa/dấu ⇒ cùng khoá. Với vị từ lời hứa/hạn (`OBLIGATION_PREDICATES`) và giá trị dạng
+    `{"text", "due_at", "at", "to_entity_id"}`, khoá gồm `text` + `to_entity_id` (không gồm hạn): cùng nội dung + cùng người nhận khác hạn
+    là CÙNG một dòng (hạn đổi được cập nhật tường minh trong `_assert`), hứa với hai người nhận khác nhau là hai dòng. Không có người nhận ⇒
+    khoá = khoá của chuỗi `text` (tương thích dòng cũ ghi bằng chuỗi)."""
+    if predicate in OBLIGATION_PREDICATES and isinstance(value, dict) and isinstance(value.get("text"), str) and set(value) <= OBLIGATION_KEYS:
+        to = value.get("to_entity_id")
+        value = value["text"] if not to else {"text": value["text"], "to_entity_id": str(to)}
     raw = orjson.dumps(_norm(value), option=orjson.OPT_SORT_KEYS | orjson.OPT_NON_STR_KEYS)
     return "v:" + hashlib.sha256(raw).hexdigest()[:40]
 
@@ -387,6 +391,15 @@ class _Neighbor:
     received_at: datetime | None
 
 
+def _deadline_changed(predicate: str, old: Any, new: Any) -> bool:
+    """Giá trị lời hứa/hạn mới mang `due_at` (hoặc, với `scheduled_event`, `at`) KHÁC và không rỗng so với bản đang hiệu lực. Giá trị mới rỗng
+    không bao giờ xoá hạn cũ."""
+    if predicate not in OBLIGATION_PREDICATES or not isinstance(old, dict) or not isinstance(new, dict):
+        return False
+    fields = ("at",) if predicate == "scheduled_event" else ("due_at",)
+    return any(new.get(k) is not None and new.get(k) != old.get(k) for k in fields)
+
+
 def _covers(n: _Neighbor, t: datetime) -> bool:
     return n.valid_from <= t and (n.valid_to is None or n.valid_to > t)
 
@@ -410,7 +423,7 @@ async def _assert(db: AsyncSession, fin: FactIn, pred: predicates.Predicate) -> 
     except entities.EntityError as e:
         raise FactWriteError(ERR_INVALID, str(e)) from e
     _validate(fin, pred, subject)
-    key = entity_key(object_entity) if object_entity is not None else value_key(fin.object_value)
+    key = entity_key(object_entity) if object_entity is not None else value_key(fin.object_value, fin.predicate)
     if attributed is None and fin.source_class in EXTERNAL_CLASSES:
         attributed = speaker
     by = "owner" if fin.created_by == "owner" or fin.source_class == "owner" else \
@@ -465,9 +478,11 @@ async def _assert(db: AsyncSession, fin: FactIn, pred: predicates.Predicate) -> 
     owner_confirmed = fin.confirmed_by is not None and fin.source_class == "owner" and not fin.proposed
     base_status = "proposed" if fin.proposed else ("owner_confirmed" if owner_confirmed else "asserted")
 
-    async def insert(status: str, vf: datetime, vt: datetime | None, dispute_id: uuid.UUID | None = None) -> uuid.UUID:
+    async def insert(status: str, vf: datetime, vt: datetime | None, dispute_id: uuid.UUID | None = None,
+                     supersedes: uuid.UUID | None = None) -> uuid.UUID:
         fid = await _insert_row(db, fin, pred, subject=subject_id, object_entity=object_entity, key=key, status=status,
-                                valid_from=vf, valid_to=vt, attributed=attributed, dispute_id=dispute_id, new_id=new_id)
+                                valid_from=vf, valid_to=vt, attributed=attributed, dispute_id=dispute_id, new_id=new_id,
+                                supersedes=supersedes)
         await _add_evidence(db, org, fid, fin.evidence)
         if olds:
             await finish_old(fid)
@@ -480,6 +495,14 @@ async def _assert(db: AsyncSession, fin: FactIn, pred: predicates.Predicate) -> 
               AND status IN ('proposed', 'asserted', 'owner_confirmed', 'disputed')
               AND (valid_to IS NULL OR valid_to >= :t) AND valid_from <= :t ORDER BY valid_from DESC LIMIT 1"""),  # noqa: S608
             {"o": org, "m": members, "p": fin.predicate, "k": key, "t": t})).one_or_none()
+        if (same is not None and not olds and base_status == "asserted" and same.status == "asserted" and t > same.valid_from
+                and _deadline_changed(fin.predicate, same.object_value, fin.object_value)):
+            # hạn/giờ của CÙNG lời hứa (cùng nội dung + cùng người nhận) đổi theo tin MỚI HƠN ⇒ cập nhật TƯỜNG MINH, bảo toàn hai thời gian:
+            # bản cũ `superseded` (+ `superseded_by`), bản mới trỏ `supersedes`. Sự thật Sếp đã xác nhận / tin cũ hơn không bao giờ đi đường này.
+            await db.execute(text("UPDATE mem.facts SET status = 'superseded', closed_recorded_at = now() WHERE id = :i"), {"i": same.id})
+            fid = await insert(base_status, t, None if fin.valid_to is None else _aware(fin.valid_to), supersedes=same.id)
+            await db.execute(text("UPDATE mem.facts SET superseded_by = :n WHERE id = :i"), {"n": fid, "i": same.id})
+            return await _load(db, fid, "deadline_updated")
         if same is not None and not olds and not (base_status == "owner_confirmed" and same.status != "owner_confirmed"):
             await _add_evidence(db, org, same.id, fin.evidence)
             return _fact(same, "evidence_added")
@@ -873,7 +896,7 @@ async def correct(db: AsyncSession, org_id: uuid.UUID, fact_id: uuid.UUID, *, ac
                                    valid_to = coalesce(valid_to, greatest(now(), valid_from)) WHERE id = :i"""),
                          {"i": fact_id})
         return await _load(db, fact_id, "retracted")
-    key = entity_key(obj) if obj is not None else value_key(new_value)
+    key = entity_key(obj) if obj is not None else value_key(new_value, probe.predicate)
     fin = FactIn(org_id=org_id, subject_id=old.subject_id, predicate=old.predicate, valid_from=old.valid_from,
                  object_entity_id=obj, object_value=new_value if obj is None else None, source_class="owner",
                  confidence_exist=1.0, confidence_content=1.0, context_code=old.context_code, created_by="owner",

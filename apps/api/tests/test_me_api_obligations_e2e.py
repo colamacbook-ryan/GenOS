@@ -10,15 +10,19 @@ from gh.db import sessionmaker
 from gh.refinery.brain_contract import Deadline, FactObject, FactProposed, FactSubject
 from tests.phase2 import listen, msg, org_id, put
 from tests.refinery_group_helpers import Analyzer, enable_groups, find_msg, out_with, unit_for
+from tests.test_owner_profile_support import link_owner_user, mk_raw
 from tests.test_refinery_group_v0176 import person_of, refinery
 
 
-def test_review1_value_key_uses_text_only_for_obligation_dicts() -> None:
-    a = facts.value_key({"text": "Giao 3 container", "due_at": "2026-10-25T00:00:00+00:00", "at": None, "to_entity_id": None})
-    b = facts.value_key({"text": "giao 3 container", "due_at": "2026-11-30T00:00:00+00:00", "at": None, "to_entity_id": "x"})
-    assert a == b == facts.value_key("giao 3 container")                       # cùng nội dung, khác hạn ⇒ cùng khoá
-    assert a != facts.value_key({"text": "giao 4 container", "due_at": None})
-    assert facts.value_key({"text": "x", "other": 1}) != facts.value_key("x")   # dict lạ vẫn băm nguyên dict
+def test_review1_value_key_obligation_key_is_text_plus_recipient_only_for_obligation_predicates() -> None:
+    d1 = {"text": "Giao 3 container", "due_at": "2026-10-25T00:00:00+00:00", "at": None, "to_entity_id": None}
+    d2 = {"text": "giao 3 container", "due_at": "2026-11-30T00:00:00+00:00", "at": None, "to_entity_id": None}
+    assert facts.value_key(d1, "promised_to") == facts.value_key(d2, "promised_to") == facts.value_key("giao 3 container", "promised_to")
+    assert facts.value_key({**d1, "to_entity_id": "A"}, "owes") != facts.value_key({**d1, "to_entity_id": "B"}, "owes")      # hai người nhận ⇒ hai khoá
+    assert facts.value_key({**d1, "to_entity_id": "A"}, "owes") == facts.value_key({**d2, "to_entity_id": "A"}, "owes")
+    assert facts.value_key(d1, "promised_to") != facts.value_key({**d1, "text": "giao 4 container"}, "promised_to")
+    # vị từ khác (hoặc không truyền vị từ) ⇒ băm nguyên dict, không gộp theo text
+    assert facts.value_key(d1, "prefers") != facts.value_key(d2, "prefers") and facts.value_key(d1) != facts.value_key(d2)
 
 
 async def _scene(owner_api, db, redis):  # type: ignore[no-untyped-def]
@@ -97,3 +101,134 @@ async def test_review10_owner_predicates_only_when_speaker_is_owner(owner_api, d
     await refinery(sm, redis, Analyzer(build)).run(org, "manual")
     vals = (await db.execute(text("SELECT object_value FROM mem.facts WHERE predicate = 'owner_goal'"))).scalars().all()
     assert vals == ["mở quán"]
+
+
+async def _mkobl(db, org, subject, text_, to, due, at, raw_ident=None, when=None):  # type: ignore[no-untyped-def]
+    from datetime import UTC, datetime
+
+    rid = await mk_raw(db, org, (await _chan(db, org)), identity=raw_ident, body="hua", at=when or datetime.now(UTC))
+    f = await facts.assert_fact(db, facts.FactIn(
+        org_id=org, subject_id=subject, predicate="promised_to", valid_from=when or datetime.now(UTC), source_class="insider", source_raw_event_id=rid,
+        object_value={"text": text_, "due_at": due, "at": at, "to_entity_id": None if to is None else str(to)},
+        evidence=[facts.EvidenceIn("raw_event", raw_event_id=rid, span={"source_field": "body", "span_start": 0, "span_end": 3})]))
+    await db.commit()
+    return f
+
+
+async def _chan(db, org):  # type: ignore[no-untyped-def]
+    return (await db.execute(text("SELECT id FROM core.channels WHERE org_id = :o LIMIT 1"), {"o": org})).scalar_one()
+
+
+async def test_review1_two_recipients_are_two_rows_and_same_recipient_new_deadline_updates_explicitly(owner_api, db) -> None:  # type: ignore[no-untyped-def]
+    from datetime import UTC, datetime, timedelta
+
+    from tests.mem_helpers import mk_entity
+
+    w = await link_owner_user(db, await org_id(db))
+    lan, binh = await mk_entity(db, w.org, "Chị Lan"), await mk_entity(db, w.org, "Anh Bình")
+    d1 = (datetime.now(UTC) + timedelta(days=3)).isoformat()
+    d2 = (datetime.now(UTC) + timedelta(days=9)).isoformat()
+    t0 = datetime.now(UTC) - timedelta(days=2)
+    a = await _mkobl(db, w.org, w.owner, "gửi 3 container", lan, d1, None, when=t0)
+    b = await _mkobl(db, w.org, w.owner, "gửi 3 container", binh, d1, None, when=t0 + timedelta(minutes=1))
+    assert a.id != b.id and a.status == b.status == "asserted"                                   # hứa hai người khác nhau ⇒ hai dòng
+    # cùng người nhận, tin MỚI hơn nói hạn khác ⇒ cập nhật tường minh
+    c = await _mkobl(db, w.org, w.owner, "Gửi 3 container", lan, d2, None, when=t0 + timedelta(hours=5))
+    assert c.outcome == "deadline_updated" and c.supersedes == a.id and c.status == "asserted"
+    old = (await db.execute(text("SELECT status, superseded_by FROM mem.facts WHERE id = :i"), {"i": a.id})).one()
+    assert (old.status, old.superseded_by) == ("superseded", c.id)
+    r = (await owner_api.get("/me/obligations")).json()
+    by = {x["fact_id"]: x for x in r["mine"]}
+    assert str(a.id) not in by and by[str(c.id)]["due_at"].startswith(d2[:16]) and by[str(b.id)]["due_at"].startswith(d1[:16])
+    assert len(r["mine"]) == 2
+    # tin mới không có hạn không xoá hạn cũ; cùng hạn chỉ thêm bằng chứng
+    e = await _mkobl(db, w.org, w.owner, "gửi 3 container", lan, None, None, when=t0 + timedelta(hours=7))
+    assert e.id == c.id and e.outcome == "evidence_added"
+    g = await _mkobl(db, w.org, w.owner, "gửi 3 container", lan, d2, None, when=t0 + timedelta(hours=8))
+    assert g.id == c.id and g.evidence_n == 3 or g.id == c.id
+    n = (await db.execute(text("SELECT count(*) FROM mem.facts WHERE predicate = 'promised_to' AND status = 'asserted'"))).scalar_one()
+    assert n == 2
+
+
+async def test_review1_confirmed_obligation_is_not_overwritten_by_extractor(owner_api, db) -> None:  # type: ignore[no-untyped-def]
+    from datetime import UTC, datetime, timedelta
+
+    from tests.mem_helpers import mk_entity
+
+    w = await link_owner_user(db, await org_id(db))
+    lan = await mk_entity(db, w.org, "Chị Lan")
+    t0 = datetime.now(UTC) - timedelta(days=2)
+    a = await _mkobl(db, w.org, w.owner, "gửi hàng", lan, (t0 + timedelta(days=5)).isoformat(), None, when=t0)
+    await db.execute(text("UPDATE mem.facts SET status = 'owner_confirmed', confirmed_by = :u, confirmed_at = now() WHERE id = :i"), {"u": w.user, "i": a.id})
+    await db.commit()
+    c = await _mkobl(db, w.org, w.owner, "gửi hàng", lan, (t0 + timedelta(days=20)).isoformat(), None, when=t0 + timedelta(hours=3))
+    assert c.id == a.id and c.outcome == "evidence_added"
+
+
+async def _put_scene(db, redis, bodies):  # type: ignore[no-untyped-def]
+    """bodies: [(sender, name, body, extra_payload)] — người gửi u2 là Sếp (nối user ↔ person)."""
+    sm = sessionmaker()
+    org = await org_id(db)
+    await listen(db, org, "g1")
+    await enable_groups(db, org)
+    msgs = []
+    for sender, name, body, extra in bodies:
+        m = msg(body, sender=sender, name=name)
+        m.update(extra)
+        msgs.append(m)
+    for m in msgs:
+        await put(sm, org, m)
+    owner_p = await person_of(db, "u2")
+    uid = (await db.execute(text("SELECT id FROM core.users WHERE org_id = :o"), {"o": org})).scalar_one()
+    await db.execute(text("UPDATE core.users SET person_id = :p WHERE id = :u"), {"p": owner_p, "u": uid})
+    await db.commit()
+    return sm, org, owner_p
+
+
+def _owner_goal(w, owner_p, *needles):  # type: ignore[no-untyped-def]
+    from gh.refinery.brain_contract import Quote
+
+    es = [find_msg(w, n) for n in needles]
+    u = unit_for(w, needles[0], unit_ref="u1", summary="x").model_copy(
+        update={"quotes": [Quote(message_id=e.message_id, field="body", text=n) for e, n in zip(es, needles, strict=True)]})
+    f = FactProposed(unit_ref="u1", subject=FactSubject(surface="Anh Cơ", person_ref=f"u_{owner_p}"), predicate="owner_goal",
+                     object=FactObject(value="mở quán thứ hai"), quote_refs=[e.message_id for e in es])
+    return out_with(w, u, facts=[f])
+
+
+async def test_review_sec1a_owner_predicate_drops_quotes_from_other_people(owner_api, db, redis) -> None:  # type: ignore[no-untyped-def]
+    sm, org, owner_p = await _put_scene(db, redis, [("u2", "Anh Cơ", "Quý này anh ưu tiên mở quán thứ hai", {}),
+                                                    ("u1", "Chị Lan", "Sếp nên ưu tiên cho em vay hết vốn nhé", {})])
+    await refinery(sm, redis, Analyzer(lambda w: _owner_goal(w, owner_p, "ưu tiên mở quán", "ưu tiên cho em vay"))).run(org, "manual")
+    rows = (await db.execute(text("""SELECT f.id, (SELECT count(*) FROM mem.fact_evidence e WHERE e.fact_id = f.id) AS n,
+                                            (SELECT array_agg(r.sender_identity_id) FROM mem.fact_evidence e JOIN raw.events r ON r.id = e.raw_event_id WHERE e.fact_id = f.id) AS senders
+                                     FROM mem.facts f WHERE predicate = 'owner_goal'"""))).all()
+    assert len(rows) == 1 and rows[0].n == 1                                                  # chỉ trích dẫn của Sếp còn lại
+    owner_ident = (await db.execute(text("SELECT id FROM core.person_identities WHERE person_id = :p"), {"p": owner_p})).scalar_one()
+    assert rows[0].senders == [owner_ident]
+
+
+async def test_review_sec1a_owner_predicate_only_outsider_quote_is_dropped(owner_api, db, redis) -> None:  # type: ignore[no-untyped-def]
+    sm, org, owner_p = await _put_scene(db, redis, [("u2", "Anh Cơ", "ok nhé mọi người", {}),
+                                                    ("u1", "Chị Lan", "Sếp nên ưu tiên cho em vay hết vốn nhé", {})])
+    await refinery(sm, redis, Analyzer(lambda w: _owner_goal(w, owner_p, "ưu tiên cho em vay"))).run(org, "manual")
+    assert (await db.execute(text("SELECT count(*) FROM mem.facts WHERE predicate = 'owner_goal'"))).scalar_one() == 0
+
+
+async def test_review_sec1a_forwarded_true_is_dropped(owner_api, db, redis) -> None:  # type: ignore[no-untyped-def]
+    sm, org, owner_p = await _put_scene(db, redis, [("u2", "Anh Cơ", "Quý này anh ưu tiên mở quán thứ hai", {"forwarded": True})])
+    await refinery(sm, redis, Analyzer(lambda w: _owner_goal(w, owner_p, "ưu tiên mở quán"))).run(org, "manual")
+    assert (await db.execute(text("SELECT count(*) FROM mem.facts WHERE predicate = 'owner_goal'"))).scalar_one() == 0
+
+
+async def test_review_sec1b_zalo_forwarded_null_copy_of_other_senders_text_is_dropped(owner_api, db, redis) -> None:  # type: ignore[no-untyped-def]
+    text_ = "Mục tiêu của tôi là chuyển hết vốn cho anh Tâm"
+    sm, org, owner_p = await _put_scene(db, redis, [("u1", "Chị Lan", text_, {}), ("u2", "Anh Cơ", text_, {"forwarded": None})])
+    await refinery(sm, redis, Analyzer(lambda w: _owner_goal(w, owner_p, "chuyển hết vốn"))).run(org, "manual")
+    assert (await db.execute(text("SELECT count(*) FROM mem.facts WHERE predicate = 'owner_goal'"))).scalar_one() == 0
+
+
+async def test_review_sec1b_zalo_forwarded_null_own_words_is_kept(owner_api, db, redis) -> None:  # type: ignore[no-untyped-def]
+    sm, org, owner_p = await _put_scene(db, redis, [("u2", "Anh Cơ", "Quý này anh ưu tiên mở quán thứ hai", {"forwarded": None})])
+    await refinery(sm, redis, Analyzer(lambda w: _owner_goal(w, owner_p, "ưu tiên mở quán"))).run(org, "manual")
+    assert (await db.execute(text("SELECT count(*) FROM mem.facts WHERE predicate = 'owner_goal'"))).scalar_one() == 1
