@@ -1522,7 +1522,8 @@ class GroupTurns:
             if b.reply_ext and b.reply_ext in by_ext and by_ext[b.reply_ext] != b.message_id:
                 ge.reply_to = by_ext[b.reply_ext]
         first = min(b.occurred_at for b in blocks)
-        acks = await self._acks(db, org_id, tk, blocks, first)
+        backlog, next_unseen = await self._backlog(db, org_id, tk, blocks)
+        acks = await self._acks(db, org_id, tk, blocks, first, until=next_unseen)
         if acks:
             new_events = sorted([*new_events, *acks], key=lambda e: e.sent_at)
         ctx_events = await self._context(db, org_id, tk, blocks, first)
@@ -1549,8 +1550,39 @@ class GroupTurns:
         profile = await profile_read.snapshot(db, org_id)
         preds = [(p.code, p.description_vi) for p in await predicates.all_predicates(db)]
         window = l3.GroupWindow(thread_ref=tk, new_events=new_events, context_events=ctx_events, media_texts=media,
-                                unreadable=unreadable, now=clock.now(), group_name=gname, predicates=preds)
+                                unreadable=unreadable, now=clock.now(), group_name=gname, predicates=preds, backlog=backlog)
         return window, pack, profile
+
+    async def _backlog(self, db: AsyncSession, org_id: uuid.UUID, tk: str, blocks: list[GEv]) -> tuple[Any, datetime | None]:
+        """Phần luồng lượt này KHÔNG thấy (chỉ đếm + giờ gửi, không đọc nội dung):
+        (1) tin CHỜ (`pending`/`processing` của lượt khác) ngoài lượt: dư sau trần 60 tin/12.000 ký tự, tin tồn cũ hơn mà lượt an toàn/cổng
+        bỏ qua để nhận ứng viên trước, tin nhập lịch sử…; (2) tin gửi SAU tin cuối của lượt nhưng đã phân tích ở lượt trước (lượt an toàn/cổng
+        chạy trước, tin cũ tới trễ) — trừ tin không cần model. Trả (`l3.Backlog` hoặc None, giờ gửi sớm nhất của tin (1)/(2) sau tin cuối của
+        lượt — cận trên cho lời xác nhận ngắn)."""
+        mine = [m.event_id for b in blocks for m in b.all_events]
+        last = max(m.occurred_at for b in blocks for m in b.all_events)
+        p = (await db.execute(text("""
+            SELECT count(*) AS n, min(e.occurred_at) AS lo, max(e.occurred_at) AS hi,
+                   min(e.occurred_at) FILTER (WHERE e.occurred_at > :last) AS nxt
+            FROM refinery.event_state s JOIN raw.events e ON e.id = s.event_id AND e.received_at = s.event_received_at
+            WHERE s.org_id = :o AND s.state IN ('pending', 'processing') AND s.detail ->> 'thread_key' = :t
+              AND NOT (s.event_id = ANY(:mine))"""), {"o": org_id, "t": tk, "mine": mine, "last": last})).one()
+        d_n, d_at = 0, None
+        scope = await self._thread_scope(db, tk)
+        if scope is not None:
+            where, sp = scope
+            d = (await db.execute(text(f"""
+                SELECT count(*) AS n, min(e.occurred_at) AS lo
+                FROM raw.events e JOIN refinery.event_state s ON s.event_id = e.id AND s.event_received_at = e.received_at
+                WHERE e.org_id = :o AND {where} AND e.occurred_at > :last AND NOT (e.id = ANY(:mine))
+                  AND s.state NOT IN ('pending', 'processing', 'error') AND s.detail ->> 'thread_key' = :t
+                  AND COALESCE(s.detail ->> 'discarded_by', '') <> 'no_model'"""),  # noqa: S608 — `where` là hằng + outbound_to_sql nội bộ
+                                  {"o": org_id, "t": tk, "mine": mine, "last": last, **sp})).one()
+            d_n, d_at = int(d.n), d.lo
+        if not p.n and not d_n:
+            return None, None
+        until = min((x for x in (p.nxt, d_at) if x is not None), default=None)
+        return l3.Backlog(int(p.n), p.lo, p.hi, d_n, d_at), until
 
     async def _history_evidence(self, db: AsyncSession, org_id: uuid.UUID, tk: str, blocks: list[GEv], ctx_events: list[Any],
                                 pack: Any) -> list[Any]:
@@ -1587,11 +1619,14 @@ class GroupTurns:
             extra.append(self._ctx_event(r))
         return sorted([*ctx_events, *extra], key=lambda c: c.sent_at)
 
-    async def _acks(self, db: AsyncSession, org_id: uuid.UUID, tk: str, blocks: list[GEv], first: datetime) -> list[Any]:
+    async def _acks(self, db: AsyncSession, org_id: uuid.UUID, tk: str, blocks: list[GEv], first: datetime, *,
+                    until: datetime | None = None) -> list[Any]:
         """Lời xác nhận ngắn ("Dạ e ghi nhận ạ", "ok ạ") của CÙNG luồng, từ tin mới đầu tiên trở đi (cận dưới updated_at/received_at = mốc cũ hơn
         giữa giờ gửi và giờ vào kho của tin mới đầu, trừ `ACK_LOOKBACK` — truy vấn có cận theo cột có index, không cắt ack thuộc cửa sổ). Chúng không kích hoạt lượt, không
         tính trần/đếm tin (vẫn `discarded`, lý do `ack`) nhưng là BẰNG CHỨNG "đã xử lý" — thiếu chúng model báo nhầm "đơn chưa được xác
-        nhận" (lỗi kb1 #4). Đưa vào cửa sổ đúng chỗ theo thời gian, tối đa `ACK_MAX` tin (mỗi tin ≤ 24 ký tự)."""
+        nhận" (lỗi kb1 #4). Đưa vào cửa sổ đúng chỗ theo thời gian, tối đa `ACK_MAX` tin (mỗi tin ≤ 24 ký tự). `until` = giờ gửi tin chờ đầu
+        tiên SAU cửa sổ (luồng còn tồn đọng): ack từ mốc đó trở đi thuộc lượt sau — đưa vào lượt này thì nó thành "hoạt động mới nhất" của
+        nhóm, che mất phần tồn đọng (lỗi kb1-r2: sticker 05–07/10 trong lượt tới 26/09)."""
         have = {m.event_id for b in blocks for m in b.all_events}
         rows = (await db.execute(text("""
             SELECT e.id, e.received_at, e.occurred_at, e.kind, e.body_text, e.payload, e.external_msg_id, e.sender_identity_id,
@@ -1601,9 +1636,9 @@ class GroupTurns:
             LEFT JOIN core.persons p ON p.id = pi.person_id
             WHERE s.org_id = :o AND s.state = 'discarded' AND s.updated_at >= :lo AND s.event_received_at >= :lo AND e.received_at >= :lo
               AND s.detail ->> 'thread_key' = :t AND s.detail ->> 'reason' = 'ack'
-              AND e.occurred_at >= :first AND e.occurred_at <= :now
+              AND e.occurred_at >= :first AND e.occurred_at <= :now AND (CAST(:until AS timestamptz) IS NULL OR e.occurred_at < :until)
             ORDER BY e.occurred_at LIMIT :n"""),
-                                 {"o": org_id, "t": tk, "first": first, "now": clock.now(), "n": ACK_MAX,
+                                 {"o": org_id, "t": tk, "first": first, "now": clock.now(), "n": ACK_MAX, "until": until,
                                   # mốc CŨ HƠN giữa giờ gửi tin mới đầu và giờ vào kho của tin mới, trừ biên lệch giờ: ack có
                                   # occurred_at ≥ first thì vào kho/được quét ≥ first − biên ⇒ không bao giờ bị cắt, truy vấn vẫn có cận
                                   "lo": min(first, min(b.received_at for b in blocks)) - ACK_LOOKBACK})).all()
@@ -1746,6 +1781,7 @@ class GroupTurns:
                 except Exception as exc:  # noqa: BLE001 — sự thật đề xuất lỗi ghi: đơn vị đã ghi vẫn giữ
                     log.error("Ghi sự thật của lượt %s lỗi: %s", aid, err_code(exc))
                     errors.append({"code": "facts_write_failed", "n": len(fact_ins), "error": type(exc).__name__})
+            await self._promises_kept(db, org_id, aid, verified, window, errors)
             # trạng thái từng tin: có đơn vị trích ⇒ clean; còn lại ⇒ discarded (không có sự việc)
             held: set[uuid.UUID] = set()
             for e in evs:
@@ -1803,6 +1839,26 @@ class GroupTurns:
             await self.r._raw_state(org_id, e, "clean" if ok else "discarded", cited.get(e.event_id) or ("Noise" if not ok else None),
                                     UNVERIFIED_CONFIDENCE if ok else None)
         await self.r._embed(org_id, unit_rows)
+
+    async def _promises_kept(self, db: AsyncSession, org_id: uuid.UUID, aid: uuid.UUID, verified: Any, window: Any,
+                             errors: list[dict[str, Any]]) -> None:
+        """`memory_updates.promise_kept` ⇒ đóng hiệu lực lời hứa trong sổ (`facts.close_kept`; kỹ năng v2.1 §9.3: [tin hứa, tin đã giữ]).
+        Mã tin đã qua `verify` (chỉ mã có trong cửa sổ). Đếm `promise_kept_closed` / `promise_kept_unmatched` (mã + số, không nội dung)."""
+        by_mid = {e.message_id: e for e in window.all_events if e.raw_event_id is not None}
+        for mu in verified.memory_updates:
+            if mu.type != "promise_kept":
+                continue
+            evs = [by_mid[i] for i in mu.message_ids if i in by_mid]
+            closed: list[uuid.UUID] = []
+            if evs:
+                try:
+                    async with db.begin_nested():
+                        closed = await facts_mod.close_kept(db, org_id, [e.raw_event_id for e in evs], at=max(e.sent_at for e in evs))
+                except Exception as exc:  # noqa: BLE001 — đóng lời hứa lỗi: lượt vẫn ghi, mã lỗi vào analyses
+                    log.error("Đóng lời hứa đã giữ của lượt %s lỗi: %s", aid, err_code(exc))
+                    errors.append({"code": "promise_kept_failed", "error": type(exc).__name__})
+                    continue
+            verified.bump("promise_kept_closed" if closed else "promise_kept_unmatched", len(closed) or 1)
 
     async def _ctx_gevs(self, org_id: uuid.UUID, ids: list[tuple[uuid.UUID, datetime]]) -> dict[uuid.UUID, GEv]:
         """`GEv` đầy đủ (người gửi + mã người, nhóm, hướng) cho tin ngữ cảnh/bằng chứng của cửa sổ — để đơn vị trích chúng được ghi

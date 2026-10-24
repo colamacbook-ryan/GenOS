@@ -76,7 +76,7 @@ Gộp: cùng khiếu nại nhắc lại; khiếu nại rải rác nhiều tuần
 
 ## J. Lời hứa · thời gian
 - Có điều kiện: chưa đạt → không phải tín hiệu (`conditional: true`); đạt → `condition.met: "yes"` + `met_message_id`; không rõ → ⚪.
-- Đã giữ có bằng chứng → không thành đơn vị; `memory_updates` `promise_kept`. Ngoại lệ cảm ơn việc lớn → ⚪ `status_hint: "da_giu"`.
+- Đã giữ có bằng chứng → không thành đơn vị; `memory_updates` `promise_kept` với `message_ids` = [mã tin HỨA (tin mới, tin ngữ cảnh hoặc mã ghi kèm ở Lịch sử), mã tin chứng minh đã giữ] — thiếu mã tin hứa thì lời hứa không được đóng trong sổ. Ngoại lệ cảm ơn việc lớn → ⚪ `status_hint: "da_giu"`.
 - Tin mẫu lặp: không phải sự việc mới, trừ khi STK/tiền/ngày đổi.
 - **Thời gian chỉ chép nguyên văn, code tính:**
   - `deadline.text` = cụm hạn nguyên văn ("thứ 6", "trước 5h chiều", "mùng 3 tháng 2 âm") + `anchor_message_id` = tin chứa cụm đó. Âm lịch `lunar: true`; mơ hồ `ambiguous: true`. Không tự tính ngày.

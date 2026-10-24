@@ -628,6 +628,37 @@ async def _assert(db: AsyncSession, fin: FactIn, pred: predicates.Predicate) -> 
     return await _load(db, fid, "inserted" if nxt is None else "inserted_between")
 
 
+# ─── lời hứa đã giữ ⇒ đóng hiệu lực ────────────────────────────────────────
+
+#: Vị từ "nghĩa vụ" mà `promise_kept` được đóng (kỹ năng v2.1 §9.3: "đóng lời hứa trong sổ").
+KEPT_PREDICATES = ("promised_to", "owes")
+
+
+async def close_kept(db: AsyncSession, org_id: uuid.UUID, raw_event_ids: list[uuid.UUID], *, at: datetime) -> list[uuid.UUID]:
+    """`memory_updates.promise_kept` (model: [tin hứa, tin chứng minh đã giữ]): ĐÓNG hiệu lực theo thời gian sự việc các sự thật
+    `promised_to`/`owes` đang mở mà tin nguồn hoặc bằng chứng nằm trong `raw_event_ids` — `valid_to = at` (giờ gửi tin đã giữ),
+    `closed_recorded_at = now()`, trạng thái GIỮ `asserted` (quy ước CNS-095), không xoá. Không nối theo chữ (không có mã tin hứa ⇒ không
+    đóng gì). `owner_confirmed` chỉ Sếp đóng (§4A.1 6f); `disputed` đi đường tranh chấp. Cùng khoá tư vấn với `assert_fact`. Trả id đã đóng."""
+    if not raw_event_ids:
+        return []
+    at = _aware(at)
+    rows = (await db.execute(text("""
+        SELECT f.id, f.subject_id, f.predicate FROM mem.facts f
+        WHERE f.org_id = :o AND f.predicate = ANY(:p) AND f.status = 'asserted' AND f.valid_from < :t AND (f.valid_to IS NULL OR f.valid_to > :t)
+          AND (f.source_raw_event_id = ANY(:r) OR EXISTS (SELECT 1 FROM mem.fact_evidence x WHERE x.fact_id = f.id AND x.raw_event_id = ANY(:r)))
+        ORDER BY f.subject_id, f.predicate, f.id"""), {"o": org_id, "p": list(KEPT_PREDICATES), "t": at, "r": raw_event_ids})).all()
+    if not rows:
+        return []
+    await disputes.set_actor(db, "extractor", "promise_kept")
+    for sid, pred in dict.fromkeys((str(r.subject_id), r.predicate) for r in rows):       # cùng thứ tự khoá với assert_facts (CNS-102)
+        await db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(CAST(:o AS text) || CAST(:s AS text) || :p, 0))"),
+                         {"o": str(org_id), "s": sid, "p": pred})
+    res = await db.execute(text("""UPDATE mem.facts SET valid_to = :t, closed_recorded_at = now()
+                                   WHERE id = ANY(:i) AND status = 'asserted' AND (valid_to IS NULL OR valid_to > :t) RETURNING id"""),
+                           {"t": at, "i": [r.id for r in rows]})
+    return [r[0] for r in res.all()]
+
+
 # ─── lượt nhiều sự thật + thử lại ──────────────────────────────────────────
 
 @dataclass
