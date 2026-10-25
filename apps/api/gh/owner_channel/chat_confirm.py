@@ -31,11 +31,13 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from gh.auth import service
+from gh.biz.intel import strong_confirm
 from gh.chassis import actionlog
 from gh.crypto import new_token, token_digest
 from gh.gen import chat_pending, proposals
 from gh.gen.engine import digest
 from gh.owner_cmd import core as owner_core
+from gh.telegram import backup
 from gh.textnorm import strip_accents
 
 log = logging.getLogger("gh.owner_channel.chat_confirm")
@@ -49,6 +51,7 @@ _NO = ("huy bo", "huy", "thoi")
 _FILL = frozenset({"em", "nhe", "nha", "a", "ne", "luon", "di", "gen"})
 _ALL = frozenset({"tat", "ca", "het", "all"})
 _CODE = re.compile(r"^#?([0-9a-f]{4,6})$")
+_PIN2 = re.compile(r"^[0-9]{4}$")
 _PUNCT = re.compile(r"[.!,;:?~…]+")
 
 NONE_PENDING = "Em không có đề xuất nào đang chờ Sếp xác nhận ạ. Sếp nhắn /nhap <ý> để em soạn."
@@ -62,12 +65,19 @@ ALL_REFUSED = "Em không làm hàng loạt. Mỗi đề xuất Sếp trả lời
 NOT_HERE = "Kênh này chưa xác nhận bằng chat được — Sếp mở Console để Xác nhận."
 FAILED = "Em chưa làm được đề xuất {code}: {why}. Chưa có gì thay đổi, Sếp thử lại hoặc mở Console."
 CANCELLED = "Đã huỷ đề xuất {code}. Em không làm gì cả."
+# v0.1.76 (T2) — xác nhận mạnh cho tin gửi khách (spec r6 §8.1). Không bao giờ nhắc lại mã kép trong chat.
+CODE_SENT = ("Tin gửi khách cần xác nhận mạnh: em vừa gửi mã 4 số qua kênh phụ (Telegram riêng của Sếp). "
+             "Sếp nhắn «OK {code} <mã 4 số>» trong 10 phút để em gửi. Không đưa mã này cho ai.")
+CODE_RESENT = "Mã cũ đã hết hạn hoặc không phải của đề xuất này. " + CODE_SENT
+WRONG_CODE = "Mã xác nhận chưa đúng, em chưa gửi {code}. Sếp còn {left} lần thử; sai hết em sẽ tạm khoá gửi tin cho khách 1 giờ."
+STRONG_CONSOLE = "Em chưa gửi {code}: {why}."
 
 
 @dataclass(frozen=True)
 class Decision:
     verb: str          # 'ok' | 'no' | 'all'
     code: str | None   # 4–6 ký tự hex HOA, không '#'
+    pin2: str | None = None   # v0.1.76: mã kép 4 số (chỉ sau mã đề xuất, chỉ với «OK»)
 
 
 def parse_decision(raw: str) -> Decision | None:
@@ -81,6 +91,7 @@ def parse_decision(raw: str) -> Decision | None:
             if t != w and not t.startswith(w + " "):
                 continue
             code: str | None = None
+            pin2: str | None = None
             rest = t[len(w):].split()
             if verb == "ok" and set(rest) & _ALL:
                 return Decision("all", None) if set(rest) <= _ALL | _FILL else None
@@ -88,9 +99,11 @@ def parse_decision(raw: str) -> Decision | None:
                 m = _CODE.match(tok)
                 if m and code is None:
                     code = m.group(1).upper()
+                elif verb == "ok" and code is not None and pin2 is None and _PIN2.match(tok):
+                    pin2 = tok
                 elif tok not in _FILL:
                     return None
-            return Decision(verb, code)
+            return Decision(verb, code, pin2)
     return None
 
 
@@ -182,16 +195,46 @@ def _done(p: dict[str, Any], result: dict[str, Any]) -> str:
     return f"Đã làm xong {code}."
 
 
+async def _strong(sm: async_sessionmaker[AsyncSession], redis: Redis, org_id: uuid.UUID, p: dict[str, Any],
+                  pin2: str | None) -> str | None:
+    """Xác nhận mạnh cho tin gửi khách (spec r6 §8.1). None = qua; ngược lại là câu trả lời Sếp (chưa gửi gì).
+    Mọi luật (mở khoá hôm nay, mã kép, sai 3 lần khoá 1 giờ theo tổ chức, giờ yên lặng) nằm ở `strong_confirm`."""
+    code = chat_pending.code_of(p["id"])
+    async with sm() as db:
+        await _set_org(db, org_id)
+        r: Any = (await strong_confirm.check_code(db, redis, org_id, p["id"], pin2) if pin2
+                  else await strong_confirm.require(db, org_id, strong_confirm.OUTBOUND))
+        reply: str | None = None
+        if isinstance(r, strong_confirm.NeedCode):
+            try:
+                await strong_confirm.issue_code(db, redis, org_id, p["id"])
+                reply = (CODE_RESENT if pin2 else CODE_SENT).format(code=code)
+            except backup.BackupUnavailable:
+                reply = STRONG_CONSOLE.format(code=code, why=strong_confirm.UNLOCK_REASON)
+        elif isinstance(r, strong_confirm.WrongCode):
+            reply = WRONG_CODE.format(code=code, left=r.left)
+        elif isinstance(r, strong_confirm.NeedConsole):
+            reply = STRONG_CONSOLE.format(code=code, why=r.reason)
+        await db.commit()                 # giữ dòng Nhật ký đếm lần sai / khoá kể cả khi bị chặn
+    return reply
+
+
 async def _execute(sm: async_sessionmaker[AsyncSession], redis: Redis, app: Any, org_id: uuid.UUID, via: str,
-                   owner_id: uuid.UUID, p: dict[str, Any], ref: str) -> str:
+                   owner_id: uuid.UUID, p: dict[str, Any], ref: str, pin2: str | None = None) -> str:
     code = chat_pending.code_of(p["id"])
     pid = p["id"]
     kind = chat_pending.kind_of(p)
     if kind == "console":
         return NOT_HERE
+    if kind == "outbound":
+        blocked = await _strong(sm, redis, org_id, p, pin2)
+        if blocked is not None:
+            return blocked
     if not await redis.set(f"gh:owner:chatok:{pid}", "1", nx=True, ex=CLAIM_TTL_S):
         return DECIDED.format(code=code)           # xác nhận MỘT lần: lượt trước đang/đã làm
     ses = await _mint(sm, org_id, owner_id, via, pin=True)
+    if kind == "outbound":            # dấu một lần cho route duyệt nháp (phòng thủ chiều sâu: phiên chat_ok khác không duyệt được)
+        await redis.set(strong_confirm.pass_key(ses.id), "1", ex=int(SESSION_TTL.total_seconds()))
     try:
         status, res = await _call(app, ses, "POST", f"/gen/proposals/{pid}/confirm", {"fields": {}})
         if status == 409:
@@ -225,6 +268,7 @@ async def _execute(sm: async_sessionmaker[AsyncSession], redis: Redis, app: Any,
         await _log(sm, org_id, owner_id, via, "gen.proposal_chat_confirmed", p, "failed", ref=ref, error="exception")
         return FAILED.format(code=code, why="lỗi bất ngờ, em chưa chắc đã làm hay chưa — Sếp xem lại trong Console")
     finally:
+        await redis.delete(strong_confirm.pass_key(ses.id))
         await _revoke(sm, org_id, ses.id)
 
 
@@ -311,7 +355,7 @@ async def handle(sm: async_sessionmaker[AsyncSession], redis: Redis, app: Any, o
                 return NEED_CODE_STALE.format(question=chat_pending.question(target, via, with_code=True))
     if d.verb == "no":
         return await _cancel(sm, redis, app, org_id, via, owner.id, target, ref)
-    return await _execute(sm, redis, app, org_id, via, owner.id, target, ref)
+    return await _execute(sm, redis, app, org_id, via, owner.id, target, ref, d.pin2)
 
 
 def _headline(p: dict[str, Any]) -> str:

@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gh.auth import rbac, service
 from gh.auth.deps import current_user, require, require_owner
+from gh.biz.intel import asks
 from gh.biz.market import routes as market_routes
 from gh.biz.relations import routes as relations_routes
 from gh.chassis import actionlog
@@ -614,6 +615,7 @@ async def confirm_proposal(pid: uuid.UUID, request: Request, body: ConfirmIn | N
     await actionlog.record(db, org_id=user.org_id, actor_type="user", actor_id=user.actor_id,
                            action="gen.proposal_confirmed", target_type=result["type"], target_id=result.get("id"),
                            target_label=str(label or "")[:200] or None, detail=detail, ip=user.ip)
+    await asks.close_for(db, user.org_id, "proposal", pid, state="executed")   # v0.1.76 (T2): một hàng — cùng transaction
     return proposals.public(p)
 
 
@@ -643,6 +645,7 @@ async def cancel_proposal(pid: uuid.UUID, request: Request, user: service.Curren
                            action="gen.proposal_cancelled", target_type="gen_proposal", target_id=p["id"],
                            detail={"via": "gen", "proposal_id": p["id"], "type": p["type"], "turn_id": p["turn_id"],
                                    "conversation_id": p["conversation_id"]}, ip=user.ip)
+    await asks.close_for(db, user.org_id, "proposal", pid, state="cancelled")  # v0.1.76 (T2): một hàng — cùng transaction
     return proposals.public(p)
 
 

@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """API Console của bot tài khoản riêng (v0.1.72). CHỈ Owner (+ `system.manage`); mọi thao tác đổi trạng thái cần PIN.
 
 - `GET/PUT /owner-channel/{ch}` — trạng thái kênh quản trị + cài đặt báo cáo chủ động (chỉ sự kiện đặc biệt).
@@ -50,6 +51,7 @@ class PrefsIn(BaseModel):
 
 class OwnerChannelIn(BaseModel):
     enabled: bool | None = None
+    intel_mode: Literal["live", "shadow"] | None = None      # v0.1.76 (T3): chạy bóng — đổi chiều nào cũng Console + PIN; live → shadow báo kênh phụ
     report_prefs: PrefsIn | None = None
 
 
@@ -84,6 +86,7 @@ async def _view(db: AsyncSession, org_id: uuid.UUID, ch: str) -> dict[str, Any]:
         "paired_at": iso(row.paired_at) if row is not None else None,
         "pair_pending": pending, "pair_expires_at": iso(expires) if pending else None,
         "report_prefs": prefs, "support_groups": n_support,
+        "intel_mode": "shadow" if (await org_settings(db, org_id)).get("intel", {}).get("mode") == "shadow" else "live",
     }
 
 
@@ -119,6 +122,17 @@ async def put_owner_channel(ch: str, body: OwnerChannelIn, request: Request,
         await db.execute(text("""UPDATE ops.owner_channels SET enabled = :e, updated_at = now(), updated_by = :u
                                  WHERE org_id = :o AND channel_type = :c"""),
                          {"e": body.enabled, "u": user.id, "o": user.org_id, "c": ch})
+    if body.intel_mode is not None:
+        cur = (await db.execute(text("SELECT settings->'intel'->>'mode' FROM core.organizations WHERE id = :o"), {"o": user.org_id})).scalar_one()
+        if body.intel_mode == "shadow" and cur != "shadow":      # hạ phòng thủ: qua cổng xác nhận mạnh (Nhật ký + báo kênh phụ)
+            from gh.biz.intel import strong_confirm
+
+            ok = await strong_confirm.require(db, user.org_id, "intel_mode_shadow", via="console", pin_verified=True)
+            if not isinstance(ok, strong_confirm.Allowed):
+                raise ApiError(403, "STRONG_CONFIRM", "Chưa được phép đổi sang chạy thử")
+        await db.execute(text("""UPDATE core.organizations SET settings = settings || jsonb_build_object('intel',
+                                   COALESCE(settings->'intel', '{}'::jsonb) || jsonb_build_object('mode', CAST(:m AS text))) WHERE id = :o"""),
+                         {"m": body.intel_mode, "o": user.org_id})
     if body.report_prefs is not None:
         patch = {k: v for k, v in body.report_prefs.model_dump().items() if v is not None}
         await db.execute(text("""
@@ -130,7 +144,7 @@ async def put_owner_channel(ch: str, body: OwnerChannelIn, request: Request,
                          {"o": user.org_id, "c": ch, "p": json.dumps(patch), "u": user.id})
     await actionlog.record(db, org_id=user.org_id, actor_type="user", actor_id=user.actor_id,
                            action="owner_channel.update", target_type="owner_channel", target_id=ch,
-                           detail={"enabled": body.enabled,
+                           detail={"enabled": body.enabled, "intel_mode": body.intel_mode,
                                    "report_prefs": body.report_prefs.model_dump(exclude_none=True)
                                    if body.report_prefs else None}, ip=user.ip)
     await sync_owner_sets(db, request.app.state.redis, user.org_id)

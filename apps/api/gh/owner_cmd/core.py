@@ -19,6 +19,7 @@ test_telegram_commands_v0164.py). Đề xuất chỉ nằm trong Redis (`proposa
 """
 
 import logging
+import re
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
@@ -646,6 +647,86 @@ async def _chat_reply(
     return Reply("\n\n".join(lines), links)
 
 
+# ─── v0.1.76 (T2) — W8: «ghi nhớ: anh …» ⇒ Hồ sơ Sếp ─────────────────────────
+
+#: «ghi nhớ: <đại từ của Sếp> …» trên chữ bỏ dấu. Bắt buộc có dấu hai chấm + câu bắt đầu bằng ngôi thứ nhất (về CHÍNH Sếp).
+_PROFILE_NOTE = re.compile(r"^\s*ghi nho\s*[:：]\s*((?:anh|em|toi|minh)\b.*)$", re.S)
+PROFILE_VIAS = ("zalo", "whatsapp")       # chỉ kênh quản trị 1-1 đã ghép bằng mã (Telegram: không)
+PROFILE_ONE = "Sếp ghi nhớ từng ý một giúp em (mỗi lần một câu) để em xếp đúng mục Hồ sơ."
+PROFILE_CONSOLE = ("Việc này cần mở Console (mã PIN) mới ghi được: cách báo / giờ yên lặng chạm lừa đảo hoặc sức khoẻ-an toàn "
+                   "không đổi qua chat để phòng khi tài khoản bị chiếm.")
+
+
+def profile_note(raw: str) -> str | None:
+    """Phần nội dung của «ghi nhớ: anh …» (giữ nguyên dấu, bỏ tiền tố), hoặc None nếu không đúng dạng."""
+    from gh.textnorm import strip_accents
+
+    folded = strip_accents(raw)
+    if len(folded) != len(raw):         # bỏ dấu đổi độ dài (ký tự tổ hợp) ⇒ không cắt theo vị trí được; đi đường thường
+        return None
+    m = _PROFILE_NOTE.match(folded.lower())
+    return raw[m.start(1):].strip() if m else None
+
+
+def _profile_section(content: str) -> str | None:
+    from gh.biz.mem import profile
+
+    found = profile.candidates_from_message(content)
+    section = found[0][0] if found else None
+    # sở thích báo / giờ yên lặng đi mục `report_prefs` dù câu còn khớp mục khác (để luật phòng thủ + báo kênh phụ áp được)
+    asks_quiet = profile.is_quiet_hours("report_prefs", content)
+    if section not in ("rhythm", "report_prefs") and (asks_quiet or profile._NEGATIVE_REPORT_RE.search(profile._fold(content))):
+        section = "report_prefs"
+    return section
+
+
+def profile_defensive(section: str, content: str) -> bool:
+    """Ngoại lệ phòng thủ (§4C) — kiểm trên TOÀN nội dung, bất kể bộ xếp mục chọn mục nào (review bảo mật T2): chạm từ vựng lừa đảo /
+    tài chính / sức khoẻ-an toàn, hoặc dạng "đừng/không/khỏi báo …" ⇒ chỉ Console + PIN."""
+    from gh.biz.mem import profile
+
+    f = profile._fold(content)
+    return (profile.is_defensive(section, content) or bool(profile._DEFENSIVE_RE.search(f))
+            or bool(profile._NEGATIVE_REPORT_RE.search(f)))
+
+
+async def profile_add(cmd: OwnerCommand, ctx: Context, owner: service.CurrentUser, content: str) -> Reply | None:
+    """Ghi một mục Hồ sơ `owner_confirmed` từ lệnh của CHÍNH Sếp (đã qua kiểm ID ở inbound + Owner còn hiệu lực ở `handle`).
+    Không xếp được mục ⇒ None (đi đường thường: Gen đề xuất Ghi nhớ, chờ «OK»)."""
+    from gh.biz.intel import strong_confirm
+    from gh.biz.mem import profile, profile_read
+
+    if len([x for x in profile._SPLIT.split(content) if x.strip()]) > 1:
+        return Reply(PROFILE_ONE)           # nhiều câu: không để câu sau (tắt báo…) núp sau mục của câu đầu
+    section = _profile_section(content)
+    if section is None:
+        return None
+    async with ctx.sm() as db:
+        await _set_org(db, ctx.org_id)
+        if profile_defensive(section, content):
+            await strong_confirm.require(db, ctx.org_id, "report_pref_defensive")     # đếm vào phát hiện bất thường
+            await db.commit()
+            return Reply(PROFILE_CONSOLE)
+        if profile.is_quiet_hours(section, content):
+            r = await strong_confirm.require(db, ctx.org_id, "quiet_hours_change")    # cho phép + LUÔN báo kênh phụ
+            if not isinstance(r, strong_confirm.Allowed):
+                await db.commit()
+                return Reply(f"Em chưa ghi được: {getattr(r, 'reason', strong_confirm.CONSOLE_REASON)}.")
+        log_id = await actionlog.record(db, org_id=ctx.org_id, actor_type="user", actor_id=owner.actor_id,
+                                        action="owner_profile.chat_add", target_type="owner_profile", target_id=section,
+                                        detail={"via": cmd.via, "section": section, "text_digest": digest(content)})
+        try:
+            res = await profile.add_item(db, ctx.org_id, user_id=owner.id, section=section, text_value=content,
+                                         action_log_id=log_id, via="chat")
+        except profile.ProfileError as e:
+            await db.rollback()
+            return Reply(PROFILE_CONSOLE if e.code == "console_required" else f"Em chưa ghi được vào Hồ sơ: {e.message}.")
+        await db.commit()
+    label = profile_read.SECTION_LABEL_VI.get(section, section)
+    head = "Mục này đã có trong Hồ sơ" if res.outcome == "existing" else "Đã ghi vào Hồ sơ của Sếp"
+    return Reply(f"{head} (mục {label}): «{otext.defang(content)}». Sửa/xoá ở Console › Tôi.")
+
+
 # ─── điều phối ───────────────────────────────────────────────────────────────
 
 
@@ -709,6 +790,12 @@ async def handle(cmd: OwnerCommand, ctx: Context, *, overrides: Mapping[str, Han
             return await over.get("suc_khoe", suc_khoe)(ctx)
         if cmd.kind == "nhap":
             return await nhap(cmd, ctx)
+        if cmd.kind == "hoi" and cmd.via in PROFILE_VIAS:
+            note = profile_note(cmd.text)
+            if note is not None:
+                done = await profile_add(cmd, ctx, owner, note)
+                if done is not None:
+                    return done
         if cmd.kind == "hoi":
             return await (ctx.hoi_fn or hoi)(cmd, ctx)
         return Reply(UNKNOWN)

@@ -7,7 +7,8 @@ thì bot trả lời tào lao. Nay câu hỏi tự do chạy ĐÚNG động cơ 
     không migration); lịch sử gửi kèm như ở Console. Hội thoại bị xoá (Console / hạn lưu) ⇒ tự tạo lại.
   - Công cụ CHỈ ĐỌC (và bước `propose` = ĐỀ XUẤT) áp đúng quyền của Owner đã ghép: tool gọi nội bộ (ASGI) bằng một phiên Console
     NGẮN HẠN (cơ sở `chat_gen`, KHÔNG có cửa sổ PIN, thu hồi ngay sau lượt) nên mọi RBAC / phạm vi / che dữ liệu của endpoint giữ
-    nguyên; kết quả vẫn qua `mask_for_prompt` + `wrap_untrusted` như Console.
+    nguyên; kết quả tới model NGUYÊN VĂN (Q9, CNS-081: tool Owner giữ nguyên STK/SĐT, chỉ `wrap_untrusted`); đầu RA ở Zalo được che hiển thị
+    STK/SĐT dạng «0123…789» ở cửa `dm.build_reply` (`delivery.display_mask`, §8.1).
   - Nói bằng Agent ngoại giao (không xưng Gen), văn bản thường.
   - Câu tự nhiên («nhắc tôi…», «ghi nhớ…», «soạn tin cho nhóm X…») ⇒ Gen tự ĐỀ XUẤT; đề xuất vào sổ chờ `chat_pending` để Sếp «OK»
     (mọi luật v0.1.73 giữ nguyên: OK trần chỉ cho câu hỏi cuối trong 10 phút; tin gửi ngoài nêu người nhận + nguyên văn, OK riêng).
