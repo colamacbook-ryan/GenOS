@@ -86,18 +86,42 @@ def verify_code(org_id: uuid.UUID, code: str, code_hash: str) -> bool:
     return hmac.compare_digest(hash_code(org_id, code), code_hash)
 
 
-async def send_code(db: AsyncSession, org_id: uuid.UUID) -> str:
-    """Sinh mã 4 số, xếp tin gửi qua Telegram, trả BĂM. Không commit."""
+CODE_SUPERSEDED = "SUPERSEDED"
+PREVIEW_MAX = 60
+
+
+def _clip(s: str | None, n: int) -> str:
+    t = " ".join(str(s or "").split())
+    return t if len(t) <= n else t[:n] + "…"
+
+
+async def send_code(db: AsyncSession, org_id: uuid.UUID, *, ask_code: str | None = None, recipient: str | None = None,
+                    preview: str | None = None) -> str:
+    """Sinh mã 4 số, xếp tin gửi qua Telegram, trả BĂM. Không commit.
+    v0.1.76 (T2, review bảo mật): tin nêu RÕ mã dùng cho đề xuất nào (`#MÃ`, người nhận, ~60 ký tự đầu nội dung) + cách báo động;
+    mỗi tổ chức chỉ MỘT mã còn hiệu lực — tin mã cũ chưa gửi bị huỷ + xoá chữ (`SUPERSEDED`)."""
     row = (await db.execute(text("""SELECT owner_chat_id, owner_tg_user_id FROM ops.notify_channels WHERE org_id = :o AND enabled"""),
                             {"o": org_id})).one_or_none()
     if row is None or not row.owner_chat_id or not row.owner_tg_user_id:
         raise BackupUnavailable("Chưa ghép Telegram của Sếp (mã chỉ gửi riêng cho Sếp, không gửi vào chat chung)")
     code = f"{secrets.randbelow(10000):04d}"
+    await db.execute(text("""UPDATE ops.backup_outbox SET failed_code = :f, text = :s
+                             WHERE org_id = :o AND kind = 'code' AND sent_at IS NULL AND failed_code IS NULL"""),
+                     {"o": org_id, "f": CODE_SUPERSEDED, "s": CODE_SCRUBBED})
+    what = []
+    if ask_code:
+        what.append(f"đề xuất {ask_code}")
+    if recipient:
+        what.append(f"gửi cho «{_clip(recipient, 60)}»")
+    if preview:
+        what.append(f"nội dung «{_clip(preview, PREVIEW_MAX)}»")
+    about = (" — dùng cho " + ", ".join(what)) if what else ""
     await db.execute(text("""
         INSERT INTO ops.backup_outbox (org_id, channel, kind, dedupe_key, text)
         VALUES (:o, 'telegram', 'code', :d, :t)"""),
         {"o": org_id, "d": f"code:{row.owner_chat_id}:{uuid.uuid4().hex}",   # chat đích (không phải bí mật) ghi theo hàng: bảng chưa có cột riêng
-         "t": f"Mã xác nhận của Sếp: {code} (dùng trong 10 phút; không đưa mã này cho ai, kể cả người xưng là Gen)."})
+         "t": f"Mã xác nhận của Sếp: {code}{about} (dùng trong 10 phút; không đưa mã này cho ai, kể cả người xưng là Gen). "
+              "Nếu không phải Sếp vừa yêu cầu: nhắn «khoá trợ lý»."})
     return hash_code(org_id, code)
 
 

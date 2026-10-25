@@ -69,6 +69,7 @@ ALL_REFUSED = "Em không làm hàng loạt. Mỗi đề xuất Sếp trả lời
 NOT_HERE = "Kênh này chưa xác nhận bằng chat được — Sếp mở Console để Xác nhận."
 FAILED = "Em chưa làm được đề xuất {code}: {why}. Chưa có gì thay đổi, Sếp thử lại hoặc mở Console."
 CANCELLED = "Đã huỷ đề xuất {code}. Em không làm gì cả."
+CODE_LIMIT = "Em đã gửi nhiều mã xác nhận trong ít phút nên tạm dừng; em chưa gửi {code}. Sếp thử lại sau 10 phút hoặc mở Console."
 UNDO_NEED_CODE = "Sếp nhắn «hoàn tác #MÃ» kèm mã việc vừa làm (trong 10 phút)."
 UNDO_REFUSED = ("Em không hoàn tác được {code}: chỉ việc riêng của Sếp vừa làm trong 10 phút mới hoàn tác ở đây "
                 "(việc khác Sếp sửa trong Console).")
@@ -227,8 +228,13 @@ async def _strong(sm: async_sessionmaker[AsyncSession], redis: Redis, org_id: uu
         reply: str | None = None
         if isinstance(r, strong_confirm.NeedCode):
             try:
-                await strong_confirm.issue_code(db, redis, org_id, p["id"])
+                f = p.get("fields") or {}
+                await strong_confirm.issue_code(db, redis, org_id, p["id"], ask_code=code,
+                                                recipient=(p.get("labels") or {}).get("subject") or "nhóm đã chọn",
+                                                preview=str(f.get("text") or ""))
                 reply = (CODE_RESENT if pin2 else CODE_SENT).format(code=code)
+            except strong_confirm.CodeRateLimited:
+                reply = CODE_LIMIT.format(code=code)
             except backup.BackupUnavailable:
                 reply = STRONG_CONSOLE.format(code=code, why=strong_confirm.UNLOCK_REASON)
         elif isinstance(r, strong_confirm.WrongCode):
