@@ -392,6 +392,7 @@ async def _undo(sm: async_sessionmaker[AsyncSession], app: Any, org_id: uuid.UUI
         await _set_org(db, org_id)
         rows = (await db.execute(text("""
             SELECT id, result FROM ops.asks WHERE org_id = :o AND code = :c AND state = 'executed' AND decision_kind = 'self'
+              AND source = 'proposal'
               AND decided_at >= now() - make_interval(secs => :w) AND COALESCE(result->>'undone', '') = ''
             ORDER BY decided_at DESC"""), {"o": org_id, "c": code, "w": UNDO_WINDOW_S})).all()
         await db.rollback()

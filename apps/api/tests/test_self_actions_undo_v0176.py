@@ -6,6 +6,7 @@ Tấn công: hoàn tác hai lần, quá 10 phút, ask không phải `self`, mã 
 
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any
 
@@ -94,3 +95,40 @@ async def test_undo_code_of_other_org_is_refused(chat: Chat, db: Any) -> None:
     await db.commit()
     assert "không hoàn tác được" in await chat.say("hoàn tác #ZZ9ZZ")
     assert await task_status(db) == "todo" and code
+
+
+# ─── review bảo mật: /viec đi CÙNG cổng với GET /asks (access.ask_visible_sql, L-90) ─────────
+
+async def test_viec_hides_people_and_console_pin_asks_and_their_count(chat: Chat, db: Any) -> None:
+    from datetime import timedelta
+
+    from gh.biz.intel import asks
+    from tests.test_intel_digest_rawtail_v0176 import NOW, _install, _sig
+
+    await _install(db, chat.org)
+    priv = await _sig(db, chat.org, "cau_hoi_cho_xu_ly", "q-priv", privacy="console_pin", impact_base=2, deadline_at=NOW + timedelta(hours=10))
+    for src, summ, sig in (("identity", "BÍ MẬT danh tính", None), ("profile", "BÍ MẬT hồ sơ", None),
+                           ("signal", "BÍ MẬT đánh giá người", priv.id), ("signal", "Việc thấy được", None)):
+        await asks.create(db, chat.org, source=src, ref_id=uuid.uuid4(), decision_kind="internal", summary=summ, signal_id=sig)
+    await db.commit()
+    reply = await chat.say("/viec")
+    assert "BÍ MẬT" not in reply, reply
+    assert "Chờ Sếp quyết (1)" in reply and "Việc thấy được" in reply
+    assert "3 mục cần xem trên Console" in reply
+
+
+async def test_viec_only_hidden_asks_shows_console_line_without_count_leak_of_summaries(chat: Chat, db: Any) -> None:
+    from gh.biz.intel import asks
+
+    await asks.create(db, chat.org, source="identity", ref_id=uuid.uuid4(), decision_kind="internal", summary="BÍ MẬT")
+    await db.commit()
+    reply = await chat.say("/viec")
+    assert "BÍ MẬT" not in reply and "Chờ Sếp quyết" not in reply and "1 mục cần xem trên Console" in reply
+
+
+async def test_undo_only_applies_to_proposal_asks(chat: Chat, db: Any) -> None:
+    await db.execute(text("""INSERT INTO ops.asks (org_id, code, source, ref_id, decision_kind, summary, state, decided_at, result)
+                             VALUES (:o, 'PR9FL', 'profile', :r, 'self', 'x', 'executed', now(), CAST(:res AS jsonb))"""),
+                     {"o": chat.org, "r": uuid.uuid4(), "res": json.dumps({"type": "task", "id": str(uuid.uuid4())})})
+    await db.commit()
+    assert "không hoàn tác được" in await chat.say("hoàn tác #PR9FL")

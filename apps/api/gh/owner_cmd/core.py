@@ -351,22 +351,34 @@ ASK_KIND_VI = {"self": "việc riêng — OK là làm", "internal": "OK là làm
 
 
 async def ask_lines(ctx: Context) -> list[str]:
-    """v0.1.76 (T2): hàng Cần quyết — asks đang mở của tổ chức (mã, tóm tắt do hệ thống viết, loại quyết định)."""
-    from gh.biz.intel import asks
+    """v0.1.76 (T2): hàng Cần quyết trên chat — CÙNG cổng với `GET /asks` (`access.ask_visible_sql`, L-90). Owner kênh chat không có
+    phiên PIN ⇒ ask nói về người (`profile`/`identity`), ask gắn tín hiệu `console_pin` hoặc nhóm ẩn KHÔNG hiện, không tính vào số;
+    chỉ một dòng "có N mục cần xem trên Console"."""
+    from gh.biz.intel import access
 
+    base = """FROM ops.asks q LEFT JOIN biz.alerts a ON a.id = q.signal_id AND a.org_id = q.org_id
+              WHERE q.org_id = :o AND q.state = 'open' AND (q.expires_at IS NULL OR q.expires_at > now())"""
     async with ctx.sm() as db:
         await _set_org(db, ctx.org_id)
-        rows = await asks.list_open(db, ctx.org_id, limit=MAX_LIST + 1)
-        n = int((await db.execute(text("""SELECT count(*) FROM ops.asks WHERE org_id = :o AND state = 'open'
-                                          AND (expires_at IS NULL OR expires_at > now())"""), {"o": ctx.org_id})).scalar_one())
+        owner = await owner_user(db, ctx.org_id, ctx.owner_user_id)
+        if owner is None:
+            await db.rollback()
+            return []
+        vis = access.ask_visible_sql(owner, "q", "a")     # owner_user dựng KHÔNG có PIN ⇒ luôn nhánh không-PIN
+        rows = (await db.execute(text(f"""SELECT q.code, q.summary, q.decision_kind {base} AND {vis}
+                                          ORDER BY q.created_at DESC LIMIT :n"""), {"o": ctx.org_id, "n": MAX_LIST})).all()  # noqa: S608
+        n = int((await db.execute(text(f"SELECT count(*) {base} AND {vis}"), {"o": ctx.org_id})).scalar_one())  # noqa: S608
+        hidden = int((await db.execute(text(f"SELECT count(*) {base} AND NOT {vis}"), {"o": ctx.org_id})).scalar_one())  # noqa: S608
         await db.rollback()
-    if not rows:
-        return []
-    out = [f"Chờ Sếp quyết ({n}):"]
-    out += [f"• #{a.code} — {otext.defang(otext.line(a.summary))} · {ASK_KIND_VI.get(a.decision_kind, a.decision_kind)}"
-            for a in rows[:MAX_LIST]]
-    if n > MAX_LIST:
-        out.append(f"… và {n - MAX_LIST} mục nữa")
+    out: list[str] = []
+    if rows:
+        out.append(f"Chờ Sếp quyết ({n}):")
+        out += [f"• #{a.code} — {otext.defang(otext.line(a.summary))} · {ASK_KIND_VI.get(a.decision_kind, a.decision_kind)}"
+                for a in rows]
+        if n > MAX_LIST:
+            out.append(f"… và {n - MAX_LIST} mục nữa")
+    if hidden:
+        out.append(f"Có {hidden} mục cần xem trên Console (mã PIN).")
     return out
 
 
