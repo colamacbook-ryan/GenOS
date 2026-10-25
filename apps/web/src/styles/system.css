@@ -500,3 +500,22 @@
 .ch-newgroups__apply { padding-top: 2px; }
 .ch-newmode { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .ch-tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 10.5px; color: var(--color-neutral-500); }
+
+/* ── v0.1.76 (T11): thẻ Tình báo — mỗi việc một hàng, phân cách bằng đường kẻ; hành động nằm dưới trạng thái ── */
+.intel-card { padding: 0 16px 8px; min-width: 0; display: flex; flex-direction: column; }
+.intel-row { display: flex; flex-direction: column; gap: 8px; padding: 12px 0; border-top: 1px solid var(--color-divider); min-width: 0; }
+.intel-row:first-child { border-top: 0; }
+.intel-row__head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.intel-row__title { font-size: 13px; font-weight: 500; color: var(--color-neutral-100); }
+.intel-row__body { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; min-width: 0; }
+.intel-row__body .muted-note { margin: 0; }
+.intel-list { list-style: none; margin: 0; padding: 0; width: 100%; display: flex; flex-direction: column; }
+.intel-list--scroll { max-height: 220px; overflow-y: auto; }
+.intel-list__item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; border-top: 1px solid var(--color-divider); font-size: 12.5px; min-width: 0; flex-wrap: wrap; }
+.intel-list__item:first-child { border-top: 0; }
+.intel-list__text { min-width: 0; overflow-wrap: anywhere; }
+.intel-check { display: inline-flex; align-items: center; gap: 8px; min-width: 0; cursor: pointer; }
+.intel-bulk { display: flex; align-items: flex-end; gap: 8px; flex-wrap: wrap; }
+.intel-bulk .gh-field { flex: 1 1 160px; }
+.ai-budget__intel { border-top: 1px solid var(--color-divider); padding-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.ai-budget__intel-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }

@@ -160,6 +160,10 @@ async def create_mute(body: MuteIn, user: service.CurrentUser = Depends(require_
         raise ApiError(422, "VALIDATION", "Loại tín hiệu không hợp lệ")
     if defensive and not user.pin_active():
         raise pin_required()
+    if defensive:
+        from gh.biz.intel import strong_confirm
+
+        await strong_confirm.require(db, user.org_id, "mute_defensive", via="console", pin_verified=True)    # báo kênh phụ
     m = await mutes.create(db, user.org_id, scope_type=body.scope_type, scope_value=body.scope_value,
                            source="pin" if user.pin_active() else "chat", user_id=user.id)
     await actionlog.record(db, org_id=user.org_id, actor_type="user", actor_id=user.actor_id, action="intel.mute.created",
@@ -247,6 +251,12 @@ async def delete_catalog(item_id: uuid.UUID, user: service.CurrentUser = Depends
     return {"ok": True}
 
 
+def _include_console() -> None:
+    from gh.biz.intel import console
+
+    router.include_router(console.router)
+
+
 def _include_subrouters() -> None:
     """Route của module con trong `detectors/`, `pipes/` (T3, T9, T10…) gắn vào cùng router — gói đó không sửa tệp này."""
     from gh.biz.intel.jobs import SUBMODULES
@@ -257,4 +267,5 @@ def _include_subrouters() -> None:
             router.include_router(sub)
 
 
+_include_console()
 _include_subrouters()
