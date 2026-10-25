@@ -37,10 +37,10 @@ router = APIRouter(tags=["intel"])
 _BASE = "org_id = :o AND outcome IS NULL AND kind NOT IN ('system', 'legacy')"
 #: (điều kiện SQL trên bảng biz.alerts bí danh `a`, outcome, result) — thứ tự = ưu tiên (luật trên thắng).
 _RULES: tuple[tuple[str, str, str], ...] = (
-    ("EXISTS (SELECT 1 FROM biz.promises p WHERE p.signal_id = a.id AND p.org_id = a.org_id AND p.kept_at IS NOT NULL)", "acted", "saved"),
+    ("a.status <> 'dismissed' AND EXISTS (SELECT 1 FROM biz.promises p WHERE p.signal_id = a.id AND p.org_id = a.org_id AND p.kept_at IS NOT NULL)", "acted", "saved"),
     ("a.status NOT IN ('acknowledged', 'resolved', 'dismissed') AND EXISTS (SELECT 1 FROM biz.promises p WHERE p.signal_id = a.id "
      "AND p.org_id = a.org_id AND p.kept_at IS NULL AND p.broken IS TRUE)", "ignored", "lost"),
-    ("EXISTS (SELECT 1 FROM ops.asks q WHERE q.signal_id = a.id AND q.org_id = a.org_id AND q.state IN ('confirmed', 'executed'))", "acted", "unknown"),
+    ("a.status <> 'dismissed' AND EXISTS (SELECT 1 FROM ops.asks q WHERE q.signal_id = a.id AND q.org_id = a.org_id AND q.state IN ('confirmed', 'executed'))", "acted", "unknown"),
     ("a.status IN ('acknowledged', 'resolved')", "acted", "unknown"),
     ("a.status = 'expired'", "ignored", "unknown"),
 )
@@ -81,7 +81,8 @@ JOBS: list[CronJob] = [(intel_outcomes, {"minute": {0, 15, 30, 45}})]
 
 
 class OutcomeIn(BaseModel):
-    result: Literal["saved", "lost", "neutral"]
+    outcome: Literal["acted", "ignored"] = "acted"
+    result: Literal["saved", "lost", "neutral", "unknown"]
     value_vnd: int | None = Field(default=None, ge=0, le=10**13)
     note: str | None = Field(default=None, max_length=500)
 
@@ -91,10 +92,10 @@ async def post_outcome(signal_id: uuid.UUID, body: OutcomeIn, user: service.Curr
                        db: AsyncSession = DB) -> dict[str, Any]:
     if await access.require_alert(db, user, signal_id) is None:
         raise not_found("Tín hiệu")
-    ok = await signals.set_outcome(db, user.org_id, signal_id, outcome="acted", result=body.result, by="owner", value_vnd=body.value_vnd,
+    ok = await signals.set_outcome(db, user.org_id, signal_id, outcome=body.outcome, result=body.result, by="owner", value_vnd=body.value_vnd,
                                    note=body.note)
     if not ok:
         raise not_found("Tín hiệu")
     await actionlog.record(db, org_id=user.org_id, actor_type="user", actor_id=user.actor_id, action="intel.signal.outcome",
-                           target_type="signal", target_id=str(signal_id), result="ok", detail={"result": body.result})
-    return {"ok": True, "outcome": "acted", "result": body.result}
+                           target_type="signal", target_id=str(signal_id), result="ok", detail={"outcome": body.outcome, "result": body.result})
+    return {"ok": True, "outcome": body.outcome, "result": body.result}

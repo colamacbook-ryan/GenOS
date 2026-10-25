@@ -6,8 +6,7 @@
 - `false_alarms`: M2 — 🔴 bị Sếp chấm Sai / ngày (trung bình `days`) + số 🔴 bị hạ do chạm trần / ngày.
 - `recall`: M11 — recall = phát hiện / (phát hiện + sót ước tính); sót ước tính = Σ 1/p của «sót» trong mẫu giàu tín hiệu (p lấy từ ghi chú
   «mẫu tầng tX p=…» T3 ghi; «em sót» tự báo p=1); khoảng tin cậy bootstrap 1.000 lần trên các ngày (hạt giống cố định); `n_eff` Kish trên mẫu đã gửi.
-- `cost`: M13 — token/VND/lượt theo luồng từ `refinery.group_budget` + % thời gian luồng bị giãn nhịp / chạm trần (`group_watermarks`, số phút TÍCH LUỸ
-  chia cửa sổ, kẹp 100%).
+- `cost`: M13 — token/VND/lượt theo luồng từ `refinery.group_budget` + số phút giãn nhịp / chạm trần TÍCH LUỸ của luồng (`group_watermarks`; Nợ: chưa có số phút theo ngày nên chưa tính được % cửa sổ, báo cáo tuần không in dòng này).
 - `acted`: M5 — tỉ lệ 🔴/🟠 đã gửi mà `outcome='acted'`, theo kết quả.
 Không có đường nào ở đây ghi vào tín hiệu / mute / chính sách: ngưỡng KHÔNG tự chỉnh, nên cổng lừa đảo/an toàn không thể bị hạ từ chỉ số.
 Báo cáo tuần: `deliver_weekly` — một tin `reports.enqueue(kind='reply')` mỗi tuần (Chủ nhật 18:30 VN), CHỈ số tổng hợp; khoá trợ lý chặn được.
@@ -86,6 +85,13 @@ def recall_ci(days: list[tuple[int, float]]) -> dict[str, float] | None:
     return {"est": est, "lo95": min(lo, est), "hi95": max(hi, est)}
 
 
+def _inv_p(p: Any) -> float | None:
+    """1/p khi p là số trong (0, 1]; không hợp lệ ⇒ None (bỏ qua, không chia cho 0)."""
+    if isinstance(p, bool) or not isinstance(p, (int, float)) or not 0 < p <= 1:
+        return None
+    return 1.0 / float(p)
+
+
 def _weight(note: str | None) -> float:
     m = _P_RE.search(note or "")
     if m is None:
@@ -96,22 +102,25 @@ def _weight(note: str | None) -> float:
 
 # ─── đọc số liệu ─────────────────────────────────────────────────────────────
 
-_LATEST = """SELECT DISTINCT ON (f.signal_id) f.signal_id, f.gate, f.verdict, f.at FROM biz.signal_feedback f
+#: `is_red`: 🔴 thật (đang 🔴, hoặc đã đẩy / sẽ đẩy ở chế độ bóng). 🟠 có `candidate` KHÔNG phải 🔴 (feedback.gate = gate or candidate).
+_LATEST = """SELECT DISTINCT ON (f.signal_id) f.signal_id, f.gate, f.verdict, f.at, a.level,
+                    (a.level = 'red' OR a.pushed_at IS NOT NULL OR a.would_push_at IS NOT NULL) AS is_red FROM biz.signal_feedback f
              JOIN biz.alerts a ON a.id = f.signal_id AND a.org_id = f.org_id
              WHERE f.org_id = :o AND f.verdict_by = 'owner' AND f.verdict IN ('correct', 'wrong') AND f.at >= :s
                AND a.kind NOT IN ('system', 'legacy') ORDER BY f.signal_id, f.at DESC"""
 
 
 async def _precision(db: AsyncSession, org_id: uuid.UUID, since: datetime) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    rows = (await db.execute(text(f"SELECT gate, count(*) FILTER (WHERE verdict = 'correct') AS k, count(*) AS n FROM ({_LATEST}) t GROUP BY gate"),  # noqa: S608
+    rows = (await db.execute(text(f"""SELECT CASE WHEN is_red THEN gate END AS gate, is_red, count(*) FILTER (WHERE verdict = 'correct') AS k, count(*) AS n
+                                      FROM ({_LATEST}) t WHERE is_red OR level = 'amber' GROUP BY 1, 2"""),  # noqa: S608
                              {"o": org_id, "s": since})).all()
-    got = {r.gate: (int(r.k), int(r.n)) for r in rows}
+    got = {(r.gate if r.is_red else ""): (int(r.k), int(r.n)) for r in rows if not r.is_red or r.gate}
     out = []
     for g in levels.GATES:
         k, n = got.get(g, (0, 0))
         w = wilson(k, n)
         out.append({"gate": g, "k": k, **w, "m1_ok": bool(n >= 15 and w["p"] >= 0.8 and w["lo95"] >= 0.6) if n else False})
-    k, n = got.get(None, (0, 0))
+    k, n = got.get("", (0, 0))
     amber = {"k": k, **wilson(k, n)}
     amber["m1b_ok"] = bool(n and amber["p"] >= 0.7)
     return out, amber
@@ -119,7 +128,7 @@ async def _precision(db: AsyncSession, org_id: uuid.UUID, since: datetime) -> tu
 
 async def _false_alarms(db: AsyncSession, org_id: uuid.UUID, since: datetime, days: int) -> dict[str, Any]:
     rows = (await db.execute(text(f"""SELECT (at AT TIME ZONE 'Asia/Ho_Chi_Minh')::date AS d, count(*) AS n FROM ({_LATEST}) t
-                                      WHERE verdict = 'wrong' AND gate = ANY(:g) GROUP BY 1 ORDER BY 1"""),  # noqa: S608
+                                      WHERE verdict = 'wrong' AND is_red AND gate = ANY(:g) GROUP BY 1 ORDER BY 1"""),  # noqa: S608
                               {"o": org_id, "s": since, "g": list(levels.GATES)})).all()
     capped = int((await db.execute(text("SELECT count(*) FROM biz.alerts WHERE org_id = :o AND capped_at >= :s AND kind NOT IN ('system', 'legacy')"),
                                    {"o": org_id, "s": since})).scalar_one())
@@ -148,7 +157,7 @@ async def _recall(db: AsyncSession, org_id: uuid.UUID, since: datetime, days: in
         series[0] = (series[0][0] + outside_d, series[0][1] + outside)
     refs = (await db.execute(text("""SELECT refs FROM ops.owner_outbox WHERE org_id = :o AND kind = 'ask' AND dedupe_key LIKE 'shadow-pack:%'
                                      AND created_at >= :s"""), {"o": org_id, "s": since})).scalars().all()
-    ws = [1.0 / float(x["p"]) for rr in refs for x in (rr or []) if isinstance(x, dict) and x.get("tier") != "shadow" and x.get("p")]
+    ws = [w for rr in refs for x in (rr or []) if isinstance(x, dict) and x.get("tier") != "shadow" and (w := _inv_p(x.get("p"))) is not None]
     ci = recall_ci(series)
     return {"est": ci["est"] if ci else None, "lo95": ci["lo95"] if ci else None, "hi95": ci["hi95"] if ci else None,
             "detected_n": sum(x[0] for x in series), "missed_n": len(miss_rows), "missed_est": sum(x[1] for x in series),
@@ -170,18 +179,17 @@ async def _cost(db: AsyncSession, org_id: uuid.UUID, days: int, now: datetime) -
         a["cost_vnd"] += float(r.cost_vnd)
         a["calls"] += int(r.calls)
         per_day[r.day] = per_day.get(r.day, 0.0) + float(r.cost_vnd)
-    window = days * 1440
 
-    def pct(mins: int, since: datetime | None) -> float:
-        extra = 0 if since is None else max(0, int((now - since).total_seconds() // 60))
-        return min(100.0, (mins + extra) / window * 100)
+    def total(mins: int, since: datetime | None) -> int:
+        """Số phút TÍCH LUỸ từ đầu (kể cả đang giãn nhịp). Nợ: cần số phút theo ngày mới tính được % cửa sổ."""
+        return mins + (0 if since is None else max(0, int((now - since).total_seconds() // 60)))
 
     out = []
     for tk in sorted(set(agg) | set(wm)):
         a = agg.get(tk, {"tokens_in": 0, "tokens_out": 0, "cost_vnd": 0.0, "calls": 0})
         w = wm.get(tk)
-        out.append({"thread_key": tk, **a, "stretched_pct": pct(int(w.stretched_minutes), w.stretched_at) if w else 0.0,
-                    "capped_pct": pct(int(w.capped_minutes), w.capped_at) if w else 0.0})
+        out.append({"thread_key": tk, **a, "stretched_minutes_total": total(int(w.stretched_minutes), w.stretched_at) if w else 0,
+                    "capped_minutes_total": total(int(w.capped_minutes), w.capped_at) if w else 0})
     caps = await budget.load_caps(db, org_id)
     over = sum(1 for v in per_day.values() if v > caps.budget_vnd) if caps.budget_vnd > 0 else None
     return {"total_vnd": sum(x["cost_vnd"] for x in out), "tokens_in": sum(x["tokens_in"] for x in out),
@@ -239,8 +247,6 @@ def weekly_text(m: dict[str, Any]) -> str:
              + f" · Sếp báo sót {rc['missed_n']}, lừa đảo/an toàn sót {rc['critical_missed_n']}",
              f"• Đã hành động: {a['acted']}/{a['delivered']} ({_pct(a['rate'])})",
              f"• Chi phí: {round(c['total_vnd']):,} ₫".replace(",", ".") + f" · {c['calls']} lượt"]
-    if c["by_thread"]:
-        lines.append(f"• Giãn nhịp tối đa {max(x['stretched_pct'] for x in c['by_thread']):.0f}% thời gian ở một luồng")
     return "\n".join(lines)[: reports.TEXT_MAX]
 
 

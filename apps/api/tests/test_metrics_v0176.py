@@ -44,6 +44,9 @@ async def _fb(db: AsyncSession, org: uuid.UUID, sid: uuid.UUID, verdict: str, ga
 async def _alert(db: AsyncSession, org: uuid.UUID, ck: str, *, level: str = "red", gate: str | None = None, **upd: Any) -> uuid.UUID:
     s = await _sig(db, org, "xung_dot_khieu_nai", ck, customer_of_owner=True, flags={"public": True})
     sets = {"level": level, "gate": gate, "title": SECRET, "summary": SECRET, **upd}
+    if level != "red":                                                          # 🟠/⚪ thật chưa từng được đẩy (upsert ban đầu có thể tính 🔴)
+        sets.setdefault("pushed_at", None)
+        sets.setdefault("would_push_at", None)
     await db.execute(text("UPDATE biz.alerts SET " + ", ".join(f"{k} = :{k}" for k in sets) + " WHERE id = :i"), {**sets, "i": s.id})  # noqa: S608
     await db.commit()
     return s.id
@@ -127,7 +130,7 @@ async def test_metrics_recall_weighted_by_tier_probability(db: AsyncSession) -> 
     assert 0 < r["n_eff"] <= 4 and r["critical_missed_n"] == 1
 
 
-async def test_metrics_cost_by_thread_with_stretch_percent(db: AsyncSession) -> None:
+async def test_metrics_cost_by_thread_with_cumulative_stretch(db: AsyncSession) -> None:
     org = await mk_org(db)
     prov = (await db.execute(text("INSERT INTO agent.providers (org_id, kind, name) VALUES (:o, 'openai', 'p') RETURNING id"), {"o": org})).scalar_one()
     mid = (await db.execute(text("INSERT INTO agent.models (provider_id, model_name) VALUES (:p, 'm') RETURNING id"), {"p": prov})).scalar_one()
@@ -143,7 +146,7 @@ async def test_metrics_cost_by_thread_with_stretch_percent(db: AsyncSession) -> 
     c = m["cost"]
     t = next(x for x in c["by_thread"] if x["thread_key"].startswith("g:1111"))
     assert t["cost_vnd"] == 2000 and t["calls"] == 2 and t["tokens_in"] == 110 and t["tokens_out"] == 55
-    assert abs(t["stretched_pct"] - 1440 / (7 * 1440) * 100) < 0.01 and abs(t["capped_pct"] - 144 / (7 * 1440) * 100) < 0.01
+    assert t["stretched_minutes_total"] == 1440 and t["capped_minutes_total"] == 144       # tích luỹ, không phải % cửa sổ
     assert c["total_vnd"] == 2000
 
 
@@ -237,3 +240,55 @@ async def test_weekly_job_runs_only_sunday_evening_vn(db: AsyncSession, monkeypa
     monkeypatch.setattr(clock, "now", lambda: SUNDAY)
     assert (await metrics.intel_weekly({}))["sent"] >= 1
     assert any(j[0] is metrics.intel_weekly for j in metrics.JOBS)
+
+
+async def test_metrics_amber_with_candidate_is_not_counted_as_red(db: AsyncSession) -> None:
+    """Probe review: 🟠 có `candidate` (feedback.gate = gate or candidate) không được vào M1/M2 🔴; nó thuộc M1b."""
+    from datetime import UTC as _U
+
+    from gh.biz.intel import signals
+
+    org = await mk_org(db)
+    sid = await _alert(db, org, "probe-1", level="amber", gate=None, candidate=levels.G3)
+    await signals.feedback(db, org, sid, verdict="wrong", verdict_by="owner", now=datetime.now(_U))
+    await db.commit()
+    async with SM()() as s:
+        m = await metrics.compute(s, org, days=14)
+    assert next(r for r in m["precision_ci"] if r["gate"] == levels.G3)["n"] == 0
+    assert m["false_alarms"]["total"] == 0 and m["amber"]["n"] == 1 and m["amber"]["k"] == 0
+
+
+async def test_metrics_would_push_counts_as_red_even_if_level_changed(db: AsyncSession) -> None:
+    org = await mk_org(db)
+    sid = await _alert(db, org, "wp", level="grey", gate=None, candidate=levels.G4, would_push_at=datetime.now(UTC))
+    await _fb(db, org, sid, "wrong", levels.G4)
+    async with SM()() as s:
+        m = await metrics.compute(s, org, days=14)
+    assert next(r for r in m["precision_ci"] if r["gate"] == levels.G4)["n"] == 1 and m["false_alarms"]["total"] == 1
+
+
+async def test_metrics_invalid_sample_probability_is_ignored(db: AsyncSession) -> None:
+    org = await mk_org(db)
+    refs = [{"n": 1, "tier": "t3", "p": 0, "signal_id": None, "raw_event_id": None},
+            {"n": 2, "tier": "t3", "p": 2.5, "signal_id": None, "raw_event_id": None},
+            {"n": 3, "tier": "t3", "p": "x", "signal_id": None, "raw_event_id": None},
+            {"n": 4, "tier": "t3", "p": 0.5, "signal_id": None, "raw_event_id": None}]
+    await db.execute(text("""INSERT INTO ops.owner_outbox (org_id, channel_type, kind, severity, dedupe_key, text, refs, created_at, not_before, next_attempt_at)
+                             VALUES (:o, 'zalo', 'ask', 'important', 'shadow-pack:y', 'gói', CAST(:r AS jsonb), now(), now(), now())"""),
+                     {"o": org, "r": json.dumps(refs)})
+    await db.commit()
+    async with SM()() as s:
+        m = await metrics.compute(s, org, days=14)
+    assert m["recall"]["sample_n"] == 1 and m["recall"]["n_eff"] == 1.0
+
+
+async def test_weekly_report_has_no_stretch_percent(db: AsyncSession) -> None:
+    org = await mk_org(db)
+    await db.execute(text("INSERT INTO refinery.group_watermarks (org_id, thread_key, stretched_minutes) VALUES (:o, 'g:x', 1440)"), {"o": org})
+    await db.commit()
+    async with SM()() as s:
+        m = await metrics.compute(s, org, days=7)
+        txt = metrics.weekly_text(m)
+    assert "giãn nhịp" not in txt
+    t = next(x for x in m["cost"]["by_thread"] if x["thread_key"] == "g:x")
+    assert t["stretched_minutes_total"] == 1440 and "stretched_pct" not in t

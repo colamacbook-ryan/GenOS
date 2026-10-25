@@ -287,3 +287,28 @@ async def test_context_ring_unconfirmed_bucket_needs_pin(owner_api: Api, db: Asy
     await db.commit()
     r = await owner_api.get("/contexts/chua_xac_nhan")
     assert r.json()["ring"]["hidden_pin"] is True
+
+
+async def test_context_ring_excludes_person_who_is_also_in_sensitive_group(owner_api: Api, db: AsyncSession) -> None:
+    """Probe review: người ở cả nhóm nhan_vien lẫn nhóm kinh_doanh không lộ qua /contexts/kinh_doanh khi chưa PIN (tên, nóng, số nhóm chung)."""
+    org = await org_id(db)
+    w = await link_owner_user(db, org)
+    g_biz = await mk_group(db, org, w.channel, "Nhóm KD")
+    g_hr = await mk_group(db, org, w.channel, "Nhóm NV")
+    await _ctx(db, org, g_biz, "kinh_doanh")
+    await _ctx(db, org, g_hr, "nhan_vien")
+    both, _ = await mk_person(db, org, w.channel, "Bạn Hùng", "h-3")
+    only, _ = await mk_person(db, org, w.channel, "Chị Mai KD", "m-3")
+    for g, p in ((g_biz, both), (g_hr, both), (g_biz, only)):
+        await db.execute(text("INSERT INTO core.group_members (group_id, person_id) VALUES (:g, :p)"), {"g": g, "p": p})
+    from gh.biz.mem import heat
+    for p in (both, only):
+        ent = (await entities.ensure_person(db, org, p)).id
+        await db.execute(text("""INSERT INTO mem.relation_heat_weekly (org_id, entity_a, entity_b, week, heat, state)
+                                 VALUES (:o, :a, :b, :w, 40, 'warm')"""), {"o": org, "a": w.owner, "b": ent, "w": heat.week_start(datetime.now(UTC))})
+    await db.commit()
+    r = await owner_api.get("/contexts/kinh_doanh")
+    ring = r.json()["ring"]
+    assert [x["label"] for x in ring["ring1"]] == ["Chị Mai KD"] and ring["ring2_n"] == 0 and "Bạn Hùng" not in r.text
+    await verify_pin(owner_api)
+    assert {x["label"] for x in (await owner_api.get("/contexts/kinh_doanh")).json()["ring"]["ring1"]} == {"Bạn Hùng", "Chị Mai KD"}

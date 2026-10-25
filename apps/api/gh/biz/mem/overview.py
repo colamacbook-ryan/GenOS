@@ -153,6 +153,15 @@ async def _ring(db: AsyncSession, user: service.CurrentUser, groups: dict[uuid.U
     persons = (await db.execute(text("""SELECT DISTINCT gm.person_id FROM core.group_members gm JOIN core.groups g ON g.id = gm.group_id
                                         WHERE g.org_id = :o AND gm.group_id = ANY(:g) AND gm.left_at IS NULL"""),
                                 {"o": user.org_id, "g": gids})).scalars().all() if gids else []
+    if persons and not access.can_see_private(user):
+        # Chưa PIN: loại MỌI người có mặt ở BẤT KỲ nhóm nhãn nhạy cảm hoặc chưa xác nhận (kể cả nhóm ngoài bối cảnh đang hỏi).
+        banned = set((await db.execute(text("""
+            SELECT DISTINCT gm.person_id FROM core.group_members gm JOIN core.groups g ON g.id = gm.group_id
+            WHERE g.org_id = :o AND gm.left_at IS NULL AND (
+              EXISTS (SELECT 1 FROM mem.group_contexts gc WHERE gc.org_id = g.org_id AND gc.group_id = g.id AND gc.source = 'owner' AND gc.context = ANY(:s))
+              OR NOT EXISTS (SELECT 1 FROM mem.group_contexts gc WHERE gc.org_id = g.org_id AND gc.group_id = g.id AND gc.source = 'owner'))"""),
+                                       {"o": user.org_id, "s": sorted(sensitive - {UNCONFIRMED})})).scalars().all())
+        persons = [p for p in persons if p not in banned]
     ents = (await db.execute(text("""SELECT id, display_name, person_id FROM mem.entities WHERE org_id = :o AND person_id = ANY(:p)
                                      AND forgotten_at IS NULL AND merged_into IS NULL AND NOT is_owner"""), {"o": user.org_id, "p": list(persons)})).all() if persons else []
     ring1: list[dict[str, Any]] = []

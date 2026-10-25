@@ -117,3 +117,26 @@ async def test_outcome_route_security(owner_api: Api, client: Any, db: AsyncSess
     assert (await owner_api.send("POST", f"/signals/{priv}/outcome", {"result": "saved"})).status_code == 200
     assert (await mgr.send("POST", f"/signals/{pub}/outcome", {"result": "saved"})).status_code == 403
     assert (await _row(db, other)).outcome is None
+
+
+async def test_outcomes_kept_promise_or_confirmed_ask_ignored_when_dismissed(db: AsyncSession) -> None:
+    org = await mk_org(db)
+    k = await _s(db, org, "dk", status="dismissed")
+    await _promise(db, org, k, kept=True)
+    a = await _s(db, org, "da", status="dismissed")
+    await db.execute(text("""INSERT INTO ops.asks (org_id, code, source, ref_id, decision_kind, summary, signal_id, state)
+                             VALUES (:o, 'AB3CD', 'signal', core.uuid_v7(), 'self', 'x', :s, 'confirmed')"""), {"o": org, "s": a})
+    await db.commit()
+    assert (await _run(org))["set"] == 0
+    assert (await _row(db, k)).outcome is None and (await _row(db, a)).outcome is None
+
+
+async def test_outcome_route_records_exact_choice_not_forced_acted(owner_api: Api, db: AsyncSession) -> None:
+    org = await org_id(db)
+    sid = await _s(db, org, "ig", status="open")
+    r = await owner_api.send("POST", f"/signals/{sid}/outcome", {"outcome": "ignored", "result": "lost"})
+    assert r.status_code == 200 and r.json()["outcome"] == "ignored"
+    assert tuple(await _row(db, sid)) == ("ignored", "lost", "owner")
+    r = await owner_api.send("POST", f"/signals/{sid}/outcome", {"result": "neutral"})            # mặc định acted
+    assert tuple(await _row(db, sid)) == ("acted", "neutral", "owner")
+    assert (await owner_api.send("POST", f"/signals/{sid}/outcome", {"outcome": "bậy", "result": "lost"})).status_code == 422
