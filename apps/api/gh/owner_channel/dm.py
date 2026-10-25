@@ -58,8 +58,8 @@ KIND_LABELS = {"nghia vu loi hua": "nghia_vu_loi_hua", "nghia vu": "nghia_vu_loi
                "quan he": "quan_he_nong_nguoi", "co hoi ket noi": "co_hoi_ket_noi", "co hoi": "co_hoi_ket_noi",
                "thi truong thong tin": "thi_truong_thong_tin", "thi truong": "thi_truong_thong_tin"}
 USAGE_QUIET = "Cách dùng: «giờ yên lặng 22:00-07:00» (giờ bắt đầu - giờ kết thúc, giờ Việt Nam)."
-_FB = {"sai": "wrong", "dung": "correct", "khong can bao": "unimportant"}
-_FB_RX = re.compile(r"^(?:(sai|dung|khong can bao) (\d{1,2})|(\d{1,2}) (sai|dung|khong can bao))$")
+_FB = {"sai": "wrong", "dung": "correct", "khong can bao": "unimportant", "sot": "missed"}
+_FB_RX = re.compile(r"^(?:(sai|dung|khong can bao|sot) (\d{1,2})|(\d{1,2}) (sai|dung|khong can bao|sot))$")
 _MUTE_RX = re.compile(r"^(?:tat|dung|ngung) bao (loai|nhom) (.+?)(?: nua)?$")
 _TIME_RX = re.compile(r"(\d{1,2})(?:[:h](\d{2})?)?")
 
@@ -113,7 +113,7 @@ def parse_intel(raw: str) -> tuple[str, Any] | None:
 
 
 async def _last_refs(db: AsyncSession, org_id: uuid.UUID) -> list[dict[str, Any]]:
-    r = (await db.execute(text("""SELECT refs FROM ops.owner_outbox WHERE org_id = :o AND kind IN ('digest', 'alert') AND sent_at IS NOT NULL
+    r = (await db.execute(text("""SELECT refs FROM ops.owner_outbox WHERE org_id = :o AND kind IN ('digest', 'alert', 'ask') AND sent_at IS NOT NULL
                                   AND jsonb_array_length(refs) > 0 ORDER BY sent_at DESC, created_at DESC LIMIT 1"""), {"o": org_id})).scalar_one_or_none()
     return [x for x in (r or []) if isinstance(x, dict)]
 
@@ -122,6 +122,8 @@ async def _feedback(db: AsyncSession, org_id: uuid.UUID, owner: Any, verdict: st
     ref = next((x for x in await _last_refs(db, org_id) if x.get("n") == n), None)
     if ref is None:
         return NOT_FOUND_REF.format(n=n)
+    if verdict == "missed" or not (ref.get("cluster_ids") or ref.get("signal_id")):
+        return await _sample_item(db, org_id, owner, verdict, n, ref)
     ids = [uuid.UUID(str(i)) for i in (ref.get("cluster_ids") or [ref.get("signal_id")]) if i]
     defensive = False
     for sid in ids:
@@ -140,6 +142,23 @@ async def _feedback(db: AsyncSession, org_id: uuid.UUID, owner: Any, verdict: st
         return NOT_FOUND_REF.format(n=n)
     return {"wrong": f"Em ghi nhận mục {n} báo sai, em sẽ chú ý hơn ạ.", "correct": f"Em ghi nhận mục {n} đúng ạ.",
             "unimportant": f"Em ghi nhận mục {n} không cần báo, em sẽ bớt báo loại này ạ."}[verdict]
+
+
+async def _sample_item(db: AsyncSession, org_id: uuid.UUID, owner: Any, verdict: str, n: int, ref: dict[str, Any]) -> str:
+    """Mục MẪU của gói gán nhãn chạy thử (không có tín hiệu): «N sót» ghi một lần sót kèm tầng + xác suất chọn (để T9 ước lượng recall)."""
+    if verdict != "missed":
+        return f"Mục {n} là mẫu kiểm tra — nếu đáng lẽ em phải báo thì Sếp nhắn «{n} sót» ạ."
+    raw_id = ref.get("raw_event_id")
+    content = "(mẫu từ gói gán nhãn)"
+    rid: uuid.UUID | None = None
+    if raw_id:
+        row = (await db.execute(text("SELECT id, body_text FROM raw.events WHERE id = :i AND org_id = :o LIMIT 1"),
+                                {"i": uuid.UUID(str(raw_id)), "o": org_id})).one_or_none()
+        if row is None:
+            return NOT_FOUND_REF.format(n=n)
+        rid, content = row.id, row.body_text or content
+    await coverage.record_missed(db, org_id, user_id=owner.id, text_=content, raw_event_id=rid, note=f"mẫu tầng {ref.get('tier')} p={ref.get('p')}")
+    return f"Em đã ghi nhận mục {n} bị sót (mẫu tầng {ref.get('tier')}), cảm ơn Sếp ạ."
 
 
 async def _missed(db: AsyncSession, org_id: uuid.UUID, owner: Any, kind_word: str | None, content: str) -> str:
