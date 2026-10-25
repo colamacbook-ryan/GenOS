@@ -74,3 +74,38 @@ async def test_no_unlock_via_telegram(owner_api: Api, bot: FakeBot, redis: Any, 
     await run(bot, redis, msg(3, body, date=now))
     assert await locked()
     assert OWNER_TG
+
+
+# ─── công tắc "Nhận tin từ Sếp" TẮT: chỉ lệnh khoá (chiều an toàn) được đi qua — Gen quyết ─────────
+
+async def _inbound_off() -> None:
+    async with admin_sessionmaker()() as s:
+        await s.execute(text("UPDATE ops.notify_channels SET inbound_enabled = false"))
+        await s.commit()
+
+
+async def test_inbound_off_owner_lock_still_works(owner_api: Api, bot: FakeBot, redis: Any) -> None:
+    await _pair(owner_api, bot, redis, update_id=1)
+    await _inbound_off()
+    res = await run(bot, redis, msg(2, "/khoa_tro_ly", date=datetime.now(UTC)))
+    assert res == ["handled:khoa_tro_ly"], res
+    assert await locked()
+
+
+async def test_inbound_off_stranger_lock_is_rejected(owner_api: Api, bot: FakeBot, redis: Any) -> None:
+    await _pair(owner_api, bot, redis, update_id=1)
+    await _inbound_off()
+    res = await run(bot, redis, msg(2, "/khoa_tro_ly", date=datetime.now(UTC), user_id=111, chat_id=111))
+    assert res and res[0].startswith("rejected:") and not await locked()
+
+
+async def test_inbound_off_other_commands_still_rejected_disabled(owner_api: Api, bot: FakeBot, redis: Any) -> None:
+    await _pair(owner_api, bot, redis, update_id=1)
+    await _inbound_off()
+    bot.calls.clear()
+    res = await run(bot, redis, msg(2, "/hom_nay", date=datetime.now(UTC)), msg(3, "khoá trợ lý giúp em với", date=datetime.now(UTC)))
+    assert res == ["rejected:disabled", "rejected:disabled"], res
+    assert bot.sent() == [] and not await locked()
+    async with admin_sessionmaker()() as s:
+        n = (await s.execute(text("SELECT count(*) FROM ops.action_log WHERE action = 'telegram.rejected' AND detail->>'reason' = 'disabled'"))).scalar_one()
+    assert n == 2
