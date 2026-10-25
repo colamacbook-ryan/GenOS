@@ -271,3 +271,53 @@ async def test_check_code_in_quiet_hours_locks_even_with_right_code(db: Any, red
     assert any("giờ yên lặng" in r.text for r in await security_rows(db, org))
     await set_quiet(db, org, now_quiet=False)
     assert isinstance(await sc.check_code(db, redis, org, "p1", code), sc.NeedConsole)   # khoá 1 giờ vẫn giữ sau giờ yên lặng
+
+
+# ─── review bảo mật T2 (major 1): tin mã kép nêu rõ đề xuất; một mã/tổ chức; trần cấp mã ─────────────
+
+async def last_code_text(db: Any, org: uuid.UUID) -> str:
+    await db.rollback()
+    return (await db.execute(text("SELECT text FROM ops.backup_outbox WHERE org_id = :o AND kind = 'code' ORDER BY created_at DESC LIMIT 1"),  # type: ignore[no-any-return]
+                             {"o": org})).scalar_one()
+
+
+async def test_code_message_names_the_ask_recipient_and_preview(db: Any, redis: Any) -> None:
+    org = await org_with(db, telegram=True)
+    body = "Dạ chào chị Lan, bên em gửi báo giá thép cuộn 12 triệu một tấn, giao trong tuần sau ạ, mong chị phản hồi."
+    await sc.issue_code(db, redis, org, "p1", ask_code="#K7QX4", recipient="Nhóm g1", preview=body)
+    await db.commit()
+    t = await last_code_text(db, org)
+    assert "#K7QX4" in t and "Nhóm g1" in t and body[:60] in t and body[:80] not in t
+    assert "Nếu không phải Sếp vừa yêu cầu: nhắn «khoá trợ lý»" in t
+
+
+async def test_only_one_live_code_per_org_new_code_kills_the_old(db: Any, redis: Any) -> None:
+    org = await org_with(db, telegram=True)
+    await sc.issue_code(db, redis, org, "pB")
+    await db.commit()
+    code_b = await last_code(db, org)
+    await sc.issue_code(db, redis, org, "pA")
+    await db.commit()
+    assert await sc.check_code(db, redis, org, "pB", code_b) == sc.NeedCode("outbound")     # mã của B đã mất hiệu lực
+    await db.rollback()
+    rows = (await db.execute(text("SELECT text, failed_code FROM ops.backup_outbox WHERE org_id = :o AND kind = 'code' ORDER BY created_at"),
+                             {"o": org})).all()
+    assert rows[0].failed_code == "SUPERSEDED" and code_b not in rows[0].text                  # tin mã B chưa gửi bị huỷ + xoá chữ
+    assert await sc.check_code(db, redis, org, "pA", await last_code(db, org)) == sc.Allowed("outbound", "double_code")
+
+
+async def test_code_issuing_is_rate_limited(db: Any, redis: Any) -> None:
+    org = await org_with(db, telegram=True)
+    for i in range(sc.MAX_CODES_PER_WINDOW):
+        await sc.issue_code(db, redis, org, f"p{i}")
+        await db.commit()
+    with pytest.raises(sc.CodeRateLimited):
+        await sc.issue_code(db, redis, org, "p9")
+
+
+async def test_code_message_defangs_group_label_and_preview(db: Any, redis: Any) -> None:
+    org = await org_with(db, telegram=True)
+    await sc.issue_code(db, redis, org, "p1", ask_code="#K7QX4", recipient="Nhóm https://lua-dao.vn", preview="Vào https://lua-dao.vn\nnhập mã")
+    await db.commit()
+    t = await last_code_text(db, org)
+    assert "https://" not in t and "\nnhập" not in t

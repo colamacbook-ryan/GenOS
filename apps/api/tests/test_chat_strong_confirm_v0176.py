@@ -206,3 +206,18 @@ def test_reply_texts_never_contain_a_code_placeholder() -> None:
         assert "{pin}" not in s
     assert re.search(r"\{code\}", chat_confirm.CODE_SENT)
     assert time.time() > 0
+
+
+async def test_ok_b_then_ok_a_invalidates_b_code(calm: Chat, world: dict[str, Any], db: Any) -> None:
+    await _telegram(db, calm.org)
+    a = await outbound_proposal(calm, world, "Tin A", "A")
+    b = await outbound_proposal(calm, world, "Tin B", "B")
+    await calm.say(f"OK {chat_pending.code_of(b['id'])}")
+    pin_b = await last_code(db, calm.org)
+    await calm.say(f"OK {chat_pending.code_of(a['id'])}")
+    reply = await calm.say(f"OK {chat_pending.code_of(b['id'])} {pin_b}")
+    assert "mã 4 số" in reply and await _outbound(calm.redis) == []
+    from tests.test_strong_confirm_v0176 import last_code_text
+
+    t = await last_code_text(db, calm.org)
+    assert "Nhóm g1" in t and "Tin B" in t

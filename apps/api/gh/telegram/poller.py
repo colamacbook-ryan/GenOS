@@ -121,8 +121,9 @@ async def _process(
             await inbound.record_reject(db, redis, org_id, verdict, update, owner_tg_user_id=cfg.owner_tg_user_id)
             await db.commit()
             return f"rejected:{verdict}"
-        if not row.inbound_enabled:
-            await inbound.record_reject(db, redis, org_id, inbound.R_DISABLED, update)
+        if not row.inbound_enabled and verdict.kind != inbound.LOCK_KIND:
+            await inbound.record_reject(db, redis, org_id, inbound.R_DISABLED, update,
+                                        owner_tg_user_id=cfg.owner_tg_user_id)
             await db.commit()
             return f"rejected:{inbound.R_DISABLED}"
         await db.commit()
@@ -141,6 +142,10 @@ async def _process(
     return f"handled:{verdict.kind}"
 
 
+def _paired(row: Any) -> bool:
+    return bool(row.owner_chat_id and row.owner_tg_user_id)
+
+
 async def poll_org(
     sm: Any, redis: Any, router: Any, org_id: uuid.UUID, *, transport: Any = None, timeout_s: int = 0
 ) -> dict[str, Any]:
@@ -151,7 +156,9 @@ async def poll_org(
         await db.execute(text("SELECT set_config('app.org_id', :o, true)"), {"o": str(org_id)})
         row = await inbound.load(db, org_id)
         await db.rollback()
-    if row is None or not row.enabled or not (row.inbound_enabled or inbound.pair_active(row)):
+    # v0.1.76 (T2): đã ghép ⇒ vẫn đọc tin khi công tắc "Nhận tin từ Sếp" tắt — CHỈ để lệnh khẩn «khoá trợ lý»
+    # (chiều an toàn) đi qua; mọi tin khác bị bỏ `disabled` ở `_process` (tắt = không nhận, không chờ tới khi bật).
+    if row is None or not row.enabled or not (row.inbound_enabled or inbound.pair_active(row) or _paired(row)):
         return out
     try:
         token = crypto.decrypt(bytes(row.token_enc), tsvc.TOKEN_AAD).decode()
@@ -195,7 +202,8 @@ async def run_inbound(
                 await db.execute(
                     text("""
             SELECT org_id FROM ops.notify_channels
-            WHERE enabled AND (inbound_enabled OR (pair_code_hash IS NOT NULL AND pair_expires_at > now()))""")
+            WHERE enabled AND (inbound_enabled OR (pair_code_hash IS NOT NULL AND pair_expires_at > now())
+                               OR (owner_chat_id IS NOT NULL AND owner_tg_user_id IS NOT NULL))""")
                 )
             )
             .scalars()

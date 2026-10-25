@@ -476,8 +476,11 @@ async def test_toggle_off_stops_polling_and_commands(owner_api: Api, bot: FakeBo
     r = await owner_api.send("PUT", "/notify/telegram/inbound", {"enabled": False})
     assert r.status_code == 200 and r.json()["inbound"] == {**r.json()["inbound"], "enabled": False, "paired": True}
     bot.calls.clear()
+    # v0.1.76 (T2, Gen quyết): đã ghép ⇒ vẫn đọc tin (cho lệnh khẩn «khoá trợ lý»); lệnh khác bị bỏ `disabled`
+    bot.updates = [msg(50, "/hom_nay", date=datetime.now(UTC))]
     out = await poller.run_inbound(sessionmaker(), redis, None, transport=httpx.MockTransport(bot.handle), budget_s=1)
-    assert out["orgs"] == 0 and bot.polls() == []
+    assert out["orgs"] == 1 and bot.sent() == []
+    assert "disabled" in [r.detail["reason"] for r in await _rejected_logs()]
     r = await owner_api.send("PUT", "/notify/telegram/inbound", {"enabled": True})
     assert r.status_code == 200 and r.json()["inbound"]["enabled"] is True
 

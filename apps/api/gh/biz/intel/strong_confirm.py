@@ -56,6 +56,8 @@ DANGER_WINDOW = timedelta(minutes=10)
 DANGER_MAX = 3
 ACTOR = "system:strong_confirm"
 _CODE_RE = re.compile(r"^[0-9]{4}$")
+MAX_CODES_PER_WINDOW = 3
+CODE_WINDOW = timedelta(minutes=10)
 
 CONSOLE_REASON = "Việc này cần mở Console (mã PIN)"
 UNLOCK_REASON = ("Tin gửi khách cần xác nhận mạnh: Sếp mở Console › Hệ thống › Tình báo › «Mở khoá hôm nay» (mã PIN), "
@@ -80,6 +82,10 @@ class NeedConsole:
 class NeedCode:
     """Chỉ cho `outbound`: cần mã kép qua kênh phụ (bên gọi gọi `issue_code` rồi hỏi Sếp «OK #MÃ <4 số>»)."""
     action: str
+
+
+class CodeRateLimited(Exception):
+    """Đã cấp quá `MAX_CODES_PER_WINDOW` mã trong `CODE_WINDOW` (chống dội mã / dò mã qua cấp lại liên tục)."""
 
 
 @dataclass(frozen=True)
@@ -255,8 +261,10 @@ async def unlock_today(db: AsyncSession, org_id: uuid.UUID, *, user_id: uuid.UUI
 
 # ─── mã kép ─────────────────────────────────────────────────────────────────
 
-def code_key(org_id: uuid.UUID, ref: str) -> str:
-    return f"gh:intel:sc:code:{org_id}:{ref}"
+def code_key(org_id: uuid.UUID, ref: str | None = None) -> str:
+    """MỘT khoá mã cho mỗi tổ chức (review bảo mật: một mã còn hiệu lực/tổ chức); giá trị = `<ref>|<băm>`. `ref` giữ để tương thích."""
+    del ref
+    return f"gh:intel:sc:code:{org_id}"
 
 
 def pass_key(session_id: uuid.UUID | str) -> str:
@@ -264,11 +272,17 @@ def pass_key(session_id: uuid.UUID | str) -> str:
     return f"gh:intel:sc:pass:{session_id}"
 
 
-async def issue_code(db: AsyncSession, redis: Any, org_id: uuid.UUID, ref: str) -> None:
-    """Gửi mã 4 số qua kênh phụ cho đề xuất `ref`; chỉ lưu BĂM (Redis, 10 phút). Mã cũ của cùng đề xuất bị thay.
+async def issue_code(db: AsyncSession, redis: Any, org_id: uuid.UUID, ref: str, *, ask_code: str | None = None,
+                     recipient: str | None = None, preview: str | None = None) -> None:
+    """Gửi mã 4 số qua kênh phụ cho đề xuất `ref`; chỉ lưu BĂM (Redis, 10 phút). Mỗi tổ chức MỘT mã: cấp mã mới (đề xuất nào cũng
+    vậy) ⇒ mã cũ mất hiệu lực. Tối đa `MAX_CODES_PER_WINDOW` lần/`CODE_WINDOW` ⇒ `CodeRateLimited`.
     Không có kênh phụ ⇒ `backup.BackupUnavailable`."""
-    h = await backup.send_code(db, org_id)
-    await redis.set(code_key(org_id, ref), h, ex=CODE_TTL_S)
+    await _serialize(db, org_id)
+    if await _count(db, org_id, "strong_confirm.code_sent", _now(None) - CODE_WINDOW) >= MAX_CODES_PER_WINDOW:
+        await _record(db, org_id, "strong_confirm.code_rate_limited", result="blocked", ref=ref)
+        raise CodeRateLimited(ref)
+    h = await backup.send_code(db, org_id, ask_code=ask_code, recipient=recipient, preview=preview)
+    await redis.set(code_key(org_id), f"{ref}|{h}", ex=CODE_TTL_S)
     await _record(db, org_id, "strong_confirm.code_sent", ref=ref)
 
 
@@ -283,18 +297,19 @@ async def check_code(db: AsyncSession, redis: Any, org_id: uuid.UUID, ref: str, 
     blocked = await _outbound_gate(db, org_id, t, quiet=await _quiet(db, org_id, t), step="check_code")
     if blocked is not None:
         return blocked
-    raw = await redis.get(code_key(org_id, ref))
-    if raw is None:
+    raw = await redis.get(code_key(org_id))
+    stored = (raw.decode() if isinstance(raw, bytes) else str(raw)) if raw is not None else ""
+    sref, _, h = stored.rpartition("|")
+    if not h or sref != ref:              # chưa có mã, hết hạn, hoặc mã đang sống là của đề xuất KHÁC ⇒ không so (không đếm sai)
         return NeedCode(OUTBOUND)
-    h = raw.decode() if isinstance(raw, bytes) else str(raw)
     if _CODE_RE.match(code or "") and backup.verify_code(org_id, code, h):
-        await redis.delete(code_key(org_id, ref))
+        await redis.delete(code_key(org_id))
         await _record(db, org_id, "strong_confirm.code_ok", ref=ref)
         return Allowed(OUTBOUND, "double_code")
     await _record(db, org_id, "strong_confirm.code_failed", result="blocked", ref=ref)
     since = max(t - LOCK_TTL, (await _last(db, org_id, "strong_confirm.code_ok")) or (t - LOCK_TTL))
     fails = await _count(db, org_id, "strong_confirm.code_failed", since)
     if fails >= MAX_CODE_FAILS:
-        await redis.delete(code_key(org_id, ref))
+        await redis.delete(code_key(org_id))
         return _locked(OUTBOUND, await lock_outbound(db, org_id, reason="code_fails", now=t))
     return WrongCode(OUTBOUND, MAX_CODE_FAILS - fails)
