@@ -7,7 +7,7 @@ Detector không gán mức: chỉ dựng `levels.SignalIn` rồi `signals.upsert
 from __future__ import annotations
 
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import orjson
@@ -123,7 +123,19 @@ async def _one(db: AsyncSession, org: uuid.UUID) -> Any:
 
 # ─── cổng 🔴 co_hoi_lon_sap_troi: chỉ khi thoả ĐỦ điều kiện ───────────────────
 
-async def test_s22_regression_red_via_gate_and_catalog_match_saved(db) -> None:  # type: ignore[no-untyped-def]
+async def test_s22_regression_red_via_gate_and_catalog_match_saved(db, monkeypatch: pytest.MonkeyPatch) -> None:  # type: ignore[no-untyped-def]
+    # cổng 5 không vượt giờ yên lặng (22:00–07:00 VN): cố định giờ làm việc, nếu không test đỏ khi CI chạy buổi tối giờ VN
+    monkeypatch.setenv("GH_ENV", "eval")
+    real = datetime.now(levels.VN)
+    day = real.replace(hour=10, minute=0, second=0, microsecond=0)
+    clock.freeze(day if day <= real else day - timedelta(days=1))
+    try:
+        await _s22_body(db)
+    finally:
+        clock.reset()
+
+
+async def _s22_body(db: AsyncSession) -> None:
     w = await _setup(db)
     await _demand(db, w)
     a = await _one(db, w.org)
