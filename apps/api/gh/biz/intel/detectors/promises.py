@@ -6,8 +6,8 @@ DUY NHẤT) và tín hiệu qua `signals.upsert`; không tự ghi `biz.alerts` (
 
 - Chiều lời hứa: Sếp/người của Sếp (`staff_of`) → ai đó = có tín hiệu (cổng 4 nếu bên nhận là khách `customer_of`); người khác → Sếp / người quan trọng =
   CHỈ theo dõi (sổ, không tín hiệu, CNS-087b); giữa hai người ngoài ⇒ bỏ.
-- Lời hứa có điều kiện: `condition.met ≠ yes` ⇒ `state='conditional'`, `due_at` = mốc "chưa tính" (9999) để bộ quét "quá hạn" cũ không đánh `broken`;
-  hạn chỉ tính từ khi điều kiện đạt; không bao giờ vào cổng 4.
+- Lời hứa có điều kiện: `condition.met ≠ yes` ⇒ `state='conditional'` (sổ giữ hạn danh nghĩa, cột `due_at` NOT NULL; bộ quét "quá hạn" cũ phải bỏ qua
+  `state='conditional'` — việc của gói T5); hạn trong tín hiệu chỉ tính từ khi điều kiện đạt; không bao giờ vào cổng 4.
 - ĐIỂM YẾU G-KB (a): hạn tới gần leo thang KHÔNG cần tin mới — `level_input` lưu hạn thật; T1 `next_eval_at`/`reevaluate_due` tính lại theo đồng hồ.
   Phần đồng hồ mà `levels.compute` không tự thấy (dấu hiệu trễ của việc có hạn: hạn đã trôi qua) do `project` đặt lại mỗi lượt quét.
 - ĐIỂM YẾU (b): fact bị `facts.close_kept` đóng ⇒ `sync_kept` đóng nghĩa vụ trong sổ (`kept`) và tín hiệu (`da_giu` ⇒ A16 ⇒ ⚪).
@@ -19,7 +19,7 @@ import logging
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import orjson
@@ -30,13 +30,13 @@ from gh.biz.hooks import CronJob
 from gh.biz.intel import levels, signals
 from gh.biz.intel.detectors import generic as g
 from gh.biz.mem import profile_read
+from gh.chassis import actionlog
 
 log = logging.getLogger("gh.intel.promises")
 
 PREDICATES = ("promised_to", "owes", "deadline")
-NOT_COUNTED = datetime(9999, 12, 31, tzinfo=UTC)         # hạn "chưa tính" (lời hứa có điều kiện chưa đạt / chưa có hạn)
 WINDOW_DAYS = 90
-SUBMISSION = re.compile(r"\b(nop|ho so|thau|bai thi|ky thi|thi tuyen|nop bai|dang ky)\b")
+SUBMISSION = re.compile(r"\b(nop (ho so|thau|bai|don|du thau)|ho so (thau|du thau|thi|xin)|du thau|goi thau|bai thi|ky thi|thi tuyen)\b")
 CUTOVER = re.compile(r"\b(cutover|go-?live|chuyen doi he thong|chuyen he thong|nang cap he thong)\b")
 
 
@@ -130,13 +130,17 @@ async def _ctx(db: AsyncSession, org_id: uuid.UUID, f: Any, sets: g.OrgSets, *, 
     gid, size = await g.raw_group(db, f.source_raw_event_id)
     kind = "viec_han" if f.predicate == "deadline" else "nghia_vu_loi_hua"
     to_customer = to is not None and to in sets.customers
-    ent_type = (await db.execute(text("SELECT entity_type FROM mem.entities WHERE id = :i"), {"i": subj})).scalar_one()
-    owner_side = subj == sets.owner or subj in sets.staff or ent_type in ("group", "org")
+    owner_side = subj == sets.owner or subj in sets.staff                  # việc của Sếp (không phải việc của nhóm/tổ chức bất kỳ)
     obstacle = False
     if to_customer and gid is not None:
+        pid = await _person_of(db, subj)
+        # trở ngại phải do CHÍNH người hứa báo (người gửi tin hoặc được nhắc tên trong đơn vị), trong cùng nhóm, sau lời hứa
         obstacle = (await db.execute(text("""
-            SELECT 1 FROM clean.meaning_units WHERE org_id = :o AND group_id = :g AND kind_hint = 'nghia_vu_loi_hua' AND superseded_by IS NULL
-              AND observed_at > :vf AND flags ->> 'blocks_work' = 'true' LIMIT 1"""), {"o": org_id, "g": gid, "vf": f.valid_from})).first() is not None
+            SELECT 1 FROM clean.meaning_units mu WHERE mu.org_id = :o AND mu.group_id = :g AND mu.kind_hint = 'nghia_vu_loi_hua'
+              AND mu.superseded_by IS NULL AND mu.observed_at > :vf AND mu.flags ->> 'blocks_work' = 'true'
+              AND ((CAST(:p AS uuid) IS NOT NULL AND mu.person_id = :p)
+                   OR EXISTS (SELECT 1 FROM mem.mentions m WHERE m.meaning_unit_id = mu.id AND m.entity_id = :s))
+            LIMIT 1"""), {"o": org_id, "g": gid, "vf": f.valid_from, "p": pid, "s": subj})).first() is not None
     return PromiseCtx(
         kind=kind, text=str(v.get("text") or ""), valid_from=f.valid_from, due_at=_due(v), to_customer=to_customer,
         owner_work=(owner_side or uf.get("blocks_work", False)) and not to_customer, obstacle=obstacle,
@@ -170,11 +174,13 @@ def _case_key(c: PromiseCtx, f: Any, promise_id: uuid.UUID | None) -> str:
 
 
 async def _write_row(db: AsyncSession, org_id: uuid.UUID, f: Any, c: PromiseCtx, p_from: uuid.UUID, p_to: uuid.UUID | None,
-                     *, closed: bool) -> Any:
+                     *, closed: bool) -> uuid.UUID | None:
     """Tạo/cập nhật dòng sổ `biz.promises` (chỉ lời hứa/nợ, có người hứa là hồ sơ người). Dòng đã `kept/broken/expired/cancelled` không bị đè."""
     conditional = c.condition_met is not None and c.condition_met != "yes"
     state = "kept" if closed else ("conditional" if conditional else "open")
-    due = NOT_COUNTED if (conditional or c.due_at is None) else c.due_at
+    if c.due_at is None:
+        return None                                                       # chưa có hạn ⇒ không có dòng sổ (cột due_at NOT NULL); tín hiệu vẫn theo dõi
+    due = c.due_at                                                       # lời hứa có điều kiện: giữ hạn danh nghĩa (hạn thật tính khi điều kiện đạt)
     cond = None if c.condition_met is None else orjson.dumps(
         {"met": c.condition_met, "nominal_due": c.due_at.isoformat() if c.due_at else None}).decode()
     row = (await db.execute(text("SELECT id, state FROM biz.promises WHERE org_id = :o AND fact_id = :f"), {"o": org_id, "f": f.id})).one_or_none()
@@ -207,23 +213,41 @@ async def _signal_for(db: AsyncSession, org_id: uuid.UUID, f: Any, c: PromiseCtx
         kind=c.kind, title="Lời hứa với khách sắp tới hạn" if c.to_customer else ("Nghĩa vụ cần theo dõi" if c.kind == "nghia_vu_loi_hua"
                                                                                   else "Việc có hạn"),
         summary=g.safe(c.text, 300) or None, detector="promises", detector_version="1", level_input=li,
-        evidence=[signals.EvidenceIn(type="fact", id=f.id, raw_event_id=f.source_raw_event_id)], case_key=ck, fact_ids=[f.id], due_at=due,
+        evidence=[signals.EvidenceIn(type="fact", id=f.id)], case_key=ck, fact_ids=[f.id], due_at=due,       # KHÔNG truyền raw_event_id: T1 gộp theo tin gốc, hai lời hứa cùng một tin sẽ thành một tín hiệu
+        
         expires_at=max(now + timedelta(days=7), (due or now) + timedelta(days=3)), person_ids=person_ids,
         thread_key=None, facts={"fact_id": str(f.id)})
     return await signals.upsert(db, org_id, up, now)
 
 
+_DUE_TS = r"""CASE WHEN jsonb_typeof(f.object_value) = 'object'
+      AND f.object_value ->> 'due_at' ~ '^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}(:?\d{2})?)?)?$'
+      THEN CAST(f.object_value ->> 'due_at' AS timestamptz) END"""
+
+
 async def project(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, limit: int = 500) -> list[signals.Signal]:
-    """Quét sự thật nghĩa vụ/hạn: ghi sổ + tạo/cập nhật tín hiệu. Chạy lại an toàn (một fact ⇒ một dòng sổ, một tín hiệu)."""
+    """Quét sự thật nghĩa vụ/hạn: ghi sổ + tạo/cập nhật tín hiệu. Chạy lại an toàn (một fact ⇒ một dòng sổ, một tín hiệu).
+    Lọc ở SQL (chỉ chiều Sếp/nhân viên hoặc bên nhận là Sếp/người quan trọng; bỏ fact không hạn, quá hạn > 3 ngày, đã đóng đã có sổ, đã bỏ qua)
+    và xếp theo hạn GẦN `now` nhất — fact cũ không chặn lời hứa mới."""
     await db.execute(text("SELECT pg_advisory_xact_lock(hashtext('intel_promises:' || :o))"), {"o": str(org_id)})
-    rows = (await db.execute(text(f"""
-        SELECT {_FACT_COLS} FROM mem.facts f
-        WHERE f.org_id = :o AND f.predicate = ANY(:p) AND f.status IN ('asserted', 'owner_confirmed') AND f.valid_from >= :since
-          AND (f.valid_to IS NULL OR (f.predicate <> 'deadline' AND NOT EXISTS (SELECT 1 FROM biz.promises p WHERE p.fact_id = f.id)))
-        ORDER BY f.valid_from LIMIT :n"""), {"o": org_id, "p": list(PREDICATES), "since": now - timedelta(days=WINDOW_DAYS), "n": limit})).all()  # noqa: S608
-    if not rows:
-        return []
     sets = await g.org_sets(db, org_id)
+    side = [e for e in (sets.owner, *sets.staff) if e is not None]
+    tos = [e for e in (sets.owner, *sets.key_relations) if e is not None]
+    rows = (await db.execute(text(f"""
+        SELECT {_FACT_COLS} FROM mem.facts f JOIN mem.entities se ON se.id = f.subject_id
+        CROSS JOIN LATERAL (SELECT {_DUE_TS} AS due_ts) d
+        LEFT JOIN LATERAL (SELECT COALESCE(te.merged_into, te.id) AS to_c FROM mem.entities te
+                           WHERE te.id::text = f.object_value ->> 'to_entity_id' AND te.org_id = :o LIMIT 1) t ON jsonb_typeof(f.object_value) = 'object'
+        WHERE f.org_id = :o AND f.predicate = ANY(:p) AND f.status IN ('asserted', 'owner_confirmed') AND f.valid_from >= :since
+          AND d.due_ts >= :dmin
+          AND NOT EXISTS (SELECT 1 FROM ops.action_log al WHERE al.org_id = :o AND al.action = 'intel.promises.skip' AND al.target_id = f.id::text)
+          AND ((f.predicate = 'deadline' AND f.valid_to IS NULL)
+               OR (f.predicate <> 'deadline'
+                   AND (COALESCE(se.merged_into, se.id) = ANY(CAST(:side AS uuid[])) OR t.to_c = ANY(CAST(:tos AS uuid[])))
+                   AND (f.valid_to IS NULL OR NOT EXISTS (SELECT 1 FROM biz.promises p WHERE p.fact_id = f.id))))
+        ORDER BY abs(extract(epoch FROM (d.due_ts - :now))) LIMIT :n"""),  # noqa: S608
+        {"o": org_id, "p": list(PREDICATES), "since": now - timedelta(days=WINDOW_DAYS), "dmin": now - timedelta(days=3), "now": now,
+         "side": side, "tos": tos, "n": limit})).all()
     out: list[signals.Signal] = []
     for f in rows:
         try:
@@ -233,6 +257,8 @@ async def project(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, limit: 
                 out.append(sig)
         except signals.SignalError as e:
             log.warning("promises: bỏ qua fact %s: %s", f.id, type(e).__name__)
+            await actionlog.record(db, org_id=org_id, actor_type="system", actor_id="system:promises", action="intel.promises.skip",
+                                   target_type="fact", target_id=str(f.id), result="ok", detail={"why": type(e).__name__})
     return out
 
 
@@ -265,37 +291,45 @@ async def _project_one(db: AsyncSession, org_id: uuid.UUID, f: Any, sets: g.OrgS
 
 
 async def sync_kept(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> int:
-    """Fact lời hứa đã bị đóng (`facts.close_kept`: `valid_to` có, trạng thái vẫn `asserted`) ⇒ sổ `kept` + tín hiệu `da_giu` (A16 ⇒ ⚪, tự `resolved`).
-    Fact bị `retracted` ⇒ sổ `cancelled`, tín hiệu `dismissed`. Trả số dòng sổ đã đổi."""
+    """Đóng nghĩa vụ + tín hiệu của lời hứa/việc đã xong. Hai chiều (không chỉ theo `biz.promises`):
+    1) SỔ: fact đã bị `facts.close_kept` đóng (`valid_to` có, vẫn `asserted`) hoặc Sếp bấm "đã giữ" (`kept_at`) ⇒ `kept`; fact `retracted` ⇒ `cancelled`.
+    2) TÍN HIỆU của detector này còn mở mà fact đã đóng/thu hồi, hoặc sổ đã `kept/cancelled` ⇒ `da_giu` (A16 ⇒ ⚪, tự `resolved`) / `dismissed`.
+       Chạy được cả khi Sếp chưa có hồ sơ người (không có dòng sổ) và cho fact `deadline`.
+    Trả số thay đổi (dòng sổ + tín hiệu); chạy lại ⇒ 0."""
+    n = 0
+    for p in (await db.execute(text("""
+        SELECT p.id, p.state, p.kept_at, f.status, f.valid_to FROM biz.promises p JOIN mem.facts f ON f.id = p.fact_id
+        WHERE p.org_id = :o AND p.state IN ('open', 'conditional')
+          AND (p.kept_at IS NOT NULL OR f.status = 'retracted' OR (f.valid_to IS NOT NULL AND f.status IN ('asserted', 'owner_confirmed')))
+        LIMIT 500"""), {"o": org_id})).all():
+        cancelled = p.status == "retracted" and p.kept_at is None
+        await db.execute(text("UPDATE biz.promises SET state = :s, kept_at = COALESCE(kept_at, :k) WHERE id = :i"),
+                         {"s": "cancelled" if cancelled else "kept", "k": None if cancelled else (p.valid_to or now), "i": p.id})
+        n += 1
     sets: g.OrgSets | None = None
     rows = (await db.execute(text(f"""
-        SELECT p.id AS pid, p.state AS pstate, {_FACT_COLS} FROM biz.promises p JOIN mem.facts f ON f.id = p.fact_id
-        WHERE p.org_id = :o AND p.state IN ('open', 'conditional')
-          AND ((f.valid_to IS NOT NULL AND f.status IN ('asserted', 'owner_confirmed')) OR f.status = 'retracted')
-        ORDER BY f.valid_to LIMIT 500"""), {"o": org_id})).all()  # noqa: S608
-    n = 0
+        SELECT a.id AS aid, a.case_key AS ck, a.kind AS akind, {_FACT_COLS}, f.status = 'retracted' AS retracted
+        FROM biz.alerts a JOIN mem.facts f ON f.id = CAST(a.facts ->> 'fact_id' AS uuid)
+        WHERE a.org_id = :o AND a.detector = 'promises' AND a.status IN ('open', 'acknowledged') AND a.facts ? 'fact_id'
+          AND (f.status = 'retracted' OR (f.valid_to IS NOT NULL AND f.status IN ('asserted', 'owner_confirmed'))
+               OR EXISTS (SELECT 1 FROM biz.promises p WHERE p.fact_id = f.id AND (p.kept_at IS NOT NULL OR p.state IN ('kept', 'cancelled'))))
+        LIMIT 500"""), {"o": org_id})).all()  # noqa: S608
     for f in rows:
-        retracted = f.status == "retracted"
-        await db.execute(text("""UPDATE biz.promises SET state = :s, kept_at = CASE WHEN :s = 'kept' THEN :k ELSE kept_at END WHERE id = :i"""),
-                         {"s": "cancelled" if retracted else "kept", "k": f.valid_to, "i": f.pid})
         n += 1
+        if f.retracted:
+            await signals.transition(db, org_id, f.aid, "dismissed", now=now, actor_type="system", actor_id="system:promises")
+            continue
         subj, to = await _parties(db, f)
         if subj is None:
+            await signals.transition(db, org_id, f.aid, "resolved", now=now, actor_type="system", actor_id="system:promises")
             continue
         sets = sets or await g.org_sets(db, org_id)
         c = await _ctx(db, org_id, f, sets, subj=subj, to=to)
-        ck = _case_key(c, f, f.pid)
-        al = (await db.execute(text("""SELECT id, status FROM biz.alerts WHERE org_id = :o AND kind = :k AND case_key = :c
-                                       ORDER BY created_at DESC LIMIT 1"""), {"o": org_id, "k": c.kind, "c": ck})).one_or_none()
-        if al is None or al.status not in signals.OPEN:
-            continue
-        if retracted:
-            await signals.transition(db, org_id, al.id, "dismissed", now=now, actor_type="system", actor_id="system:promises")
-            continue
         c.completed = True
-        up = signals.UpsertIn(kind=c.kind, title="Lời hứa đã giữ", summary=g.safe(c.text, 300) or None, detector="promises", detector_version="1",
-                              level_input=level_input(c, now), evidence=[signals.EvidenceIn(type="fact", id=f.id, raw_event_id=f.source_raw_event_id)],
-                              case_key=ck, fact_ids=[f.id], facts={"fact_id": str(f.id), "kept": True})
+        up = signals.UpsertIn(kind=f.akind, title="Lời hứa đã giữ" if c.kind == "nghia_vu_loi_hua" else "Việc đã xong", summary=g.safe(c.text, 300) or None,
+                              detector="promises", detector_version="1", level_input=level_input(c, now),
+                              evidence=[signals.EvidenceIn(type="fact", id=f.id)], case_key=f.ck, fact_ids=[f.id],
+                              facts={"fact_id": str(f.id), "kept": True})
         await signals.upsert(db, org_id, up, now)
     return n
 

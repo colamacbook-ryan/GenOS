@@ -239,3 +239,35 @@ def test_t4_detector_modules_register_jobs() -> None:
 
     names = {fn.__name__ for fn, _ in jobs.JOBS}
     assert {"intel_generic", "intel_promises"} <= names
+
+
+async def test_t4_units_without_verified_evidence_do_not_starve_fresh_ones(db: AsyncSession) -> None:
+    org = await mk_org(db)
+    await _install(db, org)
+    raw = await _raw(db, org)
+    for i in range(3):
+        u = await _unit_row(db, org, raw, "suc_khoe_an_toan", {"emergency": True}, at=NOW - timedelta(days=5, hours=i))
+        await db.execute(text("UPDATE clean.evidence SET quote_status = 'absent' WHERE meaning_unit_id = :u"), {"u": u})
+    await db.commit()
+    await _unit_row(db, org, raw, "suc_khoe_an_toan", {"emergency": True, "ongoing": True}, at=NOW - timedelta(minutes=5))
+    out = await G.project_units(db, org, NOW, limit=2)
+    assert len(out) == 1
+
+
+async def test_t4_named_victim_who_is_group_member_but_not_sender_passes_gate(db: AsyncSession) -> None:
+    """An toàn fail-high: nạn nhân nêu tên là thành viên nhóm (core.group_members), không phải người gửi."""
+    org = await mk_org(db)
+    await _install(db, org)
+    ch = (await db.execute(text("INSERT INTO core.channels (org_id, type, name) VALUES (:o, 'zalo', 'z') RETURNING id"), {"o": org})).scalar_one()
+    grp = (await db.execute(text("""INSERT INTO core.groups (org_id, code, channel_id, external_id, name, member_count)
+                                    VALUES (:o, 'GRP-T4S', :c, 'x', 'nhóm gia đình', 20) RETURNING id"""), {"o": org, "c": ch})).scalar_one()
+    raw = (await db.execute(text("""INSERT INTO raw.events (org_id, occurred_at, group_id, channel_id, external_msg_id, kind, body_text, payload, content_hash)
+                                    VALUES (:o, now(), :g, :c, 'm1', 'text', 'x', '{}', '\\x01') RETURNING id"""), {"o": org, "g": grp, "c": ch})).scalar_one()
+    sender = await mk_person_row(db, org, "Người gửi")
+    victim_p = await mk_person_row(db, org, "Bác Ba")
+    victim = (await entities.ensure_person(db, org, victim_p)).id
+    for p in (sender, victim_p):
+        await db.execute(text("INSERT INTO core.group_members (group_id, person_id) VALUES (:g, :p)"), {"g": grp, "p": p})
+    await _unit_row(db, org, raw, "suc_khoe_an_toan", {"emergency": True, "ongoing": True}, person=sender, mention_entity=victim)
+    out = await G.project_units(db, org, NOW)
+    assert len(out) == 1 and out[0].gate == levels.G2

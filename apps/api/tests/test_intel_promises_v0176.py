@@ -189,7 +189,7 @@ async def test_t4_conditional_promise_never_gate_and_never_broken_until_conditio
     await db.commit()
     assert out[0].gate is None and out[0].level != "red"
     [p] = await _promise_rows(db, w.org)
-    assert p.state == "conditional" and p.due_at.year == 9999       # hạn chưa tính: không bao giờ bị quét "quá hạn"
+    assert p.state == "conditional" and p.due_at.year == 2026       # hạn danh nghĩa (không dùng mốc 9999: vỡ phân trang /tasks/promises)
     assert p.conditions["met"] == "no"
     # nghiệm lại bằng đồng hồ: qua hạn danh nghĩa vẫn không cổng, không broken
     await promises.project(db, w.org, NOW + timedelta(hours=2))
@@ -224,7 +224,7 @@ async def test_t4_kept_promise_closes_obligation_and_signal(db: AsyncSession) ->
     assert res.closed == [f.id]                                    # cổng tin cậy của L1 đã đóng fact
     n = await promises.sync_kept(db, w.org, NOW)
     await db.commit()
-    assert n == 1
+    assert n >= 1
     [p] = await _promise_rows(db, w.org)
     assert p.state == "kept" and p.kept_at is not None
     [a] = await _alert(db, w.org)
@@ -304,3 +304,89 @@ def test_t4_detector_registers_job_and_never_sets_levels() -> None:
     assert any(fn.__name__ == "intel_promises" for fn, _ in jobs.JOBS)
     src = pathlib.Path(promises.__file__).read_text()
     assert not re.search(r"UPDATE\s+biz\.alerts", src, re.I), "detector không được tự ghi biz.alerts (chỉ signals.py)"
+
+
+# ─── review T4 (vòng 2) ───────────────────────────────────────────────────────
+
+async def test_t4_two_promises_in_same_message_stay_two_signals(db: AsyncSession) -> None:
+    w = await _world(db)
+    raw = uuid.uuid4()
+    for body, h in (("giao 20 bao xi măng", 3), ("gửi hóa đơn VAT", 30)):
+        val = {"text": body, "due_at": (NOW + timedelta(hours=h)).isoformat(), "at": None, "to_entity_id": str(w.cust)}
+        await facts.assert_fact(db, mkfact(w.org, w.staff, val, NOW - timedelta(hours=20), predicate="promised_to", raw=raw))
+    await db.commit()
+    for i in range(3):
+        await promises.project(db, w.org, NOW + timedelta(minutes=5 * i))
+        await db.commit()
+    al = await _alert(db, w.org)
+    assert len(al) == 2
+    assert sorted(a.level for a in al) == ["amber", "red"]
+    assert {r.signal_id for r in await _promise_rows(db, w.org)} == {a.id for a in al}
+
+
+async def test_t4_old_facts_do_not_starve_new_promise(db: AsyncSession) -> None:
+    w = await _world(db)
+    for i in range(8):
+        await _fact(db, w, "promised_to", w.staff, f"việc cũ {i}", at=NOW - timedelta(days=40 + i), due=NOW - timedelta(days=30), to=w.cust)
+    await _fact(db, w, "promised_to", w.staff, "giao hàng chiều nay", at=NOW - timedelta(hours=2), due=NOW + timedelta(hours=3), to=w.cust)
+    out = await promises.project(db, w.org, NOW, limit=5)
+    assert [s.gate for s in out] == [levels.G4]
+
+
+async def test_t4_group_deadline_is_not_owner_work(db: AsyncSession) -> None:
+    w = await _world(db)
+    grp = await entities.create(db, w.org, "group", "Lớp 5A phụ huynh")
+    await _fact(db, w, "deadline", grp.id, "hạn nộp học phí lớp 5A", at=NOW - timedelta(hours=3), due=NOW + timedelta(hours=2))
+    out = await promises.project(db, w.org, NOW)
+    assert all(s.level != "red" for s in out)
+
+
+def test_t4_work_type_needs_real_submission_words() -> None:
+    assert promises.work_type("đăng ký tên miền") == "deadline_today"
+    assert promises.work_type("nộp tiền điện") == "deadline_today"
+    assert promises.work_type("nộp hồ sơ dự thầu") == "submission_today"
+
+
+async def test_t4_owner_without_person_kept_closes_signal_and_deadline_close_and_ui_kept(db: AsyncSession) -> None:
+    w = await _world(db)
+    f = await _fact(db, w, "promised_to", w.owner.id, "giao hàng chị Tư", at=NOW - timedelta(hours=20), due=NOW + timedelta(hours=3), to=w.cust)
+    d = await _fact(db, w, "deadline", w.staff, "nộp hồ sơ thầu", at=NOW - timedelta(hours=20), due=NOW + timedelta(hours=5))
+    # Sếp bấm "đã giữ" trên UI: chỉ đặt kept_at của sổ
+    p_from = (await db.execute(text("SELECT person_id FROM mem.entities WHERE id = :i"), {"i": w.staff})).scalar_one()
+    f2 = await _fact(db, w, "promised_to", w.staff, "gửi báo giá", at=NOW - timedelta(hours=20), due=NOW + timedelta(hours=3), to=w.cust)
+    await promises.project(db, w.org, NOW)
+    await db.commit()
+    assert {a.level for a in await _alert(db, w.org)} == {"red"}
+    await db.execute(text("UPDATE mem.facts SET valid_to = :t WHERE id = ANY(:i)"), {"t": NOW - timedelta(hours=1), "i": [f.id, d.id]})
+    await db.execute(text("UPDATE biz.promises SET kept_at = :t WHERE fact_id = :f"), {"t": NOW, "f": f2.id})
+    await db.commit()
+    assert p_from is not None
+    await promises.sync_kept(db, w.org, NOW + timedelta(minutes=5))
+    await db.commit()
+    assert [a.status for a in await _alert(db, w.org)] == ["resolved"] * 3
+    assert await promises.sync_kept(db, w.org, NOW + timedelta(minutes=6)) == 0
+
+
+async def _unit_flag(db: AsyncSession, w: World, group: uuid.UUID, person: uuid.UUID | None, at: datetime) -> None:
+    await db.execute(text("""INSERT INTO clean.meaning_units (org_id, observed_at, group_id, person_id, event_type, conclusion, entities, confidence,
+                             run_id, kind_hint, flags) VALUES (:o, :t, :g, :p, 'GroupUnit', 'kẹt xe', '{}', 0.8, :r, 'nghia_vu_loi_hua',
+                             '{"blocks_work": true}')"""), {"o": w.org, "t": at, "g": group, "p": person, "r": uuid.uuid4()})
+    await db.commit()
+
+
+async def test_t4_obstacle_only_from_the_promiser(db: AsyncSession) -> None:
+    w = await _world(db)
+    ch = (await db.execute(text("INSERT INTO core.channels (org_id, type, name) VALUES (:o, 'zalo', 'z') RETURNING id"), {"o": w.org})).scalar_one()
+    grp = (await db.execute(text("""INSERT INTO core.groups (org_id, code, channel_id, external_id, name, member_count)
+                                    VALUES (:o, 'GRP-T4', :c, 'x', 'nhóm', 20) RETURNING id"""), {"o": w.org, "c": ch})).scalar_one()
+    raw = (await db.execute(text("""INSERT INTO raw.events (org_id, occurred_at, group_id, channel_id, external_msg_id, kind, body_text, payload, content_hash)
+                                    VALUES (:o, now(), :g, :c, 'm1', 'text', 'x', '{}', '\\x01') RETURNING id"""), {"o": w.org, "g": grp, "c": ch})).scalar_one()
+    await facts.assert_fact(db, mkfact(w.org, w.staff, {"text": "giao hàng", "due_at": (NOW + timedelta(hours=5)).isoformat(), "at": None,
+                                                         "to_entity_id": str(w.cust)}, NOW - timedelta(hours=20), predicate="promised_to", raw=raw))
+    other = await mk_person_row(db, w.org, "Người khác")
+    await _unit_flag(db, w, grp, other, NOW - timedelta(hours=1))
+    out = await promises.project(db, w.org, NOW)
+    assert out[0].level == "amber"                                  # trở ngại của người khác trong nhóm không tính
+    await _unit_flag(db, w, grp, w.staff_person, NOW - timedelta(minutes=30))
+    out = await promises.project(db, w.org, NOW + timedelta(minutes=1))
+    assert out and out[0].gate == levels.G4

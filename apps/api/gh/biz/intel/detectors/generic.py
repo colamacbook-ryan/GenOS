@@ -174,6 +174,15 @@ async def _unit_ctx(db: AsyncSession, org_id: uuid.UUID, u: Any, sets: OrgSets, 
     if u.person_id:
         sender = (await db.execute(text("SELECT id FROM mem.entities WHERE org_id = :o AND person_id = :p AND merged_into IS NULL"),
                                    {"o": org_id, "p": u.person_id})).scalar_one_or_none()
+    members: set[uuid.UUID] = set()
+    if group_id is not None:
+        members = set((await db.execute(text("""SELECT e.id FROM core.group_members gm JOIN mem.entities e ON e.person_id = gm.person_id AND e.org_id = :o
+                                                WHERE gm.group_id = :g AND gm.left_at IS NULL"""), {"o": org_id, "g": group_id})).scalars().all())
+    # AN TOÀN FAIL-HIGH: nhóm chưa có danh sách thành viên thì người được nêu tên coi như thành viên (đừng làm mất cổng vì thiếu dữ liệu)
+
+    def in_group(ent: uuid.UUID) -> bool:
+        return ent == sender or ent in members or (group_id is not None and not members)
+
     victims: list[levels.PersonRel] = []
     seen: set[uuid.UUID] = set()
     for m in (await db.execute(text("SELECT surface, entity_id FROM mem.mentions WHERE meaning_unit_id = :u AND org_id = :o"),
@@ -181,7 +190,7 @@ async def _unit_ctx(db: AsyncSession, org_id: uuid.UUID, u: Any, sets: OrgSets, 
         ent = await canonical(db, m.entity_id)
         if ent is not None and ent not in seen:
             seen.add(ent)
-            victims.append(person_rel(ent, sets, ref=f"e_{ent}", thread_member=ent == sender))
+            victims.append(person_rel(ent, sets, ref=f"e_{ent}", thread_member=in_group(ent)))
         elif ent is None and sender is not None and KIN.search(fold(m.surface or "")):
             victims.append(levels.PersonRel(ref=f"kin_{len(victims)}", kin_of_member=True))
     if not victims and sender is not None:
@@ -194,13 +203,22 @@ async def _unit_ctx(db: AsyncSession, org_id: uuid.UUID, u: Any, sets: OrgSets, 
                    thread=thread_of(group_id, size), hard_rules=hard, owner_work=(sender in sets.staff or sender == sets.owner) if sender else False)
 
 
+async def _skip(db: AsyncSession, org_id: uuid.UUID, target_type: str, target_id: uuid.UUID, err: Exception) -> None:
+    from gh.chassis import actionlog
+    await actionlog.record(db, org_id=org_id, actor_type="system", actor_id="system:generic", action="intel.generic.skip",
+                           target_type=target_type, target_id=str(target_id), result="ok", detail={"why": type(err).__name__})
+
+
 async def project_units(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, limit: int = 200) -> list[signals.Signal]:
     rows = (await db.execute(text("""
         SELECT mu.id, mu.observed_at, mu.group_id, mu.person_id, mu.conclusion, mu.kind_hint, mu.flags, mu.gate_candidate, mu.harm, mu.confidence
         FROM clean.meaning_units mu
         WHERE mu.org_id = :o AND mu.kind_hint = ANY(:k) AND mu.superseded_by IS NULL AND mu.observed_at >= :since
           AND NOT EXISTS (SELECT 1 FROM biz.alerts a WHERE a.org_id = :o AND a.facts ->> 'unit_id' = mu.id::text)
-        ORDER BY mu.observed_at LIMIT :n"""), {"o": org_id, "k": list(UNIT_KINDS), "since": now - timedelta(days=WINDOW_DAYS), "n": limit})).all()
+          AND EXISTS (SELECT 1 FROM clean.evidence ce WHERE ce.meaning_unit_id = mu.id AND ce.meaning_observed_at = mu.observed_at
+                        AND ce.quote_status = 'verified' AND ce.raw_event_id IS NOT NULL)
+          AND NOT EXISTS (SELECT 1 FROM ops.action_log al WHERE al.org_id = :o AND al.action = 'intel.generic.skip' AND al.target_id = mu.id::text)
+        ORDER BY mu.observed_at DESC LIMIT :n"""), {"o": org_id, "k": list(UNIT_KINDS), "since": now - timedelta(days=WINDOW_DAYS), "n": limit})).all()
     if not rows:
         return []
     sets = await org_sets(db, org_id)
@@ -231,6 +249,7 @@ async def project_units(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, l
                 out.append(await signals.upsert(db, org_id, up, now))
         except signals.SignalError as e:
             log.warning("generic: bỏ qua đơn vị %s: %s", u.id, type(e).__name__)
+            await _skip(db, org_id, "meaning_unit", u.id, e)                 # đánh dấu: không lấy lại mãi, không chiếm chỗ đơn vị mới
     return out
 
 
@@ -262,7 +281,9 @@ async def project_events(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, 
         SELECT f.id, f.subject_id, f.object_value, f.valid_from, f.source_class, f.source_raw_event_id, f.agreement, f.confidence_exist
         FROM mem.facts f WHERE f.org_id = :o AND f.predicate = 'scheduled_event' AND f.valid_to IS NULL
           AND f.status IN ('asserted', 'owner_confirmed') AND f.valid_from >= :since
-        ORDER BY f.valid_from LIMIT :n"""), {"o": org_id, "since": now - timedelta(days=60), "n": limit})).all()
+          AND NOT EXISTS (SELECT 1 FROM ops.action_log al WHERE al.org_id = :o AND al.action = 'intel.generic.skip' AND al.target_id = f.id::text)
+          AND jsonb_typeof(f.object_value) = 'object' AND COALESCE(f.object_value ->> 'at', f.object_value ->> 'due_at') ~ '^\\d{4}-\\d{2}-\\d{2}'
+        ORDER BY f.valid_from DESC LIMIT :n"""), {"o": org_id, "since": now - timedelta(days=60), "n": limit})).all()
     if not rows:
         return []
     sets = await org_sets(db, org_id)
@@ -288,7 +309,7 @@ async def project_events(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, 
             async with db.begin_nested():
                 up = signals.UpsertIn(
                     kind="su_kien_dip", title="Sắp tới dịp / sự kiện", summary=safe(c.text, 300) or None, detector="generic",
-                    detector_version="1", level_input=li, evidence=[signals.EvidenceIn(type="fact", id=f.id, raw_event_id=f.source_raw_event_id)],
+                    detector_version="1", level_input=li, evidence=[signals.EvidenceIn(type="fact", id=f.id)],         # không truyền raw_event_id: T1 gộp theo tin gốc
                     case_key=levels.case_key("su_kien_dip", at=f.valid_from, entity_id=str(subj) if subj else None,
                                              event_date=at.astimezone(levels.VN).date().isoformat(), raw_event_id=str(f.source_raw_event_id)
                                              if f.source_raw_event_id else None),
@@ -297,6 +318,7 @@ async def project_events(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, 
                 out.append(await signals.upsert(db, org_id, up, now))
         except signals.SignalError as e:
             log.warning("generic: bỏ qua sự kiện %s: %s", f.id, type(e).__name__)
+            await _skip(db, org_id, "fact", f.id, e)
     return out
 
 
