@@ -437,6 +437,46 @@ class ToolRunner:
             raise ToolError("NOT_FOUND", "Không tìm thấy")
         return {**args, key: str(ent)}
 
+    async def _filter_explain_units(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Mọi kind của explain.get lồng các đơn vị ý nghĩa (`units`, bằng chứng trong `factors`): bỏ đơn vị lừa đảo (luôn) và sức khoẻ
+        (khi chưa có phiên PIN) ngay tại đây — cùng luật với `_guard_explain` kind=meaning_unit và bản tóm tắt hồ sơ (§4.5)."""
+        def unit_id(x: Any) -> str | None:
+            if isinstance(x, dict) and (x.get("type") in (None, "meaning_unit")) and isinstance(x.get("id"), str):
+                return str(x["id"])
+            return None
+
+        ids: set[uuid.UUID] = set()
+        for u in data.get("units") or []:
+            if (i := unit_id(u)) is not None:
+                try:
+                    ids.add(uuid.UUID(i))
+                except ValueError:
+                    continue
+        for f in data.get("factors") or []:
+            for e in (f.get("evidence") or []) if isinstance(f, dict) else []:
+                if isinstance(e, dict) and e.get("type") == "meaning_unit" and isinstance(e.get("id"), str):
+                    try:
+                        ids.add(uuid.UUID(e["id"]))
+                    except ValueError:
+                        continue
+        if not ids:
+            return data
+        from gh.db import sessionmaker
+
+        async with sessionmaker()() as db:
+            rows = (await db.execute(text("SELECT id, kind_hint FROM clean.meaning_units WHERE org_id = :o AND id = ANY(:i)"),
+                                     {"o": self.user.org_id, "i": list(ids)})).all()
+        pin = self.user.pin_active()
+        blocked = {str(r.id) for r in rows if r.kind_hint == FRAUD_SIGNAL or (r.kind_hint == "suc_khoe_an_toan" and not pin)}
+        if not blocked:
+            return data
+        out = dict(data)
+        out["units"] = [u for u in data.get("units") or [] if unit_id(u) not in blocked]
+        out["factors"] = [f for f in data.get("factors") or []
+                          if not (isinstance(f, dict) and any(isinstance(e, dict) and e.get("id") in blocked for e in f.get("evidence") or []))]
+        out["withheld_n"] = len(blocked)
+        return out
+
     async def _guard_explain(self, tool: Tool, args: dict[str, Any]) -> None:
         """`explain.get kind=alert`: chỉ khi tín hiệu gốc có `privacy = chat_ok` (console_pin ⇒ từ chối, kể cả khi Sếp có PIN)."""
         if tool.name != "explain.get":
@@ -481,6 +521,8 @@ class ToolRunner:
                 fraud = frozenset((await db.execute(text(
                     "SELECT code FROM mem.predicates WHERE dispute_signal_kind = :k"), {"k": FRAUD_SIGNAL})).scalars().all())
             return _filter_fact_rows(data, pin=self.user.pin_active(), fraud_predicates=fraud)
+        if tool.name == "explain.get" and isinstance(data, dict):
+            return await self._filter_explain_units(data)
         if tool.name == "signal.list" and isinstance(data, dict):
             return {**data, "items": [i for i in data.get("items") or []
                                       if isinstance(i, dict) and i.get("privacy") == CHAT_PRIVACY]}

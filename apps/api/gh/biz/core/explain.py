@@ -214,6 +214,16 @@ async def _score(db: AsyncSession, user: service.CurrentUser, sc: Scope, id: str
             raise not_found("Điểm")
         if not user.pin_active():
             raise pin_required()
+        # Phải còn điểm HIỆN HÀNH và người đó còn đủ điều kiện được chấm (không trả lịch sử người đã thành người thân).
+        from gh.biz.people import jobs as people_jobs
+
+        cur = (await db.execute(text("""
+            SELECT 1 FROM clean.current_scores cs JOIN core.persons p ON p.id = cs.subject_id AND p.org_id = :o
+            WHERE cs.subject_type = 'person' AND cs.subject_id = :s AND cs.dimension = 'reliability'"""),
+                                {"o": user.org_id, "s": subject_id})).first()
+        ok = subject_type == "person" and cur is not None
+        if not ok or not await people_jobs.reliability_still_eligible(db, user.org_id, subject_id):
+            raise not_found("Điểm")
     if subject_type == "person":
         visible = await _unit_visible(db, sc, subject_id, None)
     elif subject_type == "group":

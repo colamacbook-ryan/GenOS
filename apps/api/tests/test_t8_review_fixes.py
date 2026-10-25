@@ -146,3 +146,66 @@ async def test_fact_search_payment_account_never_returns_account_from_facts(owne
 
 async def test_complaint_repeated_owner_only(owner_api: Api, db: Any, client: Any) -> None:
     assert TOOLS["complaint.repeated"].owner_only
+
+
+# ─── vòng 2: unit lồng trong explain MỌI kind; điểm cũ hết điều kiện ─────────────────────────────────────────
+
+async def _alert_with_units(db: Any, org: uuid.UUID, units: list[uuid.UUID]) -> uuid.UUID:
+    import orjson
+
+    aid = (await db.execute(text("""INSERT INTO biz.alerts (org_id, code, alert_type, title, privacy, evidence)
+                                    VALUES (:o, core.next_code('ALT'), 'x', 'Có tin nhóm', 'chat_ok', CAST(:e AS jsonb)) RETURNING id"""),
+                            {"o": org, "e": orjson.dumps([{"type": "meaning_unit", "id": str(u)} for u in units]).decode()})).scalar_one()
+    await db.commit()
+    return aid  # type: ignore[no-any-return]
+
+
+async def test_explain_get_nested_units_drop_fraud_and_health_for_every_kind(owner_api: Api, db: Any, app: Any) -> None:
+    w = await link_owner_user(db, await org_id(db))
+    p, _ = await mk_person(db, w.org, w.channel, "Anh K", "k1")
+    await _units(db, w, p)
+    ids = {r.kind_hint: r.id for r in (await db.execute(text("SELECT id, kind_hint FROM clean.meaning_units WHERE person_id = :p"), {"p": p})).all()}
+    aid = await _alert_with_units(db, w.org, [ids["rui_ro_lua_dao"], ids["suc_khoe_an_toan"], ids[None]])
+    u, tok = await _user_of(owner_api)
+    r = await ToolRunner(app, u, tok).run("explain.get", {"kind": "alert", "id": str(aid)})
+    assert r.ok and "xi măng" in r.text, r.text
+    assert "lừa đảo" not in r.text and "50 triệu" not in r.text and "ung thư" not in r.text, r.text
+    await verify_pin(owner_api)
+    u, tok = await _user_of(owner_api)
+    r = await ToolRunner(app, u, tok).run("explain.get", {"kind": "alert", "id": str(aid)})
+    assert "lừa đảo" not in r.text and "50 triệu" not in r.text and "ung thư" in r.text
+
+
+async def test_reliability_explain_rechecks_eligibility_and_stale_snapshots_are_removed(owner_api: Api, db: Any) -> None:
+    w, p = await _scored(db)
+    await verify_pin(owner_api)
+    path = f"/explain/score/person:{p}:reliability"
+    assert (await owner_api.get(path)).status_code == 200
+    other = await person(db, w, "kin")
+    e, o = (await entities.ensure_person(db, w.org, p)).id, (await entities.ensure_person(db, w.org, other)).id
+    await facts.assert_fact(db, mkfact(w.org, o, None, T(3), predicate="family_of", object_entity=e))   # p thành người thân
+    await db.commit()
+    r = await owner_api.get(path)                               # job CHƯA chạy lại: điểm cũ vẫn còn, nhưng explain phải kiểm lại điều kiện
+    assert r.status_code == 404 and "hứa" not in r.text, r.text
+    await jobs.recompute_reliability_org(db, w.org, now=NOW)
+    await db.commit()
+    n = (await db.execute(text("SELECT count(*) FROM clean.score_snapshots WHERE subject_id = :p AND dimension = 'reliability'"), {"p": p})).scalar_one()
+    assert n == 0                                               # snapshot cũ cũng bị xoá
+    assert (await owner_api.get(path)).status_code == 404
+
+
+async def test_reliability_person_beyond_max_people_is_still_rechecked(owner_api: Api, db: Any) -> None:
+    from tests.test_intel_reliability_t8 import score
+
+    w = await world(db)
+    big = [await person(db, w, f"big{i}", days=(1, 2, 3, 4, 5)) for i in range(2)]
+    small = await person(db, w, "small")
+    await jobs.recompute_reliability_org(db, w.org, now=NOW)
+    await db.commit()
+    assert await score(db, small) == 100.0
+    e, o = (await entities.ensure_person(db, w.org, small)).id, (await entities.ensure_person(db, w.org, big[0])).id
+    await facts.assert_fact(db, mkfact(w.org, e, None, T(3), predicate="family_of", object_entity=o))   # small thành người thân
+    await db.commit()
+    await jobs.recompute_reliability_org(db, w.org, now=NOW, max_people=1)       # small nằm ngoài cận 1 người
+    await db.commit()
+    assert await score(db, small) is None

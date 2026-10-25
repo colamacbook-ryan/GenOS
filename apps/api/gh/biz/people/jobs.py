@@ -259,6 +259,19 @@ async def _reliability_eligible(db: AsyncSession, org_id: uuid.UUID, person_id: 
 RELIABILITY_MIN_EVIDENCE_SOURCES = 2
 
 
+async def reliability_still_eligible(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID, *, now: datetime | None = None) -> bool:
+    """Kiểm LẠI điều kiện chấm (cho `/explain/score` — không tin dòng điểm cũ): đủ bằng chứng trong cửa sổ + `_reliability_eligible`."""
+    now = now or datetime.now(UTC)
+    r = (await db.execute(text("""
+        SELECT count(*) AS n, count(DISTINCT due_at::date) AS days FROM biz.promises
+        WHERE org_id = :o AND promiser_person_id = :p AND meaning_unit_id IS NOT NULL AND (kept_at IS NOT NULL OR broken = true)
+          AND due_at >= :df AND due_at <= :dt"""),
+                          {"o": org_id, "p": person_id, "df": now - timedelta(days=RELIABILITY_WINDOW_DAYS), "dt": now})).one()
+    if r.n < RELIABILITY_MIN_EVIDENCE or r.days < RELIABILITY_MIN_DAYS:
+        return False
+    return await _reliability_eligible(db, org_id, person_id, now, RELIABILITY_WINDOW_DAYS)
+
+
 async def recompute_reliability_org(db: AsyncSession, org_id: uuid.UUID, *, now: datetime | None = None,
                                     window_days: int = RELIABILITY_WINDOW_DAYS, max_people: int = RELIABILITY_MAX_PEOPLE) -> int:
     """Điểm `reliability` = % lời hứa đã chốt mà giữ được, trong `window_days` gần nhất, cho người có ≥ 3 lời hứa chốt có tin gốc
@@ -276,10 +289,13 @@ async def recompute_reliability_org(db: AsyncSession, org_id: uuid.UUID, *, now:
         ORDER BY count(*) DESC, pr.promiser_person_id"""),
         {"o": org_id, "df": now - timedelta(days=window_days), "dt": now, "mn": RELIABILITY_MIN_EVIDENCE,
          "md": RELIABILITY_MIN_DAYS})).all()
-    passing = {r.pid for r in rows}
-    n, evaluated, scored = 0, set(), set()
-    for r in rows[:max_people]:
-        evaluated.add(r.pid)
+    existing = set((await db.execute(text("""
+        SELECT cs.subject_id FROM clean.current_scores cs JOIN core.persons p ON p.id = cs.subject_id AND p.org_id = :o
+        WHERE cs.subject_type = 'person' AND cs.dimension = :d"""), {"o": org_id, "d": RELIABILITY})).scalars().all())
+    # Người ĐÃ có điểm luôn được xét lại điều kiện, kể cả khi vượt cận `max_people` (cận chỉ giới hạn người MỚI).
+    batch = list(rows[:max_people]) + [r for r in rows[max_people:] if r.pid in existing]
+    n, scored = 0, set()
+    for r in batch:
         if not await _reliability_eligible(db, org_id, r.pid, now, window_days):
             continue
         scored.add(r.pid)
@@ -305,14 +321,13 @@ async def recompute_reliability_org(db: AsyncSession, org_id: uuid.UUID, *, now:
             ON CONFLICT (subject_type, subject_id, dimension) DO UPDATE
               SET value = EXCLUDED.value, trend = EXCLUDED.trend, snapshot_id = EXCLUDED.snapshot_id, updated_at = EXCLUDED.updated_at"""),
             {"p": r.pid, "d": RELIABILITY, "v": value, "tr": trend, "s": snap})
-    # Dọn: người có điểm cũ mà không còn đủ điều kiện (không chạm người đủ điều kiện nhưng nằm ngoài cận lượt này).
-    existing = set((await db.execute(text("""
-        SELECT cs.subject_id FROM clean.current_scores cs JOIN core.persons p ON p.id = cs.subject_id AND p.org_id = :o
-        WHERE cs.subject_type = 'person' AND cs.dimension = :d"""), {"o": org_id, "d": RELIABILITY})).scalars().all())
-    stale = existing - scored - (passing - evaluated)
+    # Dọn: người có điểm cũ mà không còn đủ điều kiện ⇒ xoá điểm hiện hành VÀ snapshot (lịch sử không được lộ qua explain).
+    stale = existing - scored
     if stale:
         await db.execute(text("""DELETE FROM clean.current_scores WHERE subject_type = 'person' AND dimension = :d
                                  AND subject_id = ANY(:ids)"""), {"d": RELIABILITY, "ids": list(stale)})
+        await db.execute(text("""DELETE FROM clean.score_snapshots WHERE org_id = :o AND subject_type = 'person' AND dimension = :d
+                                 AND subject_id = ANY(:ids)"""), {"o": org_id, "d": RELIABILITY, "ids": list(stale)})
     return n
 
 
