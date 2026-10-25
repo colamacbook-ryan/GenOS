@@ -85,6 +85,70 @@ async def canonical(db: AsyncSession, entity_id: uuid.UUID | None) -> uuid.UUID 
         return None
 
 
+@dataclass(frozen=True)
+class Who:
+    """Dữ kiện TRA CỨU về một thực thể người (T12): mã người, loại người trong `core.persons`, ref dùng chung với fraud/raw_tail."""
+    entity_id: uuid.UUID
+    person_id: uuid.UUID | None = None
+    person_type: str | None = None
+
+    @property
+    def ref(self) -> str:
+        return f"u_{self.person_id}" if self.person_id else f"e_{self.entity_id}"   # cùng cách viết với fraud/raw_tail ⇒ gộp người đúng
+
+
+async def _ref(db: AsyncSession, ent: uuid.UUID) -> str:
+    w = await who(db, ent)
+    return w.ref if w else f"e_{ent}"
+
+
+async def who(db: AsyncSession, entity_id: uuid.UUID | None) -> Who | None:
+    ent = await canonical(db, entity_id)
+    if ent is None:
+        return None
+    r = (await db.execute(text("""SELECT e.person_id, p.person_type FROM mem.entities e LEFT JOIN core.persons p ON p.id = e.person_id
+                                  WHERE e.id = :e"""), {"e": ent})).one_or_none()
+    return Who(ent, r.person_id if r else None, r.person_type if r else None)
+
+
+async def who_person(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID | None) -> Who | None:
+    if person_id is None:
+        return None
+    from gh.biz.mem import entities
+    try:
+        ent = (await entities.ensure_person(db, org_id, person_id)).id
+    except entities.EntityError:
+        return None
+    return await who(db, ent)
+
+
+def hard_customer(w: Who | None, sets: OrgSets) -> bool:
+    """Khách theo DỮ LIỆU (fact `customer_of` hoặc `core.persons.person_type = customer`) — không suy đoán."""
+    return w is not None and (w.entity_id in sets.customers or w.person_type == "customer")
+
+
+def hard_owner_side(w: Who | None, sets: OrgSets) -> bool:
+    """Sếp / người của Sếp theo DỮ LIỆU (chủ, fact `staff_of`, `person_type = staff`)."""
+    return w is not None and (w.entity_id == sets.owner or w.entity_id in sets.staff or w.person_type == "staff")
+
+
+async def business_group(db: AsyncSession, org_id: uuid.UUID, group_id: uuid.UUID | None) -> bool:
+    """Nhóm Sếp ĐÃ XÁC NHẬN nhãn `kinh_doanh` (nguồn `owner`) — điều kiện của mọi suy luận khởi động lạnh (cold start, T12)."""
+    if group_id is None:
+        return False
+    from gh.biz.mem import contexts
+
+    pol = await contexts.policy(db, org_id, f"g:{group_id}")
+    return pol.confirmed and "kinh_doanh" in pol.contexts
+
+
+def cold_customer(w: Who | None, sets: OrgSets, *, biz_group: bool) -> bool:
+    """Khởi động lạnh (Hồ sơ chưa có fact `customer_of` nào): trong nhóm Sếp đã xác nhận là `kinh_doanh`, người KHÔNG phải Sếp/người
+    của Sếp/người thân được coi là khách. Có dù một fact `customer_of` ⇒ tắt (chỉ tin dữ liệu). Bảo thủ: nhóm chưa xác nhận ⇒ không suy."""
+    return (w is not None and biz_group and not sets.customers and not hard_owner_side(w, sets)
+            and w.entity_id not in sets.key_relations)
+
+
 def person_rel(ent: uuid.UUID, sets: OrgSets, *, ref: str, thread_member: bool = False, kin_of_member: bool = False) -> levels.PersonRel:
     return levels.PersonRel(ref=ref, is_owner=ent == sets.owner, owner_key_relation=ent in sets.key_relations, customer=ent in sets.customers,
                             team=ent in sets.staff, thread_member=thread_member, kin_of_member=kin_of_member, present_in_thread=thread_member)
@@ -135,6 +199,7 @@ class UnitCtx:
     thread: levels.Thread = field(default_factory=levels.Thread)
     hard_rules: list[str] = field(default_factory=list)
     owner_work: bool = False
+    victim_entity: uuid.UUID | None = None          # thực thể nạn nhân đầu tiên (khoá vụ an toàn theo người)
 
 
 def is_system_incident(c: UnitCtx) -> bool:
@@ -184,23 +249,27 @@ async def _unit_ctx(db: AsyncSession, org_id: uuid.UUID, u: Any, sets: OrgSets, 
         return ent == sender or ent in members or (group_id is not None and not members)
 
     victims: list[levels.PersonRel] = []
+    victim_ents: list[uuid.UUID] = []
     seen: set[uuid.UUID] = set()
     for m in (await db.execute(text("SELECT surface, entity_id FROM mem.mentions WHERE meaning_unit_id = :u AND org_id = :o"),
                                {"u": u.id, "o": org_id})).all():
         ent = await canonical(db, m.entity_id)
         if ent is not None and ent not in seen:
             seen.add(ent)
-            victims.append(person_rel(ent, sets, ref=f"e_{ent}", thread_member=in_group(ent)))
+            victims.append(person_rel(ent, sets, ref=await _ref(db, ent), thread_member=in_group(ent)))   # ref chung với fraud/raw_tail (T12)
+            victim_ents.append(ent)
         elif ent is None and sender is not None and KIN.search(fold(m.surface or "")):
             victims.append(levels.PersonRel(ref=f"kin_{len(victims)}", kin_of_member=True))
     if not victims and sender is not None:
-        victims.append(person_rel(sender, sets, ref=f"e_{sender}", thread_member=True))
-    insider = sender is not None and any(p.ref == f"e_{sender}" for p in victims)       # người gửi nói về chính mình ⇒ người trong cuộc
+        victims.append(person_rel(sender, sets, ref=await _ref(db, sender), thread_member=True))
+        victim_ents.append(sender)
+    insider = sender is not None and sender in victim_ents       # người gửi nói về chính mình ⇒ người trong cuộc
     harm = u.harm.get("what") if isinstance(u.harm, dict) and isinstance(u.harm.get("what"), str) else ""
     return UnitCtx(kind=u.kind_hint, unit_id=u.id, observed_at=u.observed_at, conclusion=u.conclusion or "", flags=dict(u.flags or {}),
                    harm_what=harm or "", gate_candidate=u.gate_candidate, confidence_exist=float(u.confidence or 0.8),
                    source_class="insider" if insider else "member", forwarded=forwarded, victims=victims,
-                   thread=thread_of(group_id, size), hard_rules=hard, owner_work=(sender in sets.staff or sender == sets.owner) if sender else False)
+                   thread=thread_of(group_id, size), hard_rules=hard, owner_work=(sender in sets.staff or sender == sets.owner) if sender else False,
+                   victim_entity=victim_ents[0] if victim_ents else None)
 
 
 async def _skip(db: AsyncSession, org_id: uuid.UUID, target_type: str, target_id: uuid.UUID, err: Exception) -> None:
@@ -233,7 +302,7 @@ async def project_units(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, l
             async with db.begin_nested():
                 c = await _unit_ctx(db, org_id, u, sets, [e.raw_event_id for e in ev])
                 li = unit_input(c, now)
-                victim_ent = next((p.ref[2:] for p in c.victims if p.ref.startswith("e_")), None)
+                victim_ent = str(c.victim_entity) if c.victim_entity else None
                 ck = (levels.case_key(c.kind, at=u.observed_at, entity_id=victim_ent) if c.kind == levels.SK and victim_ent
                       else levels.case_key(c.kind, at=u.observed_at, raw_event_id=str(ev[0].raw_event_id),
                                            simhash=hashlib.sha1(fold(c.conclusion).encode()).hexdigest()[:16]

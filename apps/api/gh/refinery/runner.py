@@ -789,6 +789,22 @@ ACK_MAX = 30                        # lời xác nhận ngắn (đã loại kh�
 FREE_MODE_RETRY = timedelta(minutes=15)
 TEMPLATE_WINDOW = timedelta(days=7)
 UNVERIFIED_CONFIDENCE = 0.8              # §4D.4: đơn vị model có trích dẫn verified, chưa qua (d) — T1 tính lại độ chắc
+
+
+def verified_fields(vu: Any, u: Any, people: list[dict[str, Any]]) -> dict[str, Any]:
+    """Phần ĐÃ KIỂM của một đơn vị (§4F.1, `verify.VerifiedUnit`) để lưu ở `clean.meaning_units.entities.v` (T12). Không chứa chữ tin
+    ngoài `surface` người (đã có ở `mem.mentions`); thời điểm dạng ISO."""
+    def _t(d: datetime | None) -> str | None:
+        return d.isoformat() if d is not None else None
+
+    out: dict[str, Any] = {"people": people, "status_hint": getattr(u, "status_hint", None),
+                           "condition_met": u.condition.met if getattr(u, "condition", None) is not None else None}
+    if vu is None:
+        return out
+    return out | {"msg_at": _t(vu.msg_at), "event_at": _t(vu.event_at), "event_time_unparsed": bool(vu.event_time_unparsed),
+                  "deadline_at": _t(vu.deadline_at), "deadline_unparsed": bool(vu.deadline_unparsed), "ongoing": bool(vu.ongoing),
+                  "money_vnd": vu.money_vnd, "status_by_person_id": str(vu.status_by_person_id) if vu.status_by_person_id else None,
+                  "status_at": _t(vu.status_at), "txn_state": vu.txn_state, "txn_at": _t(vu.txn_at), "delivery_form": vu.delivery_form}
 SCAN_BATCH = 500
 GROUP_LOCK_S = 290
 MAX_PASSES = 4
@@ -1783,7 +1799,7 @@ class GroupTurns:
                 try:
                     # Cách ly TỪNG đơn vị (savepoint): một đơn vị/bằng chứng ghi lỗi chỉ loại chính nó, không huỷ cả lượt.
                     async with db.begin_nested():
-                        uid = await self._write_unit(db, org_id, st, aid, u, vqs, observed, first_ev, src0, srcs, persons)
+                        uid = await self._write_unit(db, org_id, st, aid, u, vqs, observed, first_ev, src0, srcs, persons, vu=vu)
                 except Exception as exc:  # noqa: BLE001 — lỗi ghi một đơn vị: ghi mã lỗi (không nội dung tin), đơn vị khác vẫn ghi
                     log.error("Ghi đơn vị %s của lượt %s lỗi: %s", u.unit_ref, aid, err_code(exc))
                     safety = is_safety_unit(u)
@@ -1932,9 +1948,11 @@ class GroupTurns:
 
     async def _write_unit(self, db: AsyncSession, org_id: uuid.UUID, st: RunStats, aid: uuid.UUID, u: Any, vqs: list[Any],
                           observed: datetime, first_ev: GEv, src0: "Src | None", srcs: dict[uuid.UUID, "Src"],
-                          persons: set[uuid.UUID]) -> uuid.UUID:
+                          persons: set[uuid.UUID], *, vu: Any = None) -> uuid.UUID:
         """Ghi MỘT đơn vị + bằng chứng + mention + sổ tay (bên gọi bọc savepoint). Tin được trích có thể là tin ngữ cảnh (đã xử lý ở
-        lượt trước): `received_at` lấy từ `srcs` (đủ cả tin mới lẫn tin ngữ cảnh) — thiếu ⇒ ném lỗi rõ ràng thay vì chèn NULL."""
+        lượt trước): `received_at` lấy từ `srcs` (đủ cả tin mới lẫn tin ngữ cảnh) — thiếu ⇒ ném lỗi rõ ràng thay vì chèn NULL.
+        v0.1.76 T12: giá trị ĐÃ KIỂM của `verify` (mốc, hạn, trạng thái, giao dịch, hình thức, vai người) lưu ở `entities.v` để bộ chiếu
+        đơn vị (`gh.biz.intel.detectors.units`) dựng `SignalIn` đúng bảng nguồn §4.2.1 (c) — không đọc lại lời model thô."""
         uid = (await db.execute(text("""
             INSERT INTO clean.meaning_units (org_id, observed_at, group_id, person_id, event_type, side, conclusion, entities,
                                              confidence, run_id, extractor_version, kind_hint, analysis_id, flags, gate_candidate,
@@ -1960,8 +1978,12 @@ class GroupTurns:
                 VALUES (:m, :mo, :e, :r, :q, 'verified', :sf, :ss, :se, now(), :ev) ON CONFLICT DO NOTHING"""),
                              {"m": uid, "mo": observed, "e": q.raw_event_id, "r": src.received_at if src else None,
                               "q": q.text[:280], "sf": q.field, "ss": q.span_start, "se": q.span_end, "ev": l3.EXTRACTOR_VERSION})
+        people: list[dict[str, Any]] = []
         for pm in u.people:
-            await self._mention(db, org_id, uid, observed, first_ev, pm, persons)
+            ent = await self._mention(db, org_id, uid, observed, first_ev, pm, persons)
+            people.append({"role": pm.role, "entity_id": str(ent) if ent else None, "surface": pm.surface[:120]})
+        await db.execute(text("UPDATE clean.meaning_units SET entities = entities || CAST(:v AS jsonb) WHERE id = :i AND observed_at = :t"),
+                         {"v": orjson.dumps({"v": verified_fields(vu, u, people)}).decode(), "i": uid, "t": observed})
         await self._notebook(db, org_id, uid, u, first_ev)
         return uid
 
@@ -1974,7 +1996,7 @@ class GroupTurns:
                             first_ev.person_id, first_ev.group_id)
 
     async def _mention(self, db: AsyncSession, org_id: uuid.UUID, uid: uuid.UUID, observed: datetime, first_ev: GEv, pm: Any,
-                       persons: set[uuid.UUID]) -> None:
+                       persons: set[uuid.UUID]) -> uuid.UUID | None:
         from gh.biz.mem import entities, mentions
 
         ent: uuid.UUID | None = None
@@ -1985,8 +2007,9 @@ class GroupTurns:
                 pid = None
             if pid in persons:                                   # chỉ người CÓ mặt trong cửa sổ — mã lạ của model bị bỏ
                 ent = (await entities.ensure_person(db, org_id, pid)).id
-        await mentions.link(db, org_id, meaning_unit_id=uid, meaning_observed_at=observed, surface=pm.surface,
-                            raw_event_id=first_ev.event_id, group_id=first_ev.group_id, entity_id=ent, method="llm" if ent else None)
+        m = await mentions.link(db, org_id, meaning_unit_id=uid, meaning_observed_at=observed, surface=pm.surface,
+                                raw_event_id=first_ev.event_id, group_id=first_ev.group_id, entity_id=ent, method="llm" if ent else None)
+        return m.entity_id if m.status == "linked" else None            # chỉ người nối CHẮC (không ứng viên gần đúng) mới mang vai
 
     async def _resolve(self, db: AsyncSession, org_id: uuid.UUID, person_ref: str | None, surface: str | None, group_id: uuid.UUID | None,
                        persons: set[uuid.UUID]) -> uuid.UUID | None:

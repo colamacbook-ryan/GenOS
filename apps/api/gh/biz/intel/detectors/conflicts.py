@@ -129,13 +129,18 @@ async def _repeat_n(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID, c
     return max(int(n) + 1, claimed)
 
 
-async def _open_case(db: AsyncSession, org_id: uuid.UUID, base_key: str) -> tuple[str, list[levels.CaseEvent]]:
-    """(khoá vụ, lịch sử) của vụ ĐANG MỞ mới nhất ứng với `base_key` (gồm các vụ mở lại `base_key|v<epoch>`). Chưa có vụ mở ⇒ (base_key, [])."""
-    r = (await db.execute(text("""SELECT case_key, facts -> 'case_events' AS ev FROM biz.alerts
+async def _open_case(db: AsyncSession, org_id: uuid.UUID, base_key: str, at: datetime) -> tuple[str, list[levels.CaseEvent]]:
+    """(khoá vụ, lịch sử) của vụ ĐANG MỞ mới nhất ứng với `base_key` (gồm các vụ mở lại `base_key|v<epoch>` / vụ kế tiếp `|#n`). Chưa có vụ
+    mở, hoặc vụ mở đã quá cửa sổ trượt 72 giờ (`levels.case_window`, T12) ⇒ (base_key, []) — `signals.upsert` cấp hậu tố vụ mới."""
+    r = (await db.execute(text("""SELECT case_key, facts -> 'case_events' AS ev, level_input ->> 'msg_at' AS seen FROM biz.alerts
                                   WHERE org_id = :o AND kind = :k AND status IN ('open', 'acknowledged')
-                                    AND (case_key = :ck OR case_key LIKE :ck || '|v%') ORDER BY created_at DESC LIMIT 1"""),
+                                    AND (case_key = :ck OR left(case_key, length(:ck) + 2) IN (:ck || '|v', :ck || '|#'))
+                                  ORDER BY created_at DESC LIMIT 1"""),
                           {"o": org_id, "k": KIND, "ck": base_key})).one_or_none()
     if r is None:
+        return base_key, []
+    win = levels.case_window(base_key)
+    if win is not None and r.seen and abs(levels._aware(at) - levels._aware(datetime.fromisoformat(r.seen))) >= win:
         return base_key, []
     return r.case_key, [levels.CaseEvent.model_validate(e) for e in (r.ev or [])]
 
@@ -145,13 +150,16 @@ def _last_closure(events: list[levels.CaseEvent]) -> datetime | None:
     return max(cl) if cl else None
 
 
-async def emit(db: AsyncSession, org_id: uuid.UUID, c: ComplaintIn, now: datetime) -> list[signals.Signal]:
-    """Ghi tín hiệu của một lời chê. Trả [xung_dot] (+ [quan_he_nong_nguoi] khi khách doạ bỏ). Không phải khách của Sếp ⇒ []."""
+async def emit(db: AsyncSession, org_id: uuid.UUID, c: ComplaintIn, now: datetime, *, cold_customer: bool = False,
+               extra_evidence: list[signals.EvidenceIn] | None = None, facts_extra: dict[str, Any] | None = None) -> list[signals.Signal]:
+    """Ghi tín hiệu của một lời chê. Trả [xung_dot] (+ [quan_he_nong_nguoi] khi khách doạ bỏ). Không phải khách của Sếp ⇒ [].
+    `cold_customer` (T12, bộ chiếu đơn vị): bên gọi đã xác định khách theo luật khởi động lạnh (`generic.cold_customer`) khi Hồ sơ chưa
+    có fact `customer_of` nào; tin gốc vẫn phải do chính người đó gửi."""
     ent = (await entities.ensure_person(db, org_id, c.customer_person_id)).id
-    if not await is_customer(db, org_id, c.customer_person_id, ent) or not await sent_by(db, org_id, c.raw_event_id, c.customer_person_id):
+    if not (cold_customer or await is_customer(db, org_id, c.customer_person_id, ent)) or not await sent_by(db, org_id, c.raw_event_id, c.customer_person_id):
         return []
     base_key = levels.case_key(KIND, at=c.sent_at, customer_entity_id=str(ent), reply_chain_id=c.reply_chain_id)
-    case_key, old_events = await _open_case(db, org_id, base_key)
+    case_key, old_events = await _open_case(db, org_id, base_key, c.sent_at)
     closed_at = _last_closure(old_events)
     if closed_at is not None and c.sent_at > closed_at:
         # "Khách chê lại sau khi đóng là vụ MỚI" (§4.2.1): khoá mới + mốc vụ mới; vụ cũ (đóng bởi NV, còn mở) giữ nguyên closure của nó.
@@ -167,8 +175,9 @@ async def emit(db: AsyncSession, org_id: uuid.UUID, c: ComplaintIn, now: datetim
     ev = signals.EvidenceIn(type="raw_event", id=c.raw_event_id, source_field=c.source_field, span_start=c.span_start,
                             span_end=c.span_end, quote=c.quote)
     base: dict[str, Any] = {"thread_key": c.thread_key, "group_id": c.group_id, "subject_type": "person", "subject_id": c.customer_person_id,
-                            "person_ids": [c.customer_person_id], "evidence": [ev], "case_key": case_key, "detector": "conflicts", "detector_version": "1"}
-    facts = {"case_events": [orjson.loads(e.model_dump_json()) for e in hist], "benign": benign(c), "ordered_after": ordered}
+                            "person_ids": [c.customer_person_id], "evidence": [ev, *(extra_evidence or [])], "case_key": case_key,
+                            "detector": "conflicts", "detector_version": "1"}
+    facts = {"case_events": [orjson.loads(e.model_dump_json()) for e in hist], "benign": benign(c), "ordered_after": ordered, **(facts_extra or {})}
     out = [await signals.upsert(db, org_id, signals.UpsertIn(kind=KIND, title=c.title, level_input=li, facts=facts, **base), now)]
     if leave:
         # Một vụ một 🔴 (Gen chốt): bản quan_he cùng khoá vụ KHÔNG mang cờ cổng ⇒ không push riêng, đi vào bản tin (🟠 `ongoing`).
