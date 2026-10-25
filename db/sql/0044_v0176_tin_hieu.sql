@@ -102,7 +102,7 @@ END $$;
 -- ─── b) backfill hàng cũ (§4B.2; r4 §4.7): chỉ dòng chưa có detector — chạy lại không đụng dòng mới ────────
 UPDATE biz.alerts a SET
   kind = CASE WHEN jsonb_array_length(a.evidence) = 0 AND m.kind NOT IN ('system') THEN 'legacy' ELSE m.kind END,
-  privacy = m.privacy, impact = m.impact, urgency = m.urgency, confidence_level = m.conf,
+  privacy = CASE WHEN a.personnel_related THEN 'console_pin' ELSE m.privacy END, impact = m.impact, urgency = m.urgency, confidence_level = m.conf,
   level = CASE a.priority WHEN 'P1' THEN 'amber' WHEN 'P2' THEN 'amber' ELSE 'grey' END,
   delivery = 'none',
   evidence_n = jsonb_array_length(a.evidence),

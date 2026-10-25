@@ -95,6 +95,8 @@ async def test_migration_0044_upgrade_from_0043_backfills_legacy_alerts_and_reru
             old = _alert(c, org, "slow_response", age="10 days")
             sysa = _alert(c, org, "model_quota_low", evidence="[]")
             odd = _alert(c, org, "loai_la")
+            staff = _alert(c, org, "slow_response")
+            c.execute("UPDATE biz.alerts SET personnel_related = true WHERE id = %s", (staff,))
         await _alembic("head", env)
         with _conn(name) as c:
             def row(i: uuid.UUID) -> Any:
@@ -106,6 +108,7 @@ async def test_migration_0044_upgrade_from_0043_backfills_legacy_alerts_and_reru
             assert row(old)[4] == "expired"                                    # open > 7 ngày ⇒ expired
             assert row(sysa)[0] == "system" and row(sysa)[2] is None
             assert row(odd)[:2] == ("legacy", "console_pin")
+            assert row(staff)[:2] == ("cau_hoi_cho_xu_ly", "console_pin")    # liên quan nhân sự ⇒ console_pin (khớp record_legacy)
             assert all(row(i)[6] and row(i)[7] == "backfill_0044" and row(i)[8] == "none" for i in (cool, people, old))
             # chạy lại: không đổi gì, dòng mới (detector khác) không bị backfill đè
             new = c.execute("""INSERT INTO biz.alerts (org_id, code, alert_type, title, evidence, kind, level, detector, evidence_n, created_at)
