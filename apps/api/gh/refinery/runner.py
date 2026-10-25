@@ -641,15 +641,26 @@ class Refinery:
                 if out["alert"]:
                     kinds = {h.rule.kind for h in applied if any("alert" in o for o in h.rule.outputs)}
                     kind = next(iter(kinds), "custom")
-                    await raise_alert(db, org_id, alert_type=RULE_KIND_ALERT.get(kind, "rule_alert"),
-                                      priority=out["alert"],
-                                      title=alert_title(labels.get(event_type, event_type), first.group_name,
-                                                        first.person_name, kind == "hr"),
-                                      summary=u.conclusion, subject_type="person" if person_id else "group",
-                                      subject_id=person_id or group_id,
-                                      evidence=[{"type": "meaning_unit", "id": str(unit_id)}] +
-                                               [{"type": "raw", "id": str(e.event_id)} for e in evs],
-                                      personnel_related=kind == "hr", redis=self.redis)
+                    routed = None
+                    if kind == "risk":      # v0.1.76 (T5): đường nhanh khiếu nại → cổng khach_che_cong_khai_doa_bo; không dựng được ⇒ raise_alert cũ
+                        from gh.biz.intel.detectors import conflicts
+                        from gh.refinery import clock
+                        try:
+                            async with db.begin_nested():
+                                routed = await conflicts.from_rule(db, org_id, event_ids=[e.event_id for e in evs], person_id=inbound_person_id,
+                                                                   group_id=group_id, now=clock.now())
+                        except Exception:  # noqa: BLE001 — lỗi đường nhanh không được làm mất cảnh báo: quay về đường cũ
+                            log.exception("conflicts.from_rule lỗi, dùng raise_alert cũ")
+                    if routed is None:
+                        await raise_alert(db, org_id, alert_type=RULE_KIND_ALERT.get(kind, "rule_alert"),
+                                          priority=out["alert"],
+                                          title=alert_title(labels.get(event_type, event_type), first.group_name,
+                                                            first.person_name, kind == "hr"),
+                                          summary=u.conclusion, subject_type="person" if person_id else "group",
+                                          subject_id=person_id or group_id,
+                                          evidence=[{"type": "meaning_unit", "id": str(unit_id)}] +
+                                                   [{"type": "raw", "id": str(e.event_id)} for e in evs],
+                                          personnel_related=kind == "hr", redis=self.redis)
             # Trạng thái từng tin của phần lô.
             for ref, ev in by_ref.items():
                 if ref in best:
