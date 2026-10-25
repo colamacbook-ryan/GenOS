@@ -398,7 +398,8 @@ def _supply_gate(sc: Scope) -> str:
 
 @router.get("/matches")
 async def list_matches(status: Literal["suggested", "introduced", "accepted", "rejected"] | None = None,
-                       min_score: float = 0.0, cursor: str | None = None,
+                       min_score: float = 0.0, source: Literal["catalog", "market"] | None = None,
+                       cursor: str | None = None,
                        limit: int = Query(50, ge=1, le=200), user: service.CurrentUser = Depends(READ),
                        db: AsyncSession = DB) -> dict[str, Any]:
     """Danh sách gợi ý ghép — phạm vi theo phía **cầu** (khách hàng của mình, `docs/api/phase-3-market.md`)."""
@@ -409,12 +410,16 @@ async def list_matches(status: Literal["suggested", "introduced", "accepted", "r
     if status:
         conds.append("m.status = :status")
         params["status"] = status
+    if source:   # catalog = cung là hàng của Sếp (cung tổng hợp, meaning_unit_id = id hàng; T6); market = từ tin nhắn
+        in_cat = "s.meaning_unit_id IN (SELECT id FROM biz.catalog_items WHERE org_id = :o)"
+        conds.append(in_cat if source == "catalog" else f"(s.meaning_unit_id IS NULL OR NOT ({in_cat}))")
     if cursor:
         conds.append("m.created_at < :c")
         params["c"] = parse_cursor(cursor)
     where = " AND ".join(conds)
     total = (await db.execute(text(f"""SELECT count(*) FROM biz.matches m
                                        JOIN biz.market_signals d ON d.id = m.demand_id
+                                       JOIN biz.market_signals s ON s.id = m.supply_id
                                        WHERE {where}"""), params)).scalar_one()  # noqa: S608
     rows = (await db.execute(text(_MATCH_SELECT + f" WHERE {where} ORDER BY m.created_at DESC LIMIT :n"),  # noqa: S608
                              {**params, "n": limit + 1})).all()

@@ -20,6 +20,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gh.biz.hooks import CronJob, Hook, HookCtx
+from gh.biz.intel.detectors import catalog_match
 from gh.biz.market.service import (
     MIN_MATCH_SCORE,
     confidence_bucket,
@@ -27,6 +28,7 @@ from gh.biz.market.service import (
     score_match,
     signal_from_entities,
 )
+from gh.refinery import clock
 
 DEMAND_DEDUPE_DAYS = 30   # không mở cơ hội mới cho cùng người nếu đã có một cái còn sống trong ngần ấy ngày
 MATCH_CANDIDATES = 500    # trần số tín hiệu mỗi phía đưa vào chấm lại một lượt (đủ cho quy mô một tổ chức)
@@ -59,6 +61,9 @@ async def _capture_one(db: AsyncSession, org_id: uuid.UUID, unit_id: uuid.UUID) 
         if row is None:
             return
         signal_id = row.id
+        if u.side == "demand":
+            # W4 (T6): khớp cầu với hàng của Sếp, cùng transaction (hook retry không để lại nửa chừng).
+            await catalog_match.process_demand(db, org_id, signal_id, clock.now())
     # Thiếu tên hàng (entities.product/category) → `sig is None`: không có căn cứ ghép Cung ↔ Cầu nên KHÔNG tạo
     # tín hiệu (không bao giờ lấy cả câu kết luận làm `item`). Nhu cầu của khách vẫn là một việc cần người xử
     # lý, nên cầu của một người vẫn mở/cộng dồn cơ hội `raw_signal` (không gắn tín hiệu vì không có).
@@ -108,7 +113,9 @@ async def recompute_matches_org(db: AsyncSession, org_id: uuid.UUID) -> int:
         {"o": org_id, "n": MATCH_CANDIDATES})).all()
     supplies = (await db.execute(text("""
         SELECT id, item, category, quantity, unit, value_vnd, location FROM biz.market_signals
-        WHERE org_id = :o AND side = 'supply' AND status = 'open' ORDER BY created_at DESC LIMIT :n"""),
+        WHERE org_id = :o AND side = 'supply' AND status = 'open'
+          AND (meaning_unit_id IS NULL OR meaning_unit_id NOT IN (SELECT id FROM biz.catalog_items WHERE org_id = :o))
+        ORDER BY created_at DESC LIMIT :n"""),
         {"o": org_id, "n": MATCH_CANDIDATES})).all()
     n = 0
     kept: set[tuple[uuid.UUID, uuid.UUID]] = set()
@@ -156,6 +163,7 @@ async def matches_recompute(ctx: dict[str, Any]) -> dict[str, int]:
     for org in orgs:
         async with sm() as db:
             n = await recompute_matches_org(db, org)
+            n += await catalog_match.recompute_org(db, org, clock.now())
             await db.commit()
         out[str(org)] = n
     return out
