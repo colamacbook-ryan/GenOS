@@ -14,6 +14,7 @@ from gh.auth import rbac, service
 from gh.auth.deps import current_user, require, require_pin
 from gh.biz.core import drafts, explain
 from gh.biz.core.scope import Scope, ensure_group, ensure_person, group_view_sql, not_found, scope_for
+from gh.biz.intel import strong_confirm
 from gh.biz.queue import service as qsvc
 from gh.chassis import actionlog
 from gh.data.common import has_masked_number, iso, mask_text, parse_cursor
@@ -308,6 +309,20 @@ class DecideIn(BaseModel):
     reason: str | None = Field(default=None, max_length=500)
 
 
+async def _strong_pass(request: Request, db: AsyncSession, user: service.CurrentUser) -> None:
+    """v0.1.76 (T2, spec r6 §8.1) — phòng thủ chiều sâu: phiên Console NGẮN HẠN `chat_ok` (kênh quản trị)
+    chỉ duyệt được nháp gửi ra ngoài khi `chat_confirm` vừa cho qua xác nhận mạnh (mở khoá hôm nay / mã kép)
+    và gắn dấu MỘT LẦN vào đúng phiên đó."""
+    ua = (await db.execute(text("SELECT user_agent FROM core.sessions WHERE id = :s"),
+                           {"s": user.session_id})).scalar_one_or_none()
+    if not str(ua or "").startswith("chat_ok:"):
+        return
+    if not await request.app.state.redis.delete(strong_confirm.pass_key(user.session_id)):
+        raise ApiError(423, "STRONG_CONFIRM_REQUIRED", "Tin gửi khách cần xác nhận mạnh",
+                       "Trong kênh quản trị, tin gửi khách cần «Mở khoá hôm nay» trên Console "
+                       "hoặc mã kép qua kênh phụ.")
+
+
 async def _decide(request: Request, draft_id: uuid.UUID, user: service.CurrentUser, db: AsyncSession,
                   verdict: str, body: DecideIn) -> dict[str, Any]:
     sc = await scope_for(db, user, "action.approve")
@@ -316,6 +331,8 @@ async def _decide(request: Request, draft_id: uuid.UUID, user: service.CurrentUs
                            {"i": draft_id, "o": user.org_id, **params})).first()
     if ok is None:
         raise not_found("Bản nháp")
+    if verdict in ("approve", "edit"):
+        await _strong_pass(request, db, user)
     if verdict == "edit" and user.role_code != rbac.OWNER and has_masked_number(body.text):
         # Review v0.1.67 P3: vai dưới Owner chỉ thấy số đã che (•••••678); "Khôi phục bản trước" / "Sửa rồi gửi" /
         # dùng bản dịch đưa chuỗi che đó vào ô sửa — gửi đi là gửi khách số sai và ghi đè mất số thật trong nháp.
