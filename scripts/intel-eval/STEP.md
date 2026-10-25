@@ -56,3 +56,38 @@ $PY scripts/intel-eval/gkb_score.py --data .../kbN --key <đáp án ngoài repo>
   `pushed`/`shadow_pushed` (🔴 đã đẩy / 🔴 bóng, giờ dữ liệu), `alert_events` (mới/đổi mức-ngăn-trạng thái), `digest` (`digest.build` owner, only_new=false),
   `clock` (số mốc, số lần mỗi job chạy, lỗi job, giây). Tệp gốc trong run_dir: `alerts_log.jsonl`, `alerts_end.json`, `alerts_final.json`, `digest.json`.
 - Dọn: `dropdb gh_step_<tên>` (DB lần chạy); khuôn `gh_step_tpl_*` giữ làm cache.
+
+## Đợt 2 sau KQ-dot2 — sửa harness (H1–H5)
+- **H1 · trần độ trễ theo giờ dữ liệu** (`init --max-lag-min N`, mặc định **30**, `0` = khuôn cũ). Chế độ nén làm lô của luồng thưa trải 5–12 ngày và `data_time`
+  lấy giờ tin cuối trên MỌI luồng ⇒ alert trễ trung vị 32–44 giờ ⇒ cổng có cửa sổ 24–48 giờ bị `window_expired` giả. Nay mỗi luồng có thêm đồng hồ hẹn ở
+  giờ dữ liệu = tin chờ cũ nhất + trần (lý do lượt `lag`) và worker bận tính theo giờ dữ liệu (`clockplan.PlanConfig.max_lag_s`, `lag_deadline`, `busy_until`).
+  Độ trễ tin → lượt ≤ trần + một khoảng nén (vài giây). Đổi lại **số lượt tăng nhiều** (đo bằng `--auto-stub`, số lượt pipeline):
+
+  | bộ | lượt kế hoạch cũ → 30 phút | lượt pipeline cũ → 30 phút | trung vị/p90 độ trễ tin→lượt (phút) cũ → mới |
+  |---|---|---|---|
+  | kb2 | 15 → 223 | 17 → 218 | 3840 / 12970 → 7 / 27 |
+  | kb3 | 11 → 189 | 12 → 180 | 4568 / 12976 → 9 / 28 |
+
+  Lượt kế hoạch theo trần khác (kb2 / kb3): 1 giờ 187 / 157 · 2 giờ 160 / 128 · 6 giờ 110 / 85 — chọn `--max-lag-min` theo ngân sách số lượt (mỗi lượt nhỏ 1–3 tin).
+  Cổng phân phối L6 ("trung vị ≥ 10 tin/lượt cho nhóm sôi nổi") không áp dụng khi có trần (lượt nhỏ là hệ quả của trần): `distribution_check.ok = false` là bình thường ở step.
+  `replay.py` CLI và L6 vẫn dùng `PlanConfig()` mặc định (không trần) — phân phối lượt không đổi.
+  **Chỉ số lag**: `signals.json` → `clock.lag.alerts` (giờ dữ liệu alert xuất hiện lần đầu − giờ tin mới nhất mà alert dẫn: `n`, `median_min`, `p90_min`, `max_min`,
+  `over_24h`, `over_48h`) và `clock.lag.plan` (tin → lượt phân tích, từ `summary.json.lag`).
+- **H2 · danh tính + Hồ sơ từ `context.md`** (tương đương Sếp khai lúc cài; KHÔNG dùng đáp án; tắt bằng `init --no-identity`). Ghi lại ở `<run_dir>/identity.json`:
+  - kênh quản trị Sếp: phiên Zalo `account_kind = 'bot'` + `owner_channel.pairing.start_pairing/try_pair` (hàm production) với ID Sếp ở dòng "Chủ: …"/"Sếp là …"
+    (`u_…`, ID phụ `fb_…`); tin đầu của Sếp trong nhóm ⇒ `ingest._owner_triggers` đặt `core.persons.attrs.is_owner` (đường production, theo ID). Không nối thêm sang
+    `mem.entities.is_owner` — đúng như production (nghi vấn P3 vẫn hiện nguyên);
+  - nhân viên/khách: bảng có cột ID dưới mục "Nhân sự" / "Khách…"/"Đại lý…" ⇒ `PATCH /profile/{id} {person_type}` ngay khi người đó có định danh (hành động "Đánh dấu"
+    của Sếp, khoá `person_type_locked`) — nguồn của `hard_owner_side`/`hard_customer`. Không ghi fact `staff_of`/`customer_of` (không có đường Sếp-khai ghi fact trực tiếp);
+  - `core.groups.member_count`: chỉ nhóm mà context.md nêu rõ số ("~5.000 thành viên", tên trong ngoặc kép hoặc hàng bảng mã nhóm). kb2: G4 = 5000; kb3: không nhóm nào (NULL).
+- **H3 · media**: `write_media` nay quét luật (a) trên chữ media (`prefilter_port.scan_text`, như `Deps.scan`) và gọi `jobs._escalate_fast` khi trúng (kb2: 11 ảnh + 4 thoại lên đường nhanh).
+- **H4 · hai nhánh có / không bối cảnh** (tách (D) khởi động lạnh khỏi lỗi khác): cùng bộ dữ liệu, hai thư mục chạy riêng:
+  ```
+  # không bối cảnh (chưa xác nhận):
+  $PY scripts/intel-eval/step.py init --dataset .../kb2 --out <run>/kb2-noctx --redis-url redis://localhost:6379/3
+  # có bối cảnh Sếp đã xác nhận (tệp ngoài repo, vd {"G1":"kinh_doanh","G2":"kinh_doanh","G3":"nhan_vien","G4":"giao_thuong"}):
+  $PY scripts/intel-eval/step.py init --dataset .../kb2 --out <run>/kb2-ctx --contexts <đường dẫn>/kb2-ctx.json --redis-url redis://localhost:6379/3
+  ```
+  Mỗi nhánh một DB `gh_step_*` riêng (tên theo thư mục chạy) nhưng dùng chung Redis DB ⇒ chạy lần lượt hoặc cho mỗi nhánh `--redis-url` khác DB (`/3`, `/4`). Tệp ctx kb2/kb3 để ngoài repo.
+- **H5 · bot không bao giờ gửi tin**: harness không chạy giao tin (`intel_delivery`) và không có tin trả lời của bot ⇒ "câu hỏi chưa trả lời" chỉ đo được qua tin `inbound`
+  của người phía Sếp (P4 trong KQ-dot2); số liệu 🔴 là mức/ngăn quyết định, không phải tin đã gửi. Ghi rõ khi báo cáo.

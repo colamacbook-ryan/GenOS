@@ -178,3 +178,50 @@ def test_data_time_maps_compressed_clock_back_to_data_time() -> None:
         assert cp.data_time(msgs, rt, x) == c.now()
     seq = [cp.data_time(msgs, t, x) for x in range(0, 120, 3)]
     assert seq == sorted(seq)                                              # không bao giờ lùi
+
+
+# ─── H1: trần độ trễ theo giờ dữ liệu ─────────────────────────────────────────────────────────────────────────────────────
+
+def _sparse_world() -> list[common.Msg]:
+    """G1 thưa (tin lẻ cách nhau ~9 giờ, nhiều ngày), G2 dày (cả ngày): chế độ nén dồn các luồng thưa thành một lô nhiều ngày nếu không có trần."""
+    msgs = [mk(i, "G1", secs=i * 9 * 3600) for i in range(1, 9)]
+    msgs += [mk(100 + i, "G2", secs=i * 600, sender=f"s{i % 3}") for i in range(0, 400)]
+    return sorted(msgs, key=lambda m: (m.ts, m.id))
+
+
+def test_lag_cap_bounds_data_time_delay_in_compressed_mode_and_old_mode_does_not() -> None:
+    msgs = _sparse_world()
+    times = cp.compress_gaps(msgs, 5)
+    old = cp.plan_turns(msgs, times, cp.PlanConfig(max_lag_s=None))
+    new = cp.plan_turns(msgs, times, cp.PlanConfig(max_lag_s=1800))
+    lag_old, lag_new = cp.lag_stats(old, msgs, times), cp.lag_stats(new, msgs, times)
+    assert lag_old["max_min"] > 360                      # khuôn cũ: lô trải nhiều giờ/ngày
+    assert lag_new["max_min"] <= 30.0 + 5 / 60 + 1e-6      # trần 30 phút + tối đa một khoảng nén (5 s)
+    assert lag_new["over_6h"] == 0
+    assert any(t.reason == "lag" for t in new)
+    assert len(new) > len(old)                           # đổi lại số lượt tăng (báo trong STEP.md)
+    for turns in (old, new):                             # không mất tin
+        assert sorted(m.id for t in turns for m in t.new) == sorted(m.id for m in msgs if cp.needs_model(m))
+
+
+def test_lag_cap_is_noop_when_realtime_cadence_is_shorter() -> None:
+    msgs = [mk(1, secs=0), mk(2, secs=60)]
+    t = cp.plan_turns(msgs, cp.realtime_times(msgs), cp.PlanConfig(max_lag_s=1800))
+    assert [(x.reason, len(x.new)) for x in t] == [("cadence", 2)]       # nhịp 20 phút tới trước trần 30 phút
+
+
+def test_lag_deadline_is_inverse_of_data_time_and_stops_before_next_message() -> None:
+    msgs = [mk(1, secs=0), mk(2, secs=3 * 3600)]
+    times = cp.compress_gaps(msgs, 60)                  # [0, 60]
+    ts = [m.ts for m in msgs]
+    t = cp.lag_deadline(ts, times, msgs[0].ts + timedelta(minutes=30))
+    assert 0 <= t < 60                                   # trong khoảng nén, sát nhưng TRƯỚC tin kế
+    assert cp.data_time(msgs, times, t) <= msgs[0].ts + timedelta(minutes=30)
+    assert cp.lag_deadline(ts, times, msgs[1].ts + timedelta(minutes=5)) >= 60
+
+
+def test_lag_cap_does_not_let_a_busy_worker_stall_other_threads_across_a_compressed_gap() -> None:
+    msgs = _sparse_world()
+    times = cp.compress_gaps(msgs, 2)
+    new = cp.plan_turns(msgs, times, cp.PlanConfig(max_lag_s=1800, workers=1))
+    assert cp.lag_stats(new, msgs, times)["max_min"] <= 30.0 + 2 / 60 + 1e-6

@@ -151,7 +151,53 @@ def parse_context(md: str) -> dict[str, Any]:
         if mi and pred:
             profile.setdefault(pred, []).append(re.sub(r"\*\*", "", mi.group(1)))
     today = re.search(r"Hôm nay\"?\s*=\s*([^.\n]+?)(?:\.|\n|$)", md)
-    return {"groups": groups, "profile": profile, "today": today.group(1).strip() if today else None}
+    return {"groups": groups, "profile": profile, "today": today.group(1).strip() if today else None, **parse_people(md)}
+
+
+ACCOUNT_ID_RE = re.compile(r"`((?:u|fb)_\w+)`")
+STAFF_HEADING = ("nhan su",)
+CUSTOMER_HEADING = ("khach", "dai ly")
+
+
+def parse_people(md: str) -> dict[str, Any]:
+    """H2 — danh tính Sếp khai lúc cài, chỉ từ `context.md`: `owner_ids` (ID tài khoản của Sếp ở dòng "Chủ: …"/"Sếp là …": `u_…` Zalo, `fb_…` Facebook),
+    `staff` / `customers` = [{id, name, role}] từ bảng có cột ID dưới mục "Nhân sự" / "Khách…"/"Đại lý…" (bỏ chính Sếp). Không có ⇒ rỗng.
+    Chỉ đọc bảng nhân sự/khách mà trợ lý "biết trước" — không đụng tin chat, không đáp án."""
+    owner_ids: list[str] = []
+    for line in md.splitlines():
+        if re.search(r"Chủ:|Sếp là", line):
+            owner_ids = list(dict.fromkeys(ACCOUNT_ID_RE.findall(line)))
+            if owner_ids:
+                break
+    out: dict[str, list[dict[str, str]]] = {"staff": [], "customers": []}
+    bucket: str | None = None
+    for line in md.splitlines():
+        if line.startswith("## "):
+            h = _fold(line)
+            bucket = "staff" if any(k in h for k in STAFF_HEADING) else "customers" if any(k in h for k in CUSTOMER_HEADING) else None
+            continue
+        if bucket is None or not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        m = re.fullmatch(r"`?((?:u|fb)_\w+)`?", cells[0]) if cells else None
+        if m is None or m.group(1) in owner_ids:
+            continue
+        out[bucket].append({"id": m.group(1), "name": re.sub(r"\*\*", "", cells[1]) if len(cells) > 1 else "", "role": re.sub(r"\*\*", "", cells[2]) if len(cells) > 2 else ""})
+    return {"owner_ids": owner_ids, "staff": out["staff"], "customers": out["customers"]}
+
+
+def parse_member_counts(md: str, group_names: dict[str, str]) -> dict[str, int]:
+    """{Gk: số thành viên} cho nhóm mà `context.md` NÊU RÕ ("~5.000 thành viên") ở cùng dòng với tên nhóm (tên trong ngoặc kép, hoặc hàng bảng bắt đầu bằng mã nhóm). Nhóm không nêu ⇒ không có khoá (để NULL)."""
+    out: dict[str, int] = {}
+    for line in md.splitlines():
+        m = re.search(r"~?\s*(\d[\d.,]*)\s*thành viên", line)
+        if not m:
+            continue
+        n = int(re.sub(r"[.,]", "", m.group(1)))
+        for gk, name in group_names.items():
+            if re.search(rf"[\"“]{re.escape(name)}[\"”]", line) or re.match(rf"\|\s*{re.escape(gk)}\s*\|", line):      # tên trong ngoặc kép, hoặc hàng bảng của nhóm
+                out[gk] = n
+    return out
 
 
 # ─── Phong bì bridge giả ────────────────────────────────────────────────────────────────────────────────────────────────

@@ -41,6 +41,7 @@ from clockplan import (  # noqa: E402
     check_distribution,
     data_time,
     distribution,
+    lag_stats,
     lively_threads,
     plan_batch40,
     plan_turns,
@@ -300,6 +301,12 @@ def msg_json(m: Msg) -> dict[str, Any]:
 
 
 def plan_for(ds: Dataset, mode: str, cfg: PlanConfig, *, target_median: float = 10.0, plan_kind: str = "thread") -> dict[str, Any]:
+    plan = _plan_for(ds, mode, cfg, target_median=target_median, plan_kind=plan_kind)
+    plan["lag"] = lag_stats(plan["turns"], ds.msgs, plan["times"])        # H1: độ trễ giờ dữ liệu tin → lượt phân tích
+    return plan
+
+
+def _plan_for(ds: Dataset, mode: str, cfg: PlanConfig, *, target_median: float = 10.0, plan_kind: str = "thread") -> dict[str, Any]:
     live = lively_threads(ds.msgs)
     if plan_kind == "batch40":      # khuôn cũ cho red team B: lô 40 tin trộn nhóm, thời gian thật
         turns = plan_batch40(ds.msgs)
@@ -403,7 +410,7 @@ async def run_replay(ds: Dataset, out_dir: str | Path, *, mode: str = "compresse
     engine.dump(out / "media_table.json")
     summary = {"label": label, "dataset": ds.name, "mode": plan["mode"], "confirmed": confirmed, "analyzer": getattr(analyzer, "name", type(analyzer).__name__),
                "max_gap_s": plan["max_gap_s"], "burst_idx": plan["burst_idx"], "turns_n": len(turns), "messages": len(msgs), "emitted": emitted,
-               "distribution": plan["dist"], "distribution_check": plan["check"], "media_coverage": engine.coverage(), "seeded": seeded,
+               "distribution": plan["dist"], "distribution_check": plan["check"], "lag": plan["lag"], "media_coverage": engine.coverage(), "seeded": seeded,
                "config": cfg.__dict__}
     write_json(out / "plan.json", {**{k: v for k, v in summary.items()}, "analyzer_contract": ANALYZER_CONTRACT.splitlines()[0]})
     write_json(out / "summary.json", summary)
