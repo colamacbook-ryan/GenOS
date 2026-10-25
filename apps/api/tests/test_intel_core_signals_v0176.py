@@ -380,3 +380,25 @@ async def test_intel_cap_reservation_is_atomic_across_parallel_sessions(db: Asyn
 
     a, b = await asyncio.gather(one(0), one(1))
     assert sorted([a.delivery, b.delivery]) == ["digest_top", "push_now"]
+
+
+async def test_attack_privacy_is_sticky_strictest_wins_on_merge_relane_reeval(db: AsyncSession) -> None:
+    """Gộp tín hiệu console_pin với tin chat_ok (cùng vụ) KHÔNG được hạ thành chat_ok — cả cột lẫn level_input, sau relane và reevaluate_due."""
+    org = await mk_org(db)
+    await _install(db, org)
+    li = _li("nghia_vu_loi_hua", due_in_h=6, promise={"to_customer": True}, privacy="console_pin")
+    s1 = await signals.upsert(db, org, _up("nghia_vu_loi_hua", li, await _raw(db, org), "nghia_vu_loi_hua:promise|PRIV"), NOW)
+    pub = li.model_copy(update={"privacy": "chat_ok"})
+    s2 = await signals.upsert(db, org, _up("nghia_vu_loi_hua", pub, await _raw(db, org, "tin công khai"), "nghia_vu_loi_hua:promise|PRIV"),
+                              NOW + timedelta(minutes=5))
+    assert s2.id == s1.id
+
+    async def priv() -> tuple[str, str]:
+        r = (await db.execute(text("SELECT privacy, level_input ->> 'privacy' AS lp FROM biz.alerts WHERE id = :i"), {"i": s1.id})).one()
+        return r.privacy, r.lp
+
+    assert await priv() == ("console_pin", "console_pin")
+    await signals.relane(db, org, s1.id, NOW + timedelta(minutes=10))
+    assert await priv() == ("console_pin", "console_pin")
+    await signals.reevaluate_due(db, NOW + timedelta(hours=3))
+    assert await priv() == ("console_pin", "console_pin")

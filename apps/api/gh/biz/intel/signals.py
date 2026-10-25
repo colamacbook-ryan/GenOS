@@ -234,13 +234,15 @@ async def upsert(db: AsyncSession, org_id: uuid.UUID, inp: UpsertIn, now: dateti
     prof = await profile_read.snapshot(db, org_id)
     owner_fact_ids = [f for f in dict.fromkeys(inp.owner_fact_ids) if prof.has(f)]      # sai org / chưa xác nhận ⇒ bỏ (§4C)
     li = inp.level_input.model_copy(update={"kind": inp.kind})
-    level_input = li.model_dump(mode="json")
     row = (await db.execute(text("""
-        SELECT id, evidence, fact_ids, raw_event_ids FROM biz.alerts
+        SELECT id, evidence, fact_ids, raw_event_ids, privacy FROM biz.alerts
         WHERE org_id = :o AND kind = :k AND status IN ('open', 'acknowledged')
           AND (case_key = :ck OR (cardinality(CAST(:raw AS uuid[])) > 0 AND raw_event_ids && CAST(:raw AS uuid[])))
         ORDER BY (case_key = :ck) DESC, created_at LIMIT 1 FOR UPDATE"""),
         {"o": org_id, "k": inp.kind, "ck": inp.case_key, "raw": raw_ids})).one_or_none()
+    if row is not None and row.privacy == "console_pin":
+        li = li.model_copy(update={"privacy": "console_pin"})   # riêng tư DÍNH: chặt nhất thắng, gộp không bao giờ hạ (§8.1)
+    level_input = li.model_dump(mode="json")
     expires = inp.expires_at or (now + timedelta(days=DEFAULT_TTL.get(inp.kind, 7)))
     common = {"su": inp.summary, "sa": inp.suggested_action, "li": orjson.dumps(level_input).decode(),
               "of": owner_fact_ids, "fx": orjson.dumps({**inp.facts, "action_executable": inp.action_executable}).decode(),
@@ -254,9 +256,11 @@ async def upsert(db: AsyncSession, org_id: uuid.UUID, inp: UpsertIn, now: dateti
                    fact_ids = ARRAY(SELECT DISTINCT unnest(fact_ids || CAST(:fi AS uuid[]))),
                    raw_event_ids = ARRAY(SELECT DISTINCT unnest(raw_event_ids || CAST(:raw AS uuid[]))),
                    owner_fact_ids = CAST(:of AS uuid[]), facts = facts || CAST(:fx AS jsonb), due_at = COALESCE(:due, due_at),
+                   privacy = CASE WHEN privacy = 'console_pin' OR :pv = 'console_pin' THEN 'console_pin' ELSE 'chat_ok' END,
+                   personnel_related = personnel_related OR :pv = 'console_pin',
                    expires_at = GREATEST(expires_at, :ex), detector_version = COALESCE(:dv, detector_version), updated_at = now()
             WHERE id = :i"""), {**common, "ev": orjson.dumps(merged).decode(), "n": len(merged), "fi": inp.fact_ids, "raw": raw_ids,
-                                 "i": row.id})
+                                 "pv": li.privacy, "i": row.id})
         sid = row.id
     else:
         code = (await db.execute(text("SELECT core.next_code('ALR')"))).scalar_one()
@@ -362,7 +366,8 @@ async def relane(db: AsyncSession, org_id: uuid.UUID, signal_id: uuid.UUID, now:
                capped_at = :ca, would_push_at = :wp, pushed_at = :pa, cap_day = :cd, case_state = CAST(:cs AS jsonb), impact = :im,
                urgency = :ur, confidence_exist = :ce, confidence_content = :cc, confidence_level = :cl, priority = :pr,
                level_at = :now, next_eval_at = :ne, status = :stt, resolved_at = CASE WHEN :stt = 'resolved' THEN :now ELSE resolved_at END,
-               privacy = :pv, updated_at = now()
+               privacy = CASE WHEN privacy = 'console_pin' OR :pv = 'console_pin' THEN 'console_pin' ELSE 'chat_ok' END,
+               updated_at = now()
         WHERE id = :i"""),
         {"lv": lv.level, "g": lv.gate, "c": lv.candidate, "d": lv.delivery, "dm": lv.demoted, "rs": lv.reasons, "ca": capped_at,
          "wp": would_push_at, "pa": pushed_at, "cd": new_cap_day, "cs": orjson.dumps(case_state).decode() if case_state else None,
