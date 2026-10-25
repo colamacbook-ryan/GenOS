@@ -62,8 +62,12 @@ const renderCard = (ui: React.ReactElement, role = 'owner') => {
 beforeEach(() => {
   queryClient.clear();
   queryClient.setDefaultOptions({ queries: { retry: false, staleTime: Infinity } });
+  vi.spyOn(window, 'confirm').mockReturnValue(true);
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 describe('<IntelCard> Tình báo', () => {
   it('vai không phải Owner không thấy thẻ và không gọi máy chủ', () => {
@@ -190,6 +194,35 @@ describe('<AiBudgetCard> trần tình báo intel_*', () => {
 describe('phản hồi sai khuôn', () => {
   it('máy chủ trả {} cho /intel/console ⇒ lỗi tại chỗ có Thử lại, thẻ không vỡ', async () => {
     mockApi(state(), (c) => (c.url === '/intel/console' ? json(200, {}) : undefined));
+    renderCard(<IntelCard />);
+    expect(await screen.findByRole('button', { name: /Thử lại/ })).toBeInTheDocument();
+  });
+});
+
+describe('hộp xác nhận cho việc hạ phòng thủ và nhãn nhóm', () => {
+  it('Huỷ xác nhận ⇒ không gọi máy chủ: tắt báo lừa đảo, chạy thử, mở khoá trợ lý', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const calls = mockApi(state({ assistant: { locked: true, locked_at: null, locked_via: 'console' } }));
+    renderCard(<IntelCard />);
+    await userEvent.click(await screen.findByRole('switch', { name: 'Báo Rủi ro lừa đảo' }));
+    await userEvent.click(screen.getByRole('radio', { name: 'Chạy thử' }));
+    await userEvent.click(screen.getByRole('button', { name: /Mở khoá trợ lý/ }));
+    expect(window.confirm).toHaveBeenCalledTimes(3);
+    expect(calls.filter((c) => c.method !== 'GET')).toEqual([]);
+  });
+
+  it('nói rõ gán hàng loạt THAY TOÀN BỘ bối cảnh đã gán', async () => {
+    mockApi(state());
+    renderCard(<IntelCard />);
+    expect(await screen.findByText(/THAY TOÀN BỘ bối cảnh/)).toBeInTheDocument();
+  });
+
+  it.each([
+    ['nhóm thiếu name', { groups: [{ id: 'g1', labels: [] }] }],
+    ['nhóm labels không phải mảng', { groups: [{ id: 'g1', name: 'A', labels: null }] }],
+    ['STK thiếu title', { payees: [{ signal_id: 's', last3: '1', bank: null }] }],
+  ])('%s ⇒ lỗi tại chỗ, thẻ không vỡ', async (_n, over) => {
+    mockApi(state(over as Partial<IntelConsole>));
     renderCard(<IntelCard />);
     expect(await screen.findByRole('button', { name: /Thử lại/ })).toBeInTheDocument();
   });

@@ -125,11 +125,12 @@ async def test_put_needs_pin_and_stores_token_encrypted(owner_api: Api, fake_tg:
     assert TOKEN not in g.text and "token" not in g.json() and CHAT not in g.text
     assert set(g.json()) >= {"configured", "enabled", "bot_username", "chat_id_masked", "briefing", "reminders",
                              "updated_at", "last_test", "host"}
-    # Lưu lại không kèm token: giữ token cũ, không gọi getMe lần nữa.
+    # Lưu lại không kèm token: không gọi getMe lại. Đổi chat_id = đổi kênh phụ ⇒ ĐÚNG một sendMessage báo kênh cũ (T11).
     n = len(fake_tg.calls)
     r = await owner_api.send("PUT", "/notify/telegram", {"chat_id": "-100123456789", "reminders": False})
     assert r.status_code == 200, r.text
-    assert len(fake_tg.calls) == n and r.json()["chat_id_masked"] == "•••6789" and r.json()["briefing"] is False
+    assert len(fake_tg.calls) == n + 1 and fake_tg.calls[-1][0].endswith("/sendMessage")
+    assert r.json()["chat_id_masked"] == "•••6789" and r.json()["briefing"] is False
 
 
 async def test_put_keeps_chat_id_when_blank(owner_api: Api, fake_tg: FakeTelegram) -> None:

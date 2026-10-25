@@ -14,7 +14,9 @@ const req = <T>(path: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET',
 /** Phản hồi sai khuôn (máy chủ cũ, proxy trả trang khác…) ⇒ lỗi tại chỗ, không để thẻ vỡ khi đọc trường thiếu. */
 function isConsole(v: unknown): v is IntelConsole {
   const o = v as Partial<IntelConsole> | null;
-  return !!o && typeof o === 'object' && !!o.assistant && !!o.outbound && !!o.backup_channel && Array.isArray(o.mutes) && Array.isArray(o.payees) && Array.isArray(o.groups) && Array.isArray(o.contexts);
+  return !!o && typeof o === 'object' && !!o.assistant && !!o.outbound && !!o.backup_channel && Array.isArray(o.mutes) && Array.isArray(o.payees) && Array.isArray(o.groups) && Array.isArray(o.contexts) &&
+    o.payees.every((p) => typeof p?.title === 'string' && typeof p?.signal_id === 'string') &&
+    o.groups.every((g) => typeof g?.name === 'string' && typeof g?.id === 'string' && Array.isArray(g?.labels));
 }
 
 export const useIntelConsole = (enabled: boolean) =>

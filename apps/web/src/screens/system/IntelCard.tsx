@@ -87,7 +87,14 @@ function AssistantRow({ s }: { s: IntelConsole }) {
           : 'Khoá khi nghi ngờ tài khoản bị chiếm: tắt kênh quản trị, tắt hỗ trợ nhóm, huỷ tin đang chờ gửi. Khoá không cần mã PIN.'}
       </p>
       {locked ? (
-        <Button variant="secondary" size="sm" loading={unlock.isPending} onClick={() => unlock.mutate(undefined, { onSuccess: () => toast('Đã mở khoá trợ lý') })}>
+        <Button
+          variant="secondary"
+          size="sm"
+          loading={unlock.isPending}
+          onClick={() => {
+            if (window.confirm('Mở khoá trợ lý? Kênh quản trị và hỗ trợ nhóm vẫn tắt cho tới khi Sếp bật lại. Chỉ làm khi chắc tài khoản ghép an toàn.')) unlock.mutate(undefined, { onSuccess: () => toast('Đã mở khoá trợ lý') });
+          }}
+        >
           Mở khoá trợ lý (cần mã PIN)
         </Button>
       ) : (
@@ -130,7 +137,10 @@ function UnlockTodayRow({ s }: { s: IntelConsole }) {
 
 function ModeRow({ s }: { s: IntelConsole }) {
   const m = useIntelSettings();
-  const setMode = (mode: IntelMode) => mode !== s.mode && m.mutate({ mode }, { onSuccess: () => toast(mode === 'shadow' ? 'Đã chuyển sang chạy thử' : 'Đã chuyển sang chạy thật') });
+  const setMode = (mode: IntelMode) =>
+    mode !== s.mode &&
+    (mode !== 'shadow' || window.confirm('Chuyển sang chạy thử? Bốn cổng thường sẽ không nhắn riêng nữa (lừa đảo và an toàn vẫn báo thật). Gen báo kênh phụ về việc này.')) &&
+    m.mutate({ mode }, { onSuccess: () => toast(mode === 'shadow' ? 'Đã chuyển sang chạy thử' : 'Đã chuyển sang chạy thật') });
   const setRamp = (ramp_gates: IntelRamp) => ramp_gates !== s.ramp_gates && m.mutate({ ramp_gates }, { onSuccess: () => toast('Đã đổi cách báo trong 14 ngày đầu') });
   return (
     <Row title="Cách chạy" testId="intel-mode" state={<Badge kind="status" tone={s.mode === 'shadow' ? 'warn' : 'ok'}>{s.mode === 'shadow' ? 'Chạy thử' : 'Chạy thật'}</Badge>}>
@@ -164,7 +174,7 @@ function BackupRow({ s }: { s: IntelConsole }) {
     <Row title="Kênh phụ" testId="intel-backup" state={<Badge kind="status" tone={paired ? 'ok' : 'warn'}>{paired ? 'Đã ghép Telegram' : 'Chưa có kênh phụ'}</Badge>}>
       <p className="muted-note">
         {paired
-          ? 'Kênh phụ nhận báo sức khoẻ hệ thống và mã kép. Đổi hoặc ghép lại cần mã PIN và được báo ngay qua chính kênh này.'
+          ? 'Kênh phụ nhận báo sức khoẻ hệ thống và mã kép. Đổi, gỡ hoặc ghép lại cần mã PIN, và Gen báo ngay tới kênh hiện tại trước khi đổi.'
           : 'Chưa có kênh phụ: Sếp chưa nhận được báo sức khoẻ và mã kép, nên tin gửi khách chỉ mở được bằng «Mở khoá hôm nay». Nên ghép Telegram.'}
       </p>
       <Link to="/connections" className="sys-link">
@@ -188,7 +198,13 @@ function MutesRow({ s }: { s: IntelConsole }) {
               checked={!m}
               label={`Báo ${label}`}
               disabled={mute.isPending || unmute.isPending}
-              onChange={(on) => (on ? m && unmute.mutate(m.id, { onSuccess: () => toast(`Đã bật lại báo ${label}`) }) : mute.mutate(kind, { onSuccess: () => toast(`Đã tắt báo ${label}`, 'warn') }))}
+              onChange={(on) => {
+                if (on) {
+                  if (m) unmute.mutate(m.id, { onSuccess: () => toast(`Đã bật lại báo ${label}`) });
+                } else if (window.confirm(`Tắt báo "${label}"? Đây là loại cảnh báo bảo vệ Sếp; Gen báo kênh phụ về việc này.`)) {
+                  mute.mutate(kind, { onSuccess: () => toast(`Đã tắt báo ${label}`, 'warn') });
+                }
+              }}
             />
             <span>{label}</span>
             {m ? <Badge kind="status" tone="bad">Đang tắt</Badge> : null}
@@ -253,7 +269,7 @@ function GroupsRow({ s }: { s: IntelConsole }) {
         <p className="muted-note">Chưa có nhóm nào.</p>
       ) : (
         <>
-          <p className="muted-note">Chọn nhiều nhóm rồi gán chung một bối cảnh. Nhóm chưa gán được xử lý thận trọng (như “Khác”).</p>
+          <p className="muted-note">Chọn nhiều nhóm rồi gán chung một bối cảnh — việc này THAY TOÀN BỘ bối cảnh Sếp đã gán cho các nhóm đã chọn. Nhóm chưa gán được xử lý thận trọng (như “Khác”).</p>
           <ul className="intel-list intel-list--scroll">
             {s.groups.map((g) => (
               <li key={g.id} className="intel-list__item">

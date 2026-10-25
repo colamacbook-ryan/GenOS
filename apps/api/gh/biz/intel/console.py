@@ -110,11 +110,11 @@ async def unlock_assistant(user: service.CurrentUser = Depends(require_owner), _
                            db: AsyncSession = DB) -> dict[str, Any]:
     """Mở khoá trợ lý (Console + PIN). Chỉ xoá cờ khoá — KHÔNG tự bật lại kênh quản trị / hỗ trợ nhóm (Sếp bật lại có chủ ý).
     Idempotent: không khoá ⇒ `already: true`, không ghi thêm. Báo kênh phụ mỗi lần mở khoá thật."""
-    if not await backup.is_locked(db, user.org_id):
-        return {"ok": True, "locked": False, "already": True}
-    res = await backup.unlock_assistant(db, user.org_id, user_id=user.id)
+    res = await backup.unlock_assistant(db, user.org_id, user_id=user.id)      # kiểm-và-xoá trong cùng khoá tổ chức
     if not res.ok:
         raise ApiError(403, "NOT_OWNER", "Chỉ Sếp mới mở khoá được trợ lý")
+    if res.already:
+        return {"ok": True, "locked": False, "already": True}
     await backup.notify(db, user.org_id, "Sếp vừa MỞ KHOÁ trợ lý trên Console (đã nhập mã PIN). Kênh quản trị và chế độ hỗ trợ nhóm vẫn tắt "
                                          "cho tới khi Sếp bật lại. Nếu không phải Sếp: «khoá trợ lý» ngay.",
                         kind="security", dedupe_key=f"assistant.unlock:{uuid.uuid4().hex}")
@@ -126,6 +126,7 @@ async def unlock_today(user: service.CurrentUser = Depends(require_owner), _p: s
                        db: AsyncSession = DB) -> dict[str, Any]:
     """«Mở khoá hôm nay» (Console + PIN): trong ngày VN này «OK #MÃ» gửi tin cho khách không cần mã kép. Không gỡ khoá bất thường 1 giờ.
     Idempotent: đã mở hôm nay ⇒ `already: true`, không ghi/báo thêm."""
+    await strong_confirm._serialize(db, user.org_id)         # cùng khoá với khoá/mở khoá trợ lý
     if await backup.is_locked(db, user.org_id):
         raise ApiError(409, "ASSISTANT_LOCKED", "Trợ lý đang bị khoá — mở khoá trợ lý trước")
     if await strong_confirm.unlocked_today(db, user.org_id):

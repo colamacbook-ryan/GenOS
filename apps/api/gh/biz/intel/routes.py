@@ -155,17 +155,24 @@ class MuteIn(BaseModel):
 
 @router.post("/intel/mutes")
 async def create_mute(body: MuteIn, user: service.CurrentUser = Depends(require_owner), db: AsyncSession = DB) -> dict[str, Any]:
-    defensive = body.scope_type == "kind" and body.scope_value in mutes.DEFENSIVE_KINDS
+    """Mute. Hạ phòng thủ (§8.1) = kind lừa đảo/an toàn (chỉ khi có PIN) HOẶC mọi mute phạm vi khác lưu `source="pin"` (nhóm/người/detector —
+    `levels` cho mute PIN hạ cả vụ lừa đảo/an toàn xuống ⚪) ⇒ qua `strong_confirm` (Nhật ký + báo kênh phụ). Mute cùng phạm vi + nguồn đang hiệu lực
+    ⇒ trả bản cũ, không báo lần hai."""
+    from gh.biz.intel import strong_confirm
+
     if body.scope_type == "kind" and body.scope_value not in levels.KINDS:
         raise ApiError(422, "VALIDATION", "Loại tín hiệu không hợp lệ")
-    if defensive and not user.pin_active():
+    kind_defensive = body.scope_type == "kind" and body.scope_value in mutes.DEFENSIVE_KINDS
+    if kind_defensive and not user.pin_active():
         raise pin_required()
+    source = "pin" if user.pin_active() else "chat"
+    defensive = kind_defensive or (body.scope_type != "kind" and source == "pin")
+    old = await mutes.find_active(db, user.org_id, scope_type=body.scope_type, scope_value=body.scope_value, source=source)  # type: ignore[arg-type]
+    if old is not None:
+        return {"id": str(old.id), "source": old.source, "already": True}
     if defensive:
-        from gh.biz.intel import strong_confirm
-
         await strong_confirm.require(db, user.org_id, "mute_defensive", via="console", pin_verified=True)    # báo kênh phụ
-    m = await mutes.create(db, user.org_id, scope_type=body.scope_type, scope_value=body.scope_value,
-                           source="pin" if user.pin_active() else "chat", user_id=user.id)
+    m = await mutes.create(db, user.org_id, scope_type=body.scope_type, scope_value=body.scope_value, source=source, user_id=user.id)  # type: ignore[arg-type]
     await actionlog.record(db, org_id=user.org_id, actor_type="user", actor_id=user.actor_id, action="intel.mute.created",
                            target_type="mute", target_id=str(m.id), result="ok", detail={"scope": body.scope_type, "source": m.source})
     return {"id": str(m.id), "source": m.source}

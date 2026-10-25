@@ -50,6 +50,15 @@ async def create(db: AsyncSession, org_id: uuid.UUID, *, scope_type: str, scope_
     return Mute(r, scope_type, scope_value, source, until)
 
 
+async def find_active(db: AsyncSession, org_id: uuid.UUID, *, scope_type: str, scope_value: str, source: Source) -> Mute | None:
+    """Mute cùng phạm vi + cùng nguồn đang hiệu lực (để `POST` lặp lại không tạo bản thứ hai / báo kênh phụ lần hai)."""
+    r = (await db.execute(text("""
+        SELECT id, until FROM biz.signal_mutes WHERE org_id = :o AND scope_type = :t AND scope_value = :v AND source = :s
+          AND revoked_at IS NULL AND (until IS NULL OR until > now()) ORDER BY created_at LIMIT 1"""),
+        {"o": org_id, "t": scope_type, "v": scope_value, "s": source})).one_or_none()
+    return Mute(r.id, scope_type, scope_value, source, r.until) if r is not None else None
+
+
 async def revoke(db: AsyncSession, org_id: uuid.UUID, mute_id: uuid.UUID) -> bool:
     r = await db.execute(text("UPDATE biz.signal_mutes SET revoked_at = now() WHERE id = :i AND org_id = :o AND revoked_at IS NULL"),
                          {"i": mute_id, "o": org_id})

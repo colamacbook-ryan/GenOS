@@ -162,3 +162,46 @@ async def test_defensive_mute_needs_pin_and_is_logged_with_backup_notice(owner_a
 async def test_console_state_defaults(owner_api: Api) -> None:
     st = (await owner_api.get("/intel/console")).json()
     assert st["backup_channel"] == {"paired": False, "kind": "none"} and st["contexts"] and st["groups"] == []
+
+
+# ─── review bảo mật T11: M1 mute phạm vi khác + m1/m4/m7 ─────────────────────
+
+@pytest.mark.parametrize(("scope_type", "scope_value"), [("detector", "fraud"), ("detector", "safety"), ("group", "00000000-0000-0000-0000-000000000001"),
+                                                          ("person", "00000000-0000-0000-0000-000000000002")])
+async def test_pin_mute_of_other_scope_is_defensive_and_notifies(owner_api: Api, db: AsyncSession, scope_type: str, scope_value: str) -> None:
+    await verify_pin(owner_api)
+    r = await owner_api.send("POST", "/intel/mutes", {"scope_type": scope_type, "scope_value": scope_value})
+    assert r.status_code == 200 and r.json()["source"] == "pin"
+    assert (await db.execute(text("SELECT count(*) FROM ops.action_log WHERE action = 'strong_confirm.console'"))).scalar_one() == 1
+    assert (await db.execute(text("SELECT count(*) FROM ops.backup_outbox"))).scalar_one() == 1
+
+
+async def test_chat_source_mute_of_other_scope_needs_no_notice(owner_api: Api, db: AsyncSession) -> None:
+    r = await owner_api.send("POST", "/intel/mutes", {"scope_type": "detector", "scope_value": "fraud"})
+    assert r.status_code == 200 and r.json()["source"] == "chat"
+    assert (await db.execute(text("SELECT count(*) FROM ops.backup_outbox"))).scalar_one() == 0
+
+
+async def test_mute_dedupe_returns_existing_and_notifies_once(owner_api: Api, db: AsyncSession) -> None:
+    await verify_pin(owner_api)
+    a = (await owner_api.send("POST", "/intel/mutes", {"scope_type": "kind", "scope_value": "rui_ro_lua_dao"})).json()
+    b = (await owner_api.send("POST", "/intel/mutes", {"scope_type": "kind", "scope_value": "rui_ro_lua_dao"})).json()
+    assert a["id"] == b["id"]
+    assert (await db.execute(text("SELECT count(*) FROM biz.signal_mutes WHERE revoked_at IS NULL"))).scalar_one() == 1
+    assert (await db.execute(text("SELECT count(*) FROM ops.backup_outbox"))).scalar_one() == 1
+
+
+async def test_locking_assistant_drops_unlock_today(owner_api: Api) -> None:
+    await verify_pin(owner_api)
+    assert (await owner_api.send("POST", "/intel/unlock-today", {})).status_code == 200
+    await owner_api.send("POST", "/intel/lock-assistant", {})
+    await owner_api.send("POST", "/intel/unlock-assistant", {})
+    assert (await owner_api.get("/intel/console")).json()["outbound"]["unlocked_today"] is False
+
+
+async def test_unlock_log_actor_has_user_prefix(owner_api: Api, db: AsyncSession) -> None:
+    await verify_pin(owner_api)
+    await owner_api.send("POST", "/intel/lock-assistant", {})
+    await owner_api.send("POST", "/intel/unlock-assistant", {})
+    actor = (await db.execute(text("SELECT actor_id FROM ops.action_log WHERE action = 'assistant.unlock'"))).scalar_one()
+    assert actor.startswith("user:")

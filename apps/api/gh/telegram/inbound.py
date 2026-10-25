@@ -391,6 +391,13 @@ async def try_pair(
             text("UPDATE ops.notify_channels SET pair_attempts = :a WHERE org_id = :o"), {"a": attempts, "o": org_id}
         )
         return False, R_PAIR_WRONG
+    new_chat = str(chat["id"])
+    if row.owner_chat_id and str(row.owner_chat_id) != new_chat:
+        # Ghép sang chat KHÁC chat đã ghép: báo chat CŨ (đích lưu theo dòng, flush không theo cấu hình mới) — spec §8.1.
+        from gh.biz.intel import strong_confirm
+
+        await strong_confirm.require(db, org_id, "rebind_backup_channel", via="console", pin_verified=True,
+                                     notify_chat=str(row.owner_chat_id))
     await db.execute(
         text("""
         UPDATE ops.notify_channels SET owner_chat_id = :c, owner_tg_user_id = :t, owner_user_id = pair_user_id,
