@@ -12,6 +12,16 @@ Trần ≈ 6.000 token (Hồ sơ ≤ 800, sự thật ≤ 2.000, quan hệ ≤ 8
 4. Mở rộng theo thời gian: bên gọi (L2) đổi cụm "tuần trước" bằng `gh.biz.mem.vi_time` (L3) thành `time_hint` rồi truyền vào.
 Mọi mục mang `fact_id` / `meaning_unit_id` để câu trả lời và tín hiệu trích được nguồn. Chữ của người ngoài bọc `wrap_untrusted`
 kèm "theo lời X" khi render.
+
+Phạm vi hiện của sự thật (fix-gkb3, `fact_visible`): spec §4A.2 chỉ nói khối xuyên nhóm CÙNG THỰC THỂ mang sự thật đã kiểm, KHÔNG nói
+sự thật sinh ở nhóm X được hiện ở nhóm Y nào. Chủ thể hay gặp nhất là chính Sếp (người gửi của mọi nhóm) nên "cùng thực thể" thành
+"mọi nhóm": lời hứa với con ở nhóm gia đình, lương nhân viên hiện ở nhóm giao thương 120 người lạ (G-KB kb4). Áp MẶC ĐỊNH AN TOÀN:
+(1) sự thật hiện ở luồng nguồn của bằng chứng (nhóm / 1-1 có tin bằng chứng, kể cả bằng chứng của bản cũ mà Sếp đã sửa);
+(2) ở luồng khác CHỈ khi: luồng hiện tại là nhóm Sếp đã xác nhận bối cảnh (≠ `khac`), không đông người (≤ `CROSS_GROUP_MAX_MEMBERS`),
+    sự thật `sensitivity='normal'`, và MỌI bối cảnh nguồn đều là bối cảnh đã xác nhận của nhóm hiện tại (nhóm nguồn chưa xác nhận ⇒ không);
+    hệ quả: sự thật gia đình/bạn bè/nhân viên/học tập không bao giờ sang nhóm giao thương, công việc…; sức khoẻ, SĐT, STK, nhân sự
+    (sensitivity ≠ normal) không bao giờ xuyên luồng.
+Áp cho khối "Sự thật đã biết" và cạnh sự thật của khối "Quan hệ"; cạnh nóng chỉ giữ người cùng luồng.
 """
 
 from __future__ import annotations
@@ -26,6 +36,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gh.biz.mem import contexts, entities, profile_read
+from gh.data.common import outbound_to_sql
 from gh.untrusted import wrap_untrusted
 
 BUDGET = {"profile": 800, "facts": 2000, "related": 800, "history": 2400}
@@ -35,6 +46,8 @@ HISTORY_TOP = 10
 RELATED_MAX_NODES = 20
 RRF_K = 60
 TRGM_MIN = 0.05                                   # sàn độ giống trigram (chỉ bỏ cặp gần như không chung chữ)
+CROSS_GROUP_MAX_MEMBERS = 50                      # nhóm đông hơn ⇒ không nhận sự thật từ luồng khác (spec r6.6.1 §14.11 #7: lõi khách ≤ 50)
+SUPERSEDE_DEPTH = 20                              # đi ngược chuỗi `supersedes` (bản Sếp sửa) tìm bằng chứng gốc
 PREDICATE_PRIORITY = {"promised_to": 0, "owes": 0, "deadline": 0, "asked_waiting": 0, "scheduled_event": 1,
                       "health_event": 1}
 
@@ -137,7 +150,104 @@ async def _anchor_entities(db: AsyncSession, org_id: uuid.UUID, thread_key: str,
     return list(dict.fromkeys(ids))
 
 
-async def _facts(db: AsyncSession, org_id: uuid.UUID, anchors: list[uuid.UUID], now: datetime) -> list[PackItem]:
+@dataclass(frozen=True)
+class Scope:
+    """Luồng đang phân tích + điều kiện SQL "tin/đơn vị thuộc luồng" (alias `e` = raw.events, `m` = clean.meaning_units)."""
+    thread_key: str
+    group_id: uuid.UUID | None
+    dm_person: uuid.UUID | None
+    raw_cond: str
+    unit_cond: str
+    params: dict[str, Any]
+    contexts: frozenset[str]                      # bối cảnh Sếp đã xác nhận của nhóm hiện tại (rỗng = chưa xác nhận / 1-1)
+    members: int | None
+
+
+async def scope_of(db: AsyncSession, org_id: uuid.UUID, thread_key: str, pol: contexts.Policy) -> Scope:
+    gid = contexts.group_of(thread_key)
+    if gid is not None:
+        n = (await db.execute(text("""
+            SELECT coalesce(g.member_count, (SELECT count(*) FROM core.group_members m WHERE m.group_id = g.id AND m.left_at IS NULL))
+            FROM core.groups g WHERE g.id = :g AND g.org_id = :o"""), {"g": gid, "o": org_id})).scalar_one_or_none()
+        return Scope(thread_key, gid, None, "e.group_id = :sg", "m.group_id = :sg", {"sg": gid},
+                     frozenset(pol.contexts) if pol.confirmed else frozenset(), None if n is None else int(n))
+    pid = None
+    if thread_key.startswith("dm:"):
+        try:
+            pid = uuid.UUID(thread_key.split(":")[1])
+        except (ValueError, IndexError):
+            pid = None
+    if pid is None:
+        return Scope(thread_key, None, None, "FALSE", "FALSE", {}, frozenset(), None)
+    ids: list[uuid.UUID] = []
+    ext: list[str] = []
+    for r in (await db.execute(text("SELECT id, external_id FROM core.person_identities WHERE person_id = :p"), {"p": pid})).all():
+        ids.append(r.id)
+        b = str(r.external_id or "").split("@", 1)[0]
+        if b:
+            ext.append(b)
+    raw = (f"(e.group_id IS NULL AND (e.sender_identity_id = ANY(CAST(:sids AS uuid[])) OR "
+           f"{outbound_to_sql('e', 'CAST(:sids AS uuid[])', 'CAST(:sext AS text[])')}))")
+    return Scope(thread_key, None, pid, raw, "(m.group_id IS NULL AND m.person_id = :sp)", {"sids": ids, "sext": ext, "sp": pid},
+                 frozenset(), None)
+
+
+async def fact_visible(db: AsyncSession, org_id: uuid.UUID, scope: Scope, facts_: list[tuple[uuid.UUID, str, str | None]]) -> set[uuid.UUID]:
+    """Lọc phạm vi hiện (xem docstring module). `facts_` = [(fact_id, sensitivity, context_code)]. Trả các id được hiện ở `scope`."""
+    if not facts_:
+        return set()
+    ids = [f[0] for f in facts_]
+    rows = (await db.execute(text(f"""
+        WITH RECURSIVE ch(root, id, d) AS (
+            SELECT f.id, f.id, 0 FROM mem.facts f WHERE f.org_id = :o AND f.id = ANY(CAST(:ids AS uuid[]))
+            UNION ALL
+            SELECT ch.root, p.supersedes, ch.d + 1 FROM ch JOIN mem.facts p ON p.id = ch.id
+            WHERE p.supersedes IS NOT NULL AND ch.d < {SUPERSEDE_DEPTH}
+        ), raws AS (
+            SELECT ch.root, x.raw_event_id AS rid FROM ch JOIN mem.fact_evidence x ON x.fact_id = ch.id WHERE x.raw_event_id IS NOT NULL
+            UNION
+            SELECT ch.root, f.source_raw_event_id FROM ch JOIN mem.facts f ON f.id = ch.id WHERE f.source_raw_event_id IS NOT NULL
+        )
+        SELECT r.root, e.group_id, ({scope.raw_cond}) AS same FROM raws r JOIN raw.events e ON e.id = r.rid AND e.org_id = :o
+        UNION ALL
+        SELECT ch.root, m.group_id, ({scope.unit_cond}) AS same
+        FROM ch JOIN mem.fact_evidence x ON x.fact_id = ch.id JOIN clean.meaning_units m ON m.id = x.meaning_unit_id"""),  # noqa: S608 — điều kiện là hằng nội bộ
+        {"o": org_id, "ids": ids, **scope.params})).all()
+    same: set[uuid.UUID] = set()
+    src: dict[uuid.UUID, set[uuid.UUID | None]] = {}
+    for r in rows:
+        if r.same:
+            same.add(r.root)
+        src.setdefault(r.root, set()).add(r.group_id)
+    out = set(same)
+    cross_ok = (scope.group_id is not None and bool(scope.contexts - {"khac"})
+                and (scope.members is None or scope.members <= CROSS_GROUP_MAX_MEMBERS))
+    if not cross_ok:
+        return out
+    groups = {g for s in src.values() for g in s if g is not None}
+    gctx: dict[uuid.UUID, set[str]] = {}
+    if groups:
+        for r in (await db.execute(text("""SELECT group_id, context FROM mem.group_contexts
+                                           WHERE org_id = :o AND source = 'owner' AND group_id = ANY(CAST(:g AS uuid[]))"""),
+                                   {"o": org_id, "g": list(groups)})).all():
+            gctx.setdefault(r.group_id, set()).add(r.context)
+    allowed = scope.contexts - {"khac"}
+    for fid, sens, ctx_code in facts_:
+        if fid in out or sens != "normal":
+            continue
+        s = src.get(fid, set())
+        if None in s:                              # có bằng chứng 1-1 ⇒ chuyện riêng một người, không xuyên luồng
+            continue
+        if s:
+            ok = all(bool(gctx.get(g)) and gctx[g] <= allowed for g in s if g is not None)
+        else:
+            ok = ctx_code is not None and ctx_code in allowed
+        if ok:
+            out.add(fid)
+    return out
+
+
+async def _facts(db: AsyncSession, org_id: uuid.UUID, anchors: list[uuid.UUID], now: datetime, scope: Scope) -> list[PackItem]:
     if not anchors:
         return []
     members: list[uuid.UUID] = []
@@ -145,7 +255,7 @@ async def _facts(db: AsyncSession, org_id: uuid.UUID, anchors: list[uuid.UUID], 
         members.extend(await entities.members(db, a))
     rows = (await db.execute(text("""
         SELECT f.id, f.predicate, f.status, f.object_value, f.object_entity_id, f.source_class, f.attributed_to,
-               f.valid_from, f.valid_to, f.sensitivity, coalesce(s.merged_into, s.id) AS subj, s.display_name AS subj_name,
+               f.valid_from, f.valid_to, f.sensitivity, f.context_code, coalesce(s.merged_into, s.id) AS subj, s.display_name AS subj_name,
                o.display_name AS obj_name, a.display_name AS attr_name,
                (SELECT array_agg(x.raw_event_id) FROM mem.fact_evidence x WHERE x.fact_id = f.id AND x.raw_event_id IS NOT NULL) AS ev
         FROM mem.facts f JOIN mem.entities s ON s.id = f.subject_id
@@ -153,6 +263,8 @@ async def _facts(db: AsyncSession, org_id: uuid.UUID, anchors: list[uuid.UUID], 
         WHERE f.org_id = :o AND f.subject_id = ANY(:m) AND f.status IN ('owner_confirmed', 'asserted', 'disputed')
           AND f.valid_from <= :n AND (f.valid_to IS NULL OR f.valid_to > :n) AND f.evidence_n >= 1
           AND f.predicate NOT LIKE 'owner\\_%'"""), {"o": org_id, "m": members, "n": now})).all()
+    vis = await fact_visible(db, org_id, scope, [(r.id, r.sensitivity, r.context_code) for r in rows])
+    rows = [r for r in rows if r.id in vis]
 
     def rank(r: Any) -> tuple[int, int, int, float]:
         return (0 if r.status == "owner_confirmed" else 1 if r.status == "disputed" else 2,
@@ -243,38 +355,49 @@ async def _history(db: AsyncSession, org_id: uuid.UUID, thread_key: str, query_t
                      meta={"kind_hint": info[k].kind_hint, "observed_at": info[k].observed_at, "evidence": ev.get(k, [])}) for k in top]
 
 
-async def _related(db: AsyncSession, org_id: uuid.UUID, anchors: list[uuid.UUID]) -> list[PackItem]:
+async def _related(db: AsyncSession, org_id: uuid.UUID, anchors: list[uuid.UUID], scope: Scope) -> list[PackItem]:
+    """Quan hệ 1–2 bước. Cạnh sự thật đi qua cùng phạm vi hiện như khối "Sự thật" (`fact_visible`; bước 2 cần cả cạnh bước 1 hiện
+    được); cạnh nóng (`clean.relationships`) chỉ giữ NGƯỜI là thành viên của chính nhóm này — không lộ tên nhóm/người của bối cảnh khác."""
     if not anchors:
         return []
-    rows = (await db.execute(text("""
+    walk = (await db.execute(text("""
         WITH RECURSIVE edges AS (
-          SELECT f.id AS fact_id, coalesce(s.merged_into, s.id) AS a, coalesce(o.merged_into, o.id) AS b, f.predicate
+          SELECT f.id AS fact_id, f.sensitivity, f.context_code, coalesce(s.merged_into, s.id) AS a, coalesce(o.merged_into, o.id) AS b,
+                 f.predicate
           FROM mem.facts f JOIN mem.entities s ON s.id = f.subject_id JOIN mem.entities o ON o.id = f.object_entity_id
           WHERE f.org_id = :o AND f.status IN ('owner_confirmed', 'asserted') AND f.object_entity_id IS NOT NULL
             AND f.predicate NOT LIKE 'owner\\_%' AND (f.valid_to IS NULL OR f.valid_to > now())
         ), walk AS (
-          SELECT e.fact_id, e.a AS frm, e.b AS node, e.predicate, 1 AS depth FROM edges e WHERE e.a = ANY(:an)
+          SELECT e.fact_id, e.sensitivity, e.context_code, CAST(NULL AS uuid) AS parent, e.a AS frm, e.b AS node, e.predicate, 1 AS depth
+          FROM edges e WHERE e.a = ANY(:an)
           UNION
-          SELECT e.fact_id, e.b, e.a, e.predicate, 1 FROM edges e WHERE e.b = ANY(:an)
+          SELECT e.fact_id, e.sensitivity, e.context_code, CAST(NULL AS uuid), e.b, e.a, e.predicate, 1 FROM edges e WHERE e.b = ANY(:an)
           UNION
-          SELECT e.fact_id, w.node, CASE WHEN e.a = w.node THEN e.b ELSE e.a END, e.predicate, w.depth + 1
+          SELECT e.fact_id, e.sensitivity, e.context_code, w.fact_id, w.node, CASE WHEN e.a = w.node THEN e.b ELSE e.a END, e.predicate,
+                 w.depth + 1
           FROM walk w JOIN edges e ON (e.a = w.node OR e.b = w.node) WHERE w.depth < 2 AND NOT (w.node = ANY(:an))
         )
-        SELECT DISTINCT ON (w.node) w.fact_id, w.node, w.predicate, w.depth, n.display_name, fr.display_name AS frm_name
+        SELECT w.fact_id, w.sensitivity, w.context_code, w.parent, w.node, w.predicate, w.depth, n.display_name, fr.display_name AS frm_name
         FROM walk w JOIN mem.entities n ON n.id = w.node JOIN mem.entities fr ON fr.id = w.frm
-        WHERE NOT (w.node = ANY(:an)) AND n.forgotten_at IS NULL
-        ORDER BY w.node, w.depth LIMIT :lim"""), {"o": org_id, "an": anchors, "lim": RELATED_MAX_NODES})).all()
+        WHERE NOT (w.node = ANY(:an)) AND n.forgotten_at IS NULL"""), {"o": org_id, "an": anchors})).all()
+    vis = await fact_visible(db, org_id, scope, list({(r.fact_id, r.sensitivity, r.context_code) for r in walk}))
+    best: dict[uuid.UUID, Any] = {}
+    for r in sorted(walk, key=lambda r: (r.depth, str(r.fact_id))):
+        if r.fact_id in vis and (r.parent is None or r.parent in vis) and r.node not in best:
+            best[r.node] = r
+    rows = sorted(best.values(), key=lambda r: (r.depth, r.display_name))[:RELATED_MAX_NODES]
     out = [PackItem(text=f"{r.frm_name} —{r.predicate}— {r.display_name} (bước {r.depth})", fact_id=r.fact_id, entity_id=r.node,
-                    meta={"predicate": r.predicate, "depth": r.depth}) for r in sorted(rows, key=lambda r: (r.depth, r.display_name))]
+                    meta={"predicate": r.predicate, "depth": r.depth}) for r in rows]
     room = RELATED_MAX_NODES - len(out)
-    if room > 0:                                    # cạnh nóng từ clean.relationships (tương tác người ↔ người/nhóm)
+    if room > 0 and scope.group_id is not None:     # cạnh nóng: chỉ tới người cùng nhóm này
         seen = {i.entity_id for i in out} | set(anchors)
         rel = (await db.execute(text("""
             SELECT DISTINCT ON (t.id) t.id AS eid, t.display_name, r.weight FROM clean.relationships r
             JOIN mem.entities s ON s.person_id = r.from_id AND r.from_type = 'person' AND s.id = ANY(:an)
-            JOIN mem.entities t ON (r.to_type = 'person' AND t.person_id = r.to_id) OR (r.to_type = 'group' AND t.group_id = r.to_id)
+            JOIN mem.entities t ON r.to_type = 'person' AND t.person_id = r.to_id
+            JOIN core.group_members gm ON gm.group_id = :g AND gm.person_id = r.to_id AND gm.left_at IS NULL
             WHERE r.org_id = :o AND r.state <> 'cold' AND t.forgotten_at IS NULL
-            ORDER BY t.id, r.weight DESC"""), {"o": org_id, "an": anchors})).all()
+            ORDER BY t.id, r.weight DESC"""), {"o": org_id, "an": anchors, "g": scope.group_id})).all()
         for r in sorted(rel, key=lambda x: float(x.weight), reverse=True):
             cid = await entities.canonical(db, r.eid)
             if cid in seen or room <= 0:
@@ -298,8 +421,9 @@ async def pack(db: AsyncSession, org_id: uuid.UUID, thread_key: str, events: lis
                      status="owner_confirmed", entity_id=i.object_entity_id) for i in snap.items]
     out.profile, out.budget_used["profile"] = _fit(prof, BUDGET["profile"])
     anchors = await _anchor_entities(db, org_id, thread_key, events)
-    out.facts, out.budget_used["facts"] = _fit(await _facts(db, org_id, anchors, now), BUDGET["facts"])
-    out.related, out.budget_used["related"] = _fit(await _related(db, org_id, anchors), BUDGET["related"])
+    scope = await scope_of(db, org_id, thread_key, pol)
+    out.facts, out.budget_used["facts"] = _fit(await _facts(db, org_id, anchors, now, scope), BUDGET["facts"])
+    out.related, out.budget_used["related"] = _fit(await _related(db, org_id, anchors, scope), BUDGET["related"])
     qtext = " ".join(str(_g(e, "text") or "") for e in events[-8:])
     persons = [p for p in dict.fromkeys(_g(e, "sender_person_id") for e in events) if p is not None]
     out.history, out.budget_used["history"] = _fit(
