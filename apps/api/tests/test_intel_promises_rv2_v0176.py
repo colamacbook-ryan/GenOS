@@ -102,5 +102,5 @@ async def test_rv2_flood_of_processed_no_due_promises_cannot_push_out_real_deadl
         await _fact(db, w2, "promised_to", w2.staff, f"việc {i}", at=NOW - timedelta(hours=40 - i), due=None, to=w2.cust)
     await _fact(db, w2, "promised_to", w2.staff, "giao hàng chiều nay", at=NOW - timedelta(hours=2), due=NOW + timedelta(hours=3), to=w2.cust)
     out2 = await promises.project(db, w2.org, NOW, limit=5)
-    assert out2[0].gate == levels.G4 and len(out2) == 5
-    assert sum(1 for s in out2 if s.gate is None) == 4 and sum(1 for s in out2 if s.level != "red") == 4
+    assert out2[0].gate == levels.G4 and out2[0].level == "red"
+    assert len(out2) == 2                                             # 1 có hạn + trần riêng nhóm không hạn = max(1, limit // 5)
