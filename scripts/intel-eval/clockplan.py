@@ -9,6 +9,9 @@ Mô phỏng đúng luật scheduler trên thời gian giả:
   một chuỗi trả lời (`reply_to` trỏ tin trong lượt, hoặc cùng người gửi trong 2 phút theo giờ gốc) — trừ khi không còn chỗ cắt (đếm `hard_cut`);
 * tin không cần model (sticker, reaction, "dạ/ok/cảm ơn") không vào phần tin mới nhưng được đếm (`skipped`) cho dòng độ phủ;
 * hàng chờ xoay vòng theo luồng; `workers` lượt song song, mỗi lượt kéo dài `turn_s` giây giả (M9: lượt ≤ 60 s);
+* trần độ trễ theo GIỜ DỮ LIỆU (`max_lag_s`, H1): chế độ nén làm 20 phút đồng hồ giả = nhiều giờ/ngày dữ liệu ⇒ một lô trải 5–12 ngày và mọi cổng có
+  cửa sổ 24–48 giờ bị `window_expired` giả. Mỗi luồng có thêm đồng hồ hẹn ở giờ dữ liệu = tin cũ nhất + `max_lag_s` (lý do `lag`), nên giờ dữ liệu của
+  lượt (`data_time`) ≤ tin cũ nhất + `max_lag_s` + phần nén (≤ `max_gap_s`);
 * giãn nhịp (§4D.5 bậc 2): luồng chạm 80% trần luồng/ngày hoặc tổ chức chạm 80% trần ⇒ nhịp 60 phút (`stretched`); vượt trần chỉ ĐÁNH DẤU
   (`over_cap`), KHÔNG chặn — replay phải thấy đủ tin để chấm và để S7 đo số lượt thật cần. (Lệch spec có chủ ý, ghi ở báo cáo L6.)
 Ngày tính trần = ngày GỐC (giờ VN) của tin cuối lượt — trong chế độ nén đồng hồ giả chạy nhanh nên không thể dùng ngày giả.
@@ -66,6 +69,7 @@ class PlanConfig:
     stretch_at: float = 0.80
     recent_msgs: int = 30
     recent_hours: float = 24.0
+    max_lag_s: float | None = None   # H1: tin chờ cũ nhất của luồng phải được phân tích trong ≤ chừng này GIỜ DỮ LIỆU (None = tắt, khuôn cũ)
 
 
 @dataclass
@@ -202,6 +206,33 @@ def densest_window(msgs: list[Msg], thread: str, size: int) -> tuple[int, int] |
     return idx[best], idx[best + size - 1]
 
 
+def lag_deadline(msg_ts: list[datetime], times: list[float], target: datetime) -> float:
+    """Thời điểm giả `t` sao cho `data_time(msgs, times, t) ≤ target` và sát `target` nhất có thể (ngược của `data_time`): tin cuối cùng có giờ gốc
+    ≤ `target` đã đến + phần giây giả chưa vượt khoảng cách tới tin kế (chế độ nén cắt khoảng đó). Trước tin đầu ⇒ trả `times[0]`."""
+    import bisect
+
+    j = bisect.bisect_right(msg_ts, target) - 1
+    if j < 0:
+        return times[0]
+    extra = (target - msg_ts[j]).total_seconds()
+    if j + 1 < len(times):
+        extra = min(extra, max(0.0, times[j + 1] - times[j] - 1e-6))      # chặn TRƯỚC lúc tin kế tới (tin tới trước đồng hồ hẹn cùng giây: giờ dữ liệu nhảy)
+    return times[j] + max(0.0, extra)
+
+
+def lag_stats(turns: list[Turn], msgs: list[Msg], times: list[float]) -> dict[str, Any]:
+    """Độ trễ phân tích theo từng tin: giờ dữ liệu của lượt − giờ gốc của tin (phút). Báo trung vị/p90/max và tỷ lệ tin trễ > 30 phút / > 6 giờ."""
+    lags: list[float] = []
+    for t in turns:
+        at = data_time(msgs, times, t.start)
+        lags.extend(max(0.0, (at - m.ts).total_seconds()) / 60.0 for m in t.new)
+    q = quantiles(lags)
+    s = sorted(lags)
+    p90 = s[min(len(s) - 1, int(0.9 * (len(s) - 1) + 0.5))] if s else None
+    return {"n": len(lags), "median_min": q["median"], "p90_min": p90, "max_min": q["max"],
+            "over_30min": sum(1 for x in lags if x > 30), "over_6h": sum(1 for x in lags if x > 360)}
+
+
 def plan_turns(msgs: list[Msg], times: list[float], cfg: PlanConfig | None = None,
                fast_rule: Callable[[Msg], bool] | None = None, stats: dict[str, int] | None = None) -> list[Turn]:
     """Mô phỏng scheduler. `msgs` đã sắp theo thời gian; `times[i]` = giây giả khi tin i tới. `stats` (nếu có) nhận
@@ -230,6 +261,20 @@ def plan_turns(msgs: list[Msg], times: list[float], cfg: PlanConfig | None = Non
     turns: list[Turn] = []
     flushed = 0
     thread_cap = max(1.0, cfg.daily_call_cap * cfg.thread_cap_share)
+    msg_ts = [m.ts for m in msgs]
+
+    def schedule(thread: str, oldest_t: float, oldest: Msg, now: float) -> None:
+        """Hẹn hai đồng hồ cho tin cũ nhất đang chờ: nhịp (đồng hồ giả) và trần độ trễ theo giờ dữ liệu (H1)."""
+        push(max(now, oldest_t + cadence_for(thread, now)), 1, (thread, oldest_t, "cadence"))
+        if cfg.max_lag_s is not None and msg_ts:
+            push(max(now, lag_deadline(msg_ts, times, oldest.ts + timedelta(seconds=cfg.max_lag_s))), 1, (thread, oldest_t, "lag"))
+
+    def busy_until(now: float) -> float:
+        """Worker rảnh lại lúc nào. Khuôn cũ: `now + turn_s` giây giả. Có trần độ trễ (H1): `turn_s` tính theo giờ DỮ LIỆU — lượt model thật chạy ≤ 60 s
+        đồng hồ thật, còn 60 s giả trong chế độ nén là hàng giờ dữ liệu (worker kẹt cả buổi ⇒ lượt các luồng khác trễ vài ngày)."""
+        if cfg.max_lag_s is None or not msg_ts:
+            return now + cfg.turn_s
+        return max(now, lag_deadline(msg_ts, times, data_time(msgs, times, now) + timedelta(seconds=cfg.turn_s)))
 
     def trigger(thread: str, reason: str) -> None:
         if thread not in queued:
@@ -276,18 +321,19 @@ def plan_turns(msgs: list[Msg], times: list[float], cfg: PlanConfig | None = Non
                 stretched_threads.add((thread, day))
             over = day_calls[day] > cfg.daily_call_cap or thread_day_calls[(thread, day)] > thread_cap
             carry = sum(1 for _, m in rest if needs_model(m))
-            t = Turn(n=len(turns) + 1, thread=thread, start=now, end=now + cfg.turn_s, reason=reason, new=take, recent=recent,
+            done_at = busy_until(now)
+            t = Turn(n=len(turns) + 1, thread=thread, start=now, end=done_at, reason=reason, new=take, recent=recent,
                      skipped=skipped_now, carry_after=carry, hard_cut=hard, stretched=stretched, over_cap=over, orig_day=day,
                      chars=sum(len(m.text) for m in take))
             turns.append(t)
             seen[thread].extend(m for _, m in consumed)
             pending[thread] = rest
-            free_at[w] = now + cfg.turn_s
+            free_at[w] = done_at
             if rest:
                 if k < len(model_msgs):                  # dư vì trần 60/12.000 ⇒ lượt kế cùng nhóm, nối tiếp
                     trigger(thread, "carry")
                 else:                                    # chỉ còn tin tới sau lượt ⇒ nhịp mới tính từ tin cũ nhất còn chờ
-                    push(max(now, rest[0][0] + cadence_for(thread, now)), 1, (thread, rest[0][0]))
+                    schedule(thread, rest[0][0], rest[0][1], now)
         return
 
     while heap:
@@ -298,15 +344,15 @@ def plan_turns(msgs: list[Msg], times: list[float], cfg: PlanConfig | None = Non
             first = not pending[th]
             pending[th].append((now, m))
             if first:
-                push(now + cadence_for(th, now), 1, (th, now))
+                schedule(th, now, m, now)
             if fast_rule(m):
                 trigger(th, "fast")
             elif sum(1 for _, x in pending[th] if needs_model(x)) >= cfg.count_trigger:
                 trigger(th, "count")
         elif prio == 1:
-            th, oldest = payload
+            th, oldest, why = payload
             if pending[th] and abs(pending[th][0][0] - oldest) < 1e-9:
-                trigger(th, "cadence")
+                trigger(th, why)
         dispatch(now)
     if stats is not None:
         stats["skipped_flushed"] = flushed

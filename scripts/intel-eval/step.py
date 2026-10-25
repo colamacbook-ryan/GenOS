@@ -40,7 +40,7 @@ sys.path.insert(0, str(HERE))
 
 import replay  # noqa: E402
 from clockplan import PlanConfig  # noqa: E402
-from common import Dataset, api_dir, load_dataset, parse_context, refuse_inside_repo, write_json  # noqa: E402
+from common import Dataset, api_dir, load_dataset, parse_context, parse_member_counts, refuse_inside_repo, write_json  # noqa: E402
 
 CHARS_PER_TOKEN = 3.0          # ƯỚC TÍNH thô cho tiếng Việt + JSON (không có tokenizer cục bộ); sai số ± 25%
 PG_DEFAULT = "postgresql://postgres:postgres@localhost:5432"
@@ -184,6 +184,7 @@ def cmd_init(a: argparse.Namespace) -> None:
     prepare_redis(redis_url, force=a.force)
     cfg = {"dataset": str(Path(a.dataset).resolve()), "contexts": contexts, "pg": pg, "db": db, "redis": redis_url, "auto": "stub" if a.auto_stub else None,
            "intel_settings": json.loads(a.intel_settings) if a.intel_settings else None,
+           "max_lag_min": a.max_lag_min, "identity": not a.no_identity,
            "profile_items": sum(len(v) for v in ctx["profile"].values()), "context_groups": sorted(contexts or ctx["groups"])}
     write_json(run / "config.json", cfg)
     write_state(run, status="starting", seq=0, pending=None, turn=0, calls=0, error=None, dataset=ds.name, messages=len(ds.msgs))
@@ -355,8 +356,12 @@ class PipelineAnalyzer:
                 mime = "audio/ogg" if row.kind == "voice" else "image/jpeg"
                 att = await jobs._insert_attachment(db, ev, key=f"fake:{m['id']}", mime=mime, size=len(res.get("text") or ""), sha=hashlib.sha256(m["id"].encode()).digest())
                 if res["status"] == "ok":
-                    await jobs._write_text(db, ev, att, kind=jobs.PRIMARY_KIND[row.kind] if row.kind == "voice" else "description", status="ok",
-                                           text_=res["text"], engine="fake", version="fake/1")
+                    mkind = jobs.PRIMARY_KIND[row.kind] if row.kind == "voice" else "description"
+                    await jobs._write_text(db, ev, att, kind=mkind, status="ok", text_=res["text"], engine="fake", version="fake/1")
+                    # H3: nối đúng `media.jobs._process` — quét luật (a) trên chữ media (`prefilter_port.scan_text`, mặc định của `Deps.scan`);
+                    # trúng ⇒ `_escalate_fast` (tin chạy đường nhanh). Trước đây harness bỏ hai bước này ⇒ tin thoại/ảnh nguy hiểm không có đường nhanh.
+                    if res["text"] and jobs.prefilter_port.scan_text(res["text"], jobs.prefilter_port.source_field_for(mkind)):
+                        await jobs._escalate_fast(db, ev)
                 else:
                     await jobs._write_text(db, ev, att, kind=jobs.PRIMARY_KIND[row.kind], status="failed", error="fake_unreadable", engine="fake", version="fake/1")
                 await db.commit()
@@ -782,6 +787,7 @@ class IngestSink:
     def __init__(self, org: Any) -> None:
         self.org, self.inserted, self.dropped = org, 0, 0
         self.clock: ClockJobs | None = None
+        self.identity: IdentitySeed | None = None      # H2: đánh dấu nhân viên/khách ngay khi người đó có định danh (trước mọi lượt phân tích)
 
     async def emit(self, stream: str, type: str, payload: dict[str, Any]) -> None:
         from gh.data import ingest  # noqa: PLC0415
@@ -798,11 +804,89 @@ class IngestSink:
             await db.commit()
         if eid:
             self.inserted += 1
+            if self.identity is not None:
+                await self.identity.on_sender(str(payload.get("sender_external_id") or ""))
         else:
             self.dropped += 1
 
     async def close(self) -> None:
         return None
+
+
+class IdentitySeed:
+    """H2 — danh tính + Hồ sơ Sếp "khai lúc cài", CHỈ từ `context.md` của bộ dữ liệu (không đáp án, không tin chat). Đi đường production:
+    * Kênh quản trị: phiên Zalo của tài khoản `bot` (`core.channel_sessions.account_kind = 'bot'`, như bridge ghi khi đăng nhập) rồi
+      `owner_channel.pairing.start_pairing` + `try_pair` (chính hàm ghép mã) với ID tài khoản Sếp trong context.md (`u_…`, thêm `fb_…` làm ID phụ).
+      Tin đầu của Sếp trong nhóm ⇒ `ingest._owner_triggers` đặt `core.persons.attrs.is_owner` (đúng đường production, nhận diện theo ID).
+    * Nhân viên / khách: `PATCH /profile/{person_id}` {person_type} — hành động "Đánh dấu là nhân viên/khách" của Sếp (F045, khoá `person_type_locked`),
+      là nguồn của `generic.hard_owner_side` / `hard_customer` (không ghi fact `staff_of`/`customer_of`: không có đường Sếp-khai nào ghi fact trực tiếp).
+    * `member_count` nhóm: chỉ nhóm mà context.md nêu rõ số thành viên (`upsert_group(..., member_count)`); nhóm không nêu để NULL (như cài thật chưa biết).
+    Kết quả ghi `identity.json` (cái gì lấy từ đâu)."""
+
+    def __init__(self, ctx: dict[str, Any], client: Any, org: Any, sm: Any, redis: Any) -> None:
+        self.owner_ids: list[str] = ctx.get("owner_ids") or []
+        self.want: dict[str, str] = {p["id"]: "staff" for p in ctx.get("staff") or []} | {p["id"]: "customer" for p in ctx.get("customers") or []}
+        self.c, self.org, self.sm, self.redis = client, org, sm, redis
+        self.done: dict[str, str] = {}
+        self.failed: dict[str, int] = {}
+        self.paired = False
+        self.pair_error: str | None = None
+
+    async def pair_owner(self) -> None:
+        from datetime import UTC  # noqa: PLC0415
+
+        from sqlalchemy import text  # noqa: PLC0415
+
+        from gh.owner_channel import pairing  # noqa: PLC0415
+
+        if not self.owner_ids:
+            self.pair_error = "context.md không nêu ID tài khoản của Sếp"
+            return
+        ext = self.owner_ids[0]
+        alt = next((x for x in self.owner_ids[1:]), None)
+        async with self.sm() as db:
+            uid = (await db.execute(text("""SELECT u.id FROM core.users u JOIN core.user_roles ur ON ur.user_id = u.id JOIN core.roles r ON r.id = ur.role_id
+                                            WHERE u.org_id = :o AND r.code = 'owner' AND u.is_active AND u.deleted_at IS NULL ORDER BY u.created_at LIMIT 1"""),
+                                    {"o": self.org})).scalar_one()
+            sid = (await db.execute(text("""
+                INSERT INTO core.channel_sessions (channel_id, org_id, account_label, state, started_at, external_account, account_kind)
+                SELECT id, org_id, 'Bot (đo G-KB)', 'active', now(), 'bot-eval', 'bot' FROM core.channels WHERE org_id = :o AND type = 'zalo'
+                RETURNING id"""), {"o": self.org})).scalar_one()
+            await db.commit()
+        async with self.sm() as db:
+            code, _exp = await pairing.start_pairing(db, self.redis, self.org, "zalo", uid)
+            await db.commit()
+        async with self.sm() as db:
+            ok, why = await pairing.try_pair(db, self.redis, self.org, {
+                "channel": "zalo", "code": code, "sender_external_id": ext, "sender_alt_id": alt, "session_id": str(sid),
+                "occurred_at": datetime.now(UTC).isoformat(), "sender_name": "Sếp"})
+        self.paired, self.pair_error = ok, why
+
+    async def on_sender(self, ext: str) -> None:
+        kind = self.want.get(ext)
+        if kind is None or ext in self.done:
+            return
+        from sqlalchemy import text  # noqa: PLC0415
+
+        async with self.sm() as db:
+            pid = (await db.execute(text("""SELECT pi.person_id FROM core.person_identities pi JOIN core.channels c ON c.id = pi.channel_id
+                                            WHERE c.org_id = :o AND pi.external_id = :x"""), {"o": self.org, "x": ext})).scalar_one_or_none()
+        if pid is None:
+            return
+        r = await self.c.patch(f"/profile/{pid}", json={"person_type": kind}, headers={"X-CSRF-Token": self.c.headers.get("X-CSRF-Token", "")})
+        if r.status_code >= 400:
+            self.failed[ext] = r.status_code
+            raise SystemExit(f"seed: đánh dấu {ext} là {kind} lỗi HTTP {r.status_code}: {r.text[:200]}")
+        self.done[ext] = kind
+
+    def report(self, member_counts: dict[str, int]) -> dict[str, Any]:
+        return {"source": "context.md của bộ dữ liệu (tương đương Sếp khai lúc cài); không dùng đáp án",
+                "owner_pairing": {"ids": self.owner_ids, "paired": self.paired, "error": self.pair_error,
+                                  "via": "core.channel_sessions(account_kind=bot) + owner_channel.pairing.start_pairing/try_pair; attrs.is_owner đặt bởi ingest._owner_triggers"},
+                "person_type": {"via": "PATCH /profile/{id} person_type (Sếp đánh dấu)", "staff_in_context": sum(1 for v in self.want.values() if v == "staff"),
+                                "customers_in_context": sum(1 for v in self.want.values() if v == "customer"),
+                                "marked": dict(self.done), "never_seen_in_chat": sorted(set(self.want) - set(self.done))},
+                "member_count": {"via": "context.md (chỉ nhóm nêu rõ số thành viên)", "groups": member_counts}}
 
 
 class StepSeeder(replay.Seeder):
@@ -847,8 +931,9 @@ async def serve(run: Path) -> None:
     from gh.refinery import clock, runner  # noqa: PLC0415
 
     ds: Dataset = load_dataset(cfg["dataset"])
-    plan = replay.plan_for(ds, "compressed", PlanConfig())
-    write_state(run, status="running", plan={"turns_n": len(plan["turns"]), "max_gap_s": plan["max_gap_s"], "mode": plan["mode"]}, _daemon=True)
+    pcfg = PlanConfig(max_lag_s=(cfg.get("max_lag_min") or 0) * 60 or None)
+    plan = replay.plan_for(ds, "compressed", pcfg)
+    write_state(run, status="running", plan={"turns_n": len(plan["turns"]), "max_gap_s": plan["max_gap_s"], "mode": plan["mode"], "lag": plan["lag"]}, _daemon=True)
     ex = Exchange(run, cfg["auto"])
 
     class ExchangeRouter:
@@ -894,8 +979,9 @@ async def serve(run: Path) -> None:
                 # nhóm có sẵn TRƯỚC khi seed nhãn bối cảnh (replay chỉ gán nhãn cho nhóm đã có tin tới lượt đầu)
                 async with sm() as db:
                     ch = await channel_row(db, org, "zalo")
+                    counts = parse_member_counts(ds.context_md, ds.groups) if cfg.get("identity", True) else {}
                     for gk, gname in ds.groups.items():
-                        await upsert_group(db, org, ch, gk, gname)
+                        await upsert_group(db, org, ch, gk, gname, counts.get(gk))
                     await db.commit()
                 router = ExchangeRouter()
                 refinery = runner.Refinery(sm, app.state.redis, router, app.state.bus, time_budget_s=1e9, part_worst_s=0.0, analyzer=capture)  # type: ignore[arg-type]
@@ -903,8 +989,17 @@ async def serve(run: Path) -> None:
                 sink = IngestSink(org)
                 cj = ClockJobs(run, refinery, org, ex, {"redis": app.state.redis, "redis_bus": app.state.redis, "model_router": router}, start=ds.msgs[0].ts)
                 an.clock = sink.clock = cj
-                summary = await replay.run_replay(ds, run, mode="compressed", analyzer=an, sink=sink, seeder=StepSeeder(client), contexts=cfg["contexts"],
-                                                  engine=replay.FakeMediaEngine(), label="step")
+                ident: IdentitySeed | None = None
+                if cfg.get("identity", True):
+                    ident = IdentitySeed(parse_context(ds.context_md), client, org, sm, app.state.redis)
+                    await ident.pair_owner()      # trước mọi tin: tin đầu của Sếp trong nhóm đã thành `attrs.is_owner`
+                    sink.identity = ident
+                seeder = StepSeeder(client)
+                summary = await replay.run_replay(ds, run, mode="compressed", analyzer=an, sink=sink, seeder=seeder, contexts=cfg["contexts"],
+                                                  engine=replay.FakeMediaEngine(), label="step", cfg=pcfg)
+                if ident is not None:
+                    write_json(run / "identity.json", ident.report(counts))
+                    summary["identity"] = {"paired": ident.paired, "pair_error": ident.pair_error, "marked": len(ident.done)}
                 summary["drain_turns"] = await an.drain()
                 # Đợt 2: lượt đồng hồ cuối ở `now` cuối của replay, rồi chạy tiếp tới bản tin sáng kế (07:30) và dựng bản tin như Sếp sẽ thấy
                 end = clock.now()
@@ -964,7 +1059,28 @@ def db_counts(cfg: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def export_dot2(run: Path, idmap: dict[str, str]) -> dict[str, Any]:
+def alert_lag(alerts: list[dict[str, Any]], msg_ts: dict[str, datetime]) -> dict[str, Any]:
+    """H1 — độ trễ tín hiệu: giờ dữ liệu alert xuất hiện lần đầu (`first_seen_at`) − giờ gốc tin MỚI NHẤT mà alert dẫn (`raw_ids` → giờ tin), phút.
+    Alert không có tin dẫn/giờ ⇒ bỏ qua (đếm `skipped`). Đường luật (fraud/raw_tail) lag ≈ 0; trần cửa sổ 24 h/48 h của cổng so với số này."""
+    from common import quantiles  # noqa: PLC0415
+
+    lags: list[float] = []
+    skipped = 0
+    for a in alerts:
+        ts = [msg_ts[x] for x in a.get("raw_ids") or [] if x in msg_ts]
+        seen = a.get("first_seen_at")
+        if not ts or not seen:
+            skipped += 1
+            continue
+        lags.append(max(0.0, (datetime.fromisoformat(seen) - max(ts)).total_seconds()) / 60.0)
+    q = quantiles(lags)
+    sl = sorted(lags)
+    p90 = sl[min(len(sl) - 1, int(0.9 * (len(sl) - 1) + 0.5))] if sl else None
+    return {"n": len(lags), "skipped": skipped, "median_min": q["median"], "p90_min": p90, "max_min": q["max"],
+            "over_24h": sum(1 for x in lags if x > 1440), "over_48h": sum(1 for x in lags if x > 2880)}
+
+
+def export_dot2(run: Path, idmap: dict[str, str], msg_ts: dict[str, datetime] | None = None) -> dict[str, Any]:
     """Phần Đợt 2 của signals.json, từ tệp tiến trình nền ghi (`alerts_final.json`, `alerts_end.json`, `alerts_log.jsonl`, `digest.json`). Mã tin gốc
     (`raw_event_ids` uuid kho thô) đổi về mã tin dữ liệu qua idmap (`m_<uuid>`). Lần chạy cũ (chưa có Đợt 2) ⇒ danh sách rỗng."""
     def load(name: str) -> Any:
@@ -980,10 +1096,14 @@ def export_dot2(run: Path, idmap: dict[str, str]) -> dict[str, Any]:
 
     log = [json.loads(x) for x in (run / "alerts_log.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()] if (run / "alerts_log.jsonl").exists() else []
     st = read_state(run)
-    return {"alerts_at": final.get("at"), "alerts": [m(a) for a in final.get("alerts") or []],
+    alerts = [m(a) for a in final.get("alerts") or []]
+    clock = st.get("clock")
+    if clock is not None and msg_ts is not None:
+        clock = {**clock, "lag": {"alerts": alert_lag(alerts, msg_ts), "plan": (st.get("plan") or {}).get("lag")}}
+    return {"alerts_at": final.get("at"), "alerts": alerts,
             "alerts_end_at": end.get("at"), "alerts_end": [m(a) for a in end.get("alerts") or []],
             "pushed": [e for e in log if e["event"] == "push"], "shadow_pushed": [e for e in log if e["event"] == "shadow_push"],
-            "alert_events": [e for e in log if e["event"] in ("new", "change")], "digest": load("digest.json"), "clock": st.get("clock")}
+            "alert_events": [e for e in log if e["event"] in ("new", "change")], "digest": load("digest.json"), "clock": clock}
 
 
 def cmd_export(a: argparse.Namespace) -> None:
@@ -1001,7 +1121,8 @@ def cmd_export(a: argparse.Namespace) -> None:
     def js(u: dict[str, Any]) -> dict[str, Any]:
         return {k: (sorted(v) if isinstance(v, set) else v) for k, v in u.items()}
 
-    d2 = export_dot2(run, r.idmap)
+    ds = load_dataset(cfg["dataset"])
+    d2 = export_dot2(run, r.idmap, {m.id: m.ts for m in ds.msgs})
     write_json(out, {"format": "gkb-step-signals/2", "dataset": st.get("dataset"), "turns": r.turns, "contract_errors": r.contract_errors,
                      "contract_retries": r.contract_retries, "turn_errors": r.turn_errors, "write_errors": r.write_errors, "unreadable": r.unreadable,
                      "units": [js(u) for u in r.units], "facts": [js(f) for f in r.facts], "db": db_counts(cfg), **d2, "intel_settings": cfg.get("intel_settings"),
@@ -1040,6 +1161,9 @@ def _cli() -> None:
     p.add_argument("--contexts", help="JSON {Gk: mã bối cảnh}; bỏ trống ⇒ chỉ nhãn trong context.md (nếu có), không có ⇒ bối cảnh chưa xác nhận")
     p.add_argument("--auto-stub", action="store_true", help="tự trả brain-out rỗng hợp lệ (đếm lượt/kích thước prompt, kiểm hạ tầng); KHÔNG dùng để chấm")
     p.add_argument("--intel-settings", help='JSON gộp vào settings.intel của tổ chức sau setup (vd \'{"ramp_gates": "push"}\'); mặc định = cài mới')
+    p.add_argument("--max-lag-min", type=float, default=30.0,
+                   help="H1: trần độ trễ phân tích mỗi luồng theo GIỜ DỮ LIỆU (phút; 0 = tắt, khuôn cũ: lô trải nhiều ngày). Mặc định 30")
+    p.add_argument("--no-identity", action="store_true", help="H2: KHÔNG ghép kênh Sếp / đánh dấu nhân viên-khách / member_count từ context.md (nhánh đối chứng)")
     p.add_argument("--pg", default=os.environ.get("GH_STEP_PG", PG_DEFAULT))
     p.add_argument("--redis-url", default=os.environ.get("GH_STEP_REDIS", REDIS_DEFAULT))
     p.add_argument("--force", action="store_true")

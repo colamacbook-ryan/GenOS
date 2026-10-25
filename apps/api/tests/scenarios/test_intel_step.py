@@ -234,3 +234,71 @@ def test_export_dot2_maps_raw_ids_and_splits_push_log(tmp_path: Path) -> None:
     assert d["alerts"][0]["first_seen_at"] == "2026-10-01T09:00:00+07:00" and d["clock"] == {"ticks": 3}
     assert [e["event"] for e in d["pushed"]] == ["push"] and len(d["shadow_pushed"]) == 1 and len(d["alert_events"]) == 1
     assert d["alerts_end"] == [] and d["digest"] is None                    # lần chạy thiếu tệp ⇒ rỗng, không lỗi
+
+
+# ─── H1 (lag) + H2 (danh tính từ context.md) ──────────────────────────────────────────────────────────────────────────────
+
+CONTEXT_MD = """# Bối cảnh
+- Chủ: **Sếp Ryan** (`u_ryan`; Facebook `fb_200001`).
+
+## 2. Nhân sự (nhóm "Nội bộ")
+| ID | Tên hiển thị | Vai |
+|---|---|---|
+| u_ryan | Ryan | Chủ |
+| u_ngoc | Ngọc Sale | Sale |
+| u_quan | Quân Kho | Kho |
+
+## 3. Bảng giá
+| Mặt hàng | Giá |
+|---|---|
+| u_khong_phai_nguoi | 1đ |
+
+## 5. Đại lý (nhóm "Đại lý")
+| ID | Tên | Sale |
+|---|---|---|
+| u_son_hd | Sơn Hà Đông | Ngọc |
+
+## 6. Thị trường
+- Nhóm "Hội Miền Bắc" (Facebook, ~5.000 thành viên): đại lý, NPP.
+"""
+
+
+def test_parse_people_reads_owner_staff_customers_only_from_their_sections() -> None:
+    import common
+
+    p = common.parse_context(CONTEXT_MD)
+    assert p["owner_ids"] == ["u_ryan", "fb_200001"]
+    assert [x["id"] for x in p["staff"]] == ["u_ngoc", "u_quan"]            # bỏ chính Sếp; bảng giá không phải bảng người
+    assert [x["id"] for x in p["customers"]] == ["u_son_hd"]
+    assert common.parse_context("# không có bảng nào")["staff"] == []
+
+
+def test_parse_member_counts_only_for_groups_context_states() -> None:
+    import common
+
+    got = common.parse_member_counts(CONTEXT_MD, {"G1": "Đại lý", "G4": "Hội Miền Bắc", "G2": "Nội bộ"})
+    assert got == {"G4": 5000}                                              # nhóm không nêu số ⇒ không có khoá (NULL)
+
+
+def test_alert_lag_measures_first_seen_minus_newest_cited_message() -> None:
+    import step as stepmod
+
+    t0 = h.datetime(2026, 10, 1, 8, 0, tzinfo=h.VN)
+    ts = {"a": t0, "b": t0 + h.timedelta(hours=1), "c": t0}
+    alerts = [{"raw_ids": ["a", "b"], "first_seen_at": (t0 + h.timedelta(hours=1, minutes=10)).isoformat()},       # 10 phút
+              {"raw_ids": ["c"], "first_seen_at": (t0 + h.timedelta(hours=30)).isoformat()},                       # 30 giờ
+              {"raw_ids": [], "first_seen_at": t0.isoformat()}]
+    lag = stepmod.alert_lag(alerts, ts)
+    assert lag["n"] == 2 and lag["skipped"] == 1 and lag["max_min"] == 1800.0 and lag["over_24h"] == 1 and lag["over_48h"] == 0
+    assert lag["median_min"] == 905.0
+
+
+def test_export_dot2_adds_lag_to_clock(tmp_path: Path) -> None:
+    import step as stepmod
+
+    t0 = h.datetime(2026, 10, 1, 8, 0, tzinfo=h.VN)
+    (tmp_path / "state.json").write_text(json.dumps({"status": "done", "clock": {"ticks": 3}, "plan": {"lag": {"max_min": 30.0}}}))
+    a = {"id": "s1", "code": "ALR-0001", "raw_event_ids": ["u1"]}
+    (tmp_path / "alerts_final.json").write_text(json.dumps({"at": "x", "alerts": [a], "first_seen": {"s1": (t0 + h.timedelta(minutes=20)).isoformat()}}))
+    d = stepmod.export_dot2(tmp_path, {"m_u1": "t1"}, {"t1": t0})
+    assert d["clock"]["ticks"] == 3 and d["clock"]["lag"]["alerts"]["median_min"] == 20.0 and d["clock"]["lag"]["plan"] == {"max_min": 30.0}
