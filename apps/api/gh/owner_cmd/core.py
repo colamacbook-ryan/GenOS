@@ -863,12 +863,12 @@ async def _log(ctx: Context, cmd: OwnerCommand, action: str, **extra: Any) -> No
 
 
 async def assistant_locked(sm: Any, org_id: uuid.UUID) -> bool:
-    """Cờ "khoá trợ lý" (T10, một nguồn `gh.telegram.backup.is_locked`) — đọc LÚC XỬ LÝ."""
-    from gh.telegram import backup
-
+    """Cờ "khoá trợ lý" `settings.intel.assistant_locked_at` (T10 ghi; cùng câu đọc với `gh.telegram.backup.is_locked`) — đọc LÚC
+    XỬ LÝ. Lõi không import gói kênh nào (test quét import) nên đọc thẳng cờ."""
     async with sm() as db:
         await _set_org(db, org_id)
-        locked = await backup.is_locked(db, org_id)
+        locked = bool((await db.execute(text("""SELECT settings->'intel'->>'assistant_locked_at' IS NOT NULL
+                                                FROM core.organizations WHERE id = :o"""), {"o": org_id})).scalar_one_or_none())
         await db.rollback()
     return locked
 
