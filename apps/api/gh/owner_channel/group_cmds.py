@@ -15,6 +15,7 @@ Lệnh chỉ ĐỔI CẤU HÌNH — không có đường gửi tin ra ngoài (te
 import logging
 import re
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -43,6 +44,8 @@ _TAT = ("tat", "tắt", "off")
 USAGE_SUPPORT = ("Cách dùng: /ho_tro (xem) · /ho_tro <mã nhóm> bat [số giờ] · /ho_tro <mã nhóm> tat. "
                  "Mã nhóm xem ở /nhom.")
 LOCKED = "Trợ lý đang bị khoá nên em không bật hỗ trợ nhóm được. Sếp mở khoá trên Console (mã PIN) trước."
+#: Lệnh đi qua cổng "Owner còn hợp lệ" (v0.1.76).
+OWNER_CHECKED = ("boi_canh",)
 USAGE_CONTEXT = ("Cách dùng: /boi_canh <mã nhóm> <bối cảnh>. Bối cảnh: kinh doanh, công việc, học tập, "
                  "gia đình, bạn bè, nhân viên, giao thương, khác. Mã nhóm xem ở /nhom.")
 NO_Q = "Em không thấy câu hỏi mã đó (có thể đã trả lời hoặc hết hạn). Gõ /nhom để xem lại."
@@ -235,6 +238,16 @@ async def _boi_canh(db: AsyncSession, redis: Redis, org_id: uuid.UUID, oi: Owner
 async def handle(db: AsyncSession, redis: Redis, org_id: uuid.UUID, oi: OwnerIds, kind: str, args: str) -> str:
     """Chạy một lệnh nhóm; trả chữ trả lời. Gọi khi `oi.enabled`; commit do bên gọi."""
     channel = oi.channel
+    if kind in OWNER_CHECKED:
+        # v0.1.76 (T2, review bảo mật): Owner đã ghép phải CÒN là Owner hợp lệ (đang hoạt động, còn vai Owner),
+        # như lõi `owner_cmd.core.handle`; id đã kiểm mới được dùng để ghi. Mở rộng cho /nghe /bo /ho_tro /xac_nhan:
+        # chờ Gen quyết (phải đổi fixture test v0.1.72 ngoài gói T2).
+        from gh.owner_cmd import core as owner_core
+
+        owner = await owner_core.owner_user(db, org_id, oi.owner_user_id)
+        if owner is None:
+            return owner_core.no_owner_text(channel)
+        oi = replace(oi, owner_user_id=owner.id)
     if kind == "nhom":
         return await _nhom(db, org_id, channel)
     if kind in ("nghe", "bo"):

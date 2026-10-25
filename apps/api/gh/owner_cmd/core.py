@@ -652,6 +652,7 @@ async def _chat_reply(
 #: «ghi nhớ: <đại từ của Sếp> …» trên chữ bỏ dấu. Bắt buộc có dấu hai chấm + câu bắt đầu bằng ngôi thứ nhất (về CHÍNH Sếp).
 _PROFILE_NOTE = re.compile(r"^\s*ghi nho\s*[:：]\s*((?:anh|em|toi|minh)\b.*)$", re.S)
 PROFILE_VIAS = ("zalo", "whatsapp")       # chỉ kênh quản trị 1-1 đã ghép bằng mã (Telegram: không)
+PROFILE_ONE = "Sếp ghi nhớ từng ý một giúp em (mỗi lần một câu) để em xếp đúng mục Hồ sơ."
 PROFILE_CONSOLE = ("Việc này cần mở Console (mã PIN) mới ghi được: cách báo / giờ yên lặng chạm lừa đảo hoặc sức khoẻ-an toàn "
                    "không đổi qua chat để phòng khi tài khoản bị chiếm.")
 
@@ -679,18 +680,30 @@ def _profile_section(content: str) -> str | None:
     return section
 
 
+def profile_defensive(section: str, content: str) -> bool:
+    """Ngoại lệ phòng thủ (§4C) — kiểm trên TOÀN nội dung, bất kể bộ xếp mục chọn mục nào (review bảo mật T2): chạm từ vựng lừa đảo /
+    tài chính / sức khoẻ-an toàn, hoặc dạng "đừng/không/khỏi báo …" ⇒ chỉ Console + PIN."""
+    from gh.biz.mem import profile
+
+    f = profile._fold(content)
+    return (profile.is_defensive(section, content) or bool(profile._DEFENSIVE_RE.search(f))
+            or bool(profile._NEGATIVE_REPORT_RE.search(f)))
+
+
 async def profile_add(cmd: OwnerCommand, ctx: Context, owner: service.CurrentUser, content: str) -> Reply | None:
     """Ghi một mục Hồ sơ `owner_confirmed` từ lệnh của CHÍNH Sếp (đã qua kiểm ID ở inbound + Owner còn hiệu lực ở `handle`).
     Không xếp được mục ⇒ None (đi đường thường: Gen đề xuất Ghi nhớ, chờ «OK»)."""
     from gh.biz.intel import strong_confirm
     from gh.biz.mem import profile, profile_read
 
+    if len([x for x in profile._SPLIT.split(content) if x.strip()]) > 1:
+        return Reply(PROFILE_ONE)           # nhiều câu: không để câu sau (tắt báo…) núp sau mục của câu đầu
     section = _profile_section(content)
     if section is None:
         return None
     async with ctx.sm() as db:
         await _set_org(db, ctx.org_id)
-        if profile.is_defensive(section, content):
+        if profile_defensive(section, content):
             await strong_confirm.require(db, ctx.org_id, "report_pref_defensive")     # đếm vào phát hiện bất thường
             await db.commit()
             return Reply(PROFILE_CONSOLE)
