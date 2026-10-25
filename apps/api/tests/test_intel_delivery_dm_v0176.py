@@ -68,17 +68,20 @@ async def test_wrong_and_correct_by_number(chat: Chat, db: Any) -> None:
     assert len(await feedback(db)) == 2
 
 
-async def test_not_needed_never_switches_off_fraud_or_safety_gate(chat: Chat, db: Any) -> None:
-    """TẤN CÔNG: «không cần báo» lên vụ lừa đảo 🔴 không hạ cổng, không tạo mute, chỉ ghi phản hồi."""
+async def test_wrong_or_not_needed_never_closes_or_lowers_fraud_gate_from_chat(chat: Chat, db: Any) -> None:
+    """TẤN CÔNG: «sai» / «không cần báo» lên vụ lừa đảo 🔴 qua chat không đóng, không hạ, không mute, không ghi phản hồi (cần Console + PIN)."""
     s = await setup(chat, db)
     before = await sig_row(db, s["fraud"].id)
-    reply = await chat.say("không cần báo 1")
-    assert "lừa đảo" in reply and "Console" in reply
-    after = await sig_row(db, s["fraud"].id)
-    assert (after.status, after.level, after.delivery, after.gate) == (before.status, before.level, before.delivery, before.gate)
-    assert after.status == "open"
+    assert before.level == "red"
+    for cmd in ("không cần báo 1", "1 không cần báo", "sai 1", "1 sai"):
+        reply = await chat.say(cmd)
+        assert "lừa đảo" in reply and "Console" in reply, (cmd, reply)
+        after = await sig_row(db, s["fraud"].id)
+        assert (after.status, after.level, after.delivery, after.gate) == (before.status, before.level, before.delivery, before.gate), cmd
+    assert before.status == "open"
     assert (await db.execute(text("SELECT count(*) FROM biz.signal_mutes"))).scalar_one() == 0
-    assert [f.verdict for f in await feedback(db)] == ["unimportant"]
+    assert await feedback(db) == []
+    assert "ghi nhận" in (await chat.say("1 đúng")).lower()           # «đúng» không hạ gì ⇒ được
     reply = await chat.say("2 không cần báo")
     assert "ghi nhận" in reply.lower() and (await sig_row(db, s["amber"].id)).status == "open"
 
@@ -90,9 +93,9 @@ async def test_feedback_cannot_reach_other_orgs_signals(chat: Chat, db: Any) -> 
     await db.commit()
     foreign = await _sig(db, other, "cau_hoi_cho_xu_ly", "qx", impact_base=2, deadline_at=NOW + timedelta(hours=10))
     await put_refs(db, other, [foreign.id])
-    await chat.say("sai 1")                                     # refs mới nhất của tổ chức MÌNH (fraud #1)
+    await chat.say("sai 2")                                     # refs mới nhất của tổ chức MÌNH (amber #2)
     assert (await sig_row(db, foreign.id)).status == "open"
-    assert (await sig_row(db, s["fraud"].id)).status == "dismissed"
+    assert (await sig_row(db, s["amber"].id)).status == "dismissed"
 
 
 # ─── em sót ──────────────────────────────────────────────────────────────────

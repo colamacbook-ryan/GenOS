@@ -41,13 +41,17 @@ URGENT_HEAD = "Điểm gấp trong ngày"
 MARK = {"red": "🔴", "amber": "🟠", "grey": "⚪"}
 _LONGNUM = re.compile(r"(?<!\d)(\d[\d .-]{6,22}\d)(?!\d)")
 _WS = re.compile(r"\s+")
+_MONEY = re.compile(r"[1-9]\d{0,2}(?:[., ]\d{3})+")           # 25.000.000 là số tiền, không phải STK
+_DATE = re.compile(r"\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[.-]\d{1,2}[.-]\d{4}")
 
 
 def display_mask(s: str) -> str:
     """Số dài (≥ 8 chữ số: STK, SĐT, thẻ) hiển thị dạng "0123…789" — phòng thủ khi tài khoản Zalo của Sếp bị chiếm (§8.1)."""
     def sub(m: re.Match[str]) -> str:
         d = re.sub(r"\D", "", m.group(1))
-        return m.group(1) if len(d) < 8 else f"{d[:4]}…{d[-3:]}"
+        if len(d) < 8 or _MONEY.fullmatch(m.group(1)) or _DATE.fullmatch(m.group(1).strip()):
+            return m.group(1)
+        return f"{d[:4]}…{d[-3:]}"
 
     return _LONGNUM.sub(sub, s)
 
@@ -69,6 +73,13 @@ async def set_digest(db: AsyncSession, org_id: uuid.UUID, *, off: bool) -> None:
     await db.execute(text("""UPDATE core.organizations SET settings = settings || jsonb_build_object('intel',
                                COALESCE(settings->'intel', '{}'::jsonb) || jsonb_build_object('digest_off', CAST(:v AS boolean)))
                              WHERE id = :o"""), {"o": org_id, "v": off})
+
+
+async def set_quiet_hours(db: AsyncSession, org_id: uuid.UUID, start: str, end: str) -> None:
+    """Giờ yên lặng MỘT nguồn: `settings.intel.quiet_start/quiet_end` ("HH:MM", giờ VN). Bên gọi lo xác nhận + commit."""
+    await db.execute(text("""UPDATE core.organizations SET settings = settings || jsonb_build_object('intel',
+                               COALESCE(settings->'intel', '{}'::jsonb) || jsonb_build_object('quiet_start', CAST(:a AS text), 'quiet_end', CAST(:b AS text)))
+                             WHERE id = :o"""), {"o": org_id, "a": start, "b": end})
 
 
 # ─── dựng chữ ────────────────────────────────────────────────────────────────
