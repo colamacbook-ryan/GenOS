@@ -739,6 +739,9 @@ _BAO = re.compile(r"\bbao\b")
 _TIME_WINDOW = re.compile(r"\b\d{1,2}\s*(?:h|g|gio)\b|\b(?:ban dem|buoi toi|dem khuya|nua dem|sang som|truoc|sau|tu|den)\s+\d{1,2}\b")
 
 
+_TIME_WORDS = re.compile(r"\b(?:sang|trua|chieu|toi|dem|khuya|gio|h|am|pm|mot|hai|ba|bon|nam|sau|bay|tam|chin|muoi)\b")
+
+
 def normalize_note(raw: str) -> str:
     """Xoá HẲN ký tự định dạng vô hình (Unicode Cf: ZWSP, WORD JOINER, BOM…) rồi chuẩn hoá NFKC (chữ full-width…) TRƯỚC khi so khớp."""
     import unicodedata
@@ -790,6 +793,40 @@ def profile_defensive(section: str, content: str) -> bool:
             or bool(profile._NEGATIVE_REPORT_RE.search(f)) or bool(_EXTRA_DEFENSIVE.search(f)) or timed)
 
 
+#: Ký tự được phép trong «ghi nhớ» (sau NFKC): chữ Latin (kể cả tiếng Việt), số ASCII, dấu cách thường, dấu câu cơ bản.
+_ALLOWED_PUNCT = frozenset(".,!?:;'\"()-/%«»…–—“”‘’+&")
+
+
+def _allowed_char(ch: str) -> bool:
+    import unicodedata
+
+    if ch == " " or ch in "0123456789" or ch in _ALLOWED_PUNCT:
+        return True
+    return ch.isalpha() and unicodedata.name(ch, "").startswith("LATIN")
+
+
+def _compact_keywords() -> tuple[str, ...]:
+    from gh.biz.mem import profile
+
+    words = (*profile.DEFENSIVE_LEXICON, "gian lan", "chuyen tien", "rut tien", "mat tien", "vay tien", "nap tien", "canh bao")
+    return tuple(sorted({w.replace(" ", "") for w in words if len(w.replace(" ", "")) >= 5} | {"otp", "stk"}))
+
+
+def profile_suspicious(content: str) -> bool:
+    """Fail-closed (review bảo mật T2): (a) còn ký tự ngoài tập cho phép sau NFKC (chữ lấp vô hình U+115F/U+1160/U+3164/U+FFA0/
+    U+2800, chữ Cyrillic/Hy Lạp giả Latin…); (b) từ khoá phòng thủ khớp trên chữ đã fold + BỎ dấu câu, khoảng trắng chen giữa
+    ("l.ừa", "lừa-đảo", "l ừ a đ ả o"); (c) "báo" kèm số hoặc từ chỉ giờ (sáng/trưa/chiều/tối/đêm/khuya, giờ, h, am/pm, số chữ)."""
+    from gh.biz.mem import profile
+
+    if not all(_allowed_char(ch) for ch in content):
+        return True
+    f = profile._fold(content)
+    compact = re.sub(r"[^a-z0-9]", "", f)
+    if any(k in compact for k in _compact_keywords()):
+        return True
+    return bool(_BAO.search(f) and (re.search(r"\d", f) or _TIME_WORDS.search(f)))
+
+
 async def profile_add(cmd: OwnerCommand, ctx: Context, owner: service.CurrentUser, content: str) -> Reply | None:
     """Ghi một mục Hồ sơ `owner_confirmed` từ lệnh của CHÍNH Sếp (đã qua kiểm ID ở inbound + Owner còn hiệu lực ở `handle`).
     Không xếp được mục ⇒ None (đi đường thường: Gen đề xuất Ghi nhớ, chờ «OK»)."""
@@ -799,19 +836,18 @@ async def profile_add(cmd: OwnerCommand, ctx: Context, owner: service.CurrentUse
     if len([x for x in profile._SPLIT.split(content) if x.strip()]) > 1:
         return Reply(PROFILE_ONE)           # nhiều câu: không để câu sau (tắt báo…) núp sau mục của câu đầu
     section = _profile_section(content)
-    if section is None:
+    risky = profile_suspicious(content)
+    if section is None and not risky:
         return None
     async with ctx.sm() as db:
         await _set_org(db, ctx.org_id)
-        if profile_defensive(section, content):
+        # deny-by-default (review bảo mật): ký tự lạ / từ khoá phòng thủ (kể cả bị chen dấu) / MỌI mục cách báo-nhịp sống qua chat
+        if risky or section in ("report_prefs", "rhythm") or profile_defensive(str(section), content):
             await strong_confirm.require(db, ctx.org_id, "report_pref_defensive")     # đếm vào phát hiện bất thường
             await db.commit()
             return Reply(PROFILE_CONSOLE)
-        if profile.is_quiet_hours(section, content):
-            r = await strong_confirm.require(db, ctx.org_id, "quiet_hours_change")    # cho phép + LUÔN báo kênh phụ
-            if not isinstance(r, strong_confirm.Allowed):
-                await db.commit()
-                return Reply(f"Em chưa ghi được: {getattr(r, 'reason', strong_confirm.CONSOLE_REASON)}.")
+        if section is None:                 # không tới được (section None ⇒ risky ⇒ đã trả Console); giữ cho kiểu chặt
+            return None
         log_id = await actionlog.record(db, org_id=ctx.org_id, actor_type="user", actor_id=owner.actor_id,
                                         action="owner_profile.chat_add", target_type="owner_profile", target_id=section,
                                         detail={"via": cmd.via, "section": section, "text_digest": digest(content)})
