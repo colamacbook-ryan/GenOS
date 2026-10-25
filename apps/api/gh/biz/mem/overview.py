@@ -139,12 +139,15 @@ async def overview(db: AsyncSession, user: service.CurrentUser, weeks: int, now:
 
 # ─── Bối cảnh ────────────────────────────────────────────────────────────────
 
-async def _ring(db: AsyncSession, user: service.CurrentUser, code: str, gids: list[uuid.UUID], now: datetime) -> dict[str, Any]:
+async def _ring(db: AsyncSession, user: service.CurrentUser, groups: dict[uuid.UUID, dict[str, Any]], now: datetime) -> dict[str, Any]:
+    gids = list(groups)
     hidden = {"visible": False, "hidden_pin": False, "ring1": [], "ring2_n": 0}
     if not _is_owner(user):
         return hidden
-    pe = (await db.execute(text("SELECT policy->>'people_eval_privacy' FROM mem.context_types WHERE code = :c"), {"c": code})).scalar_one_or_none()
-    if pe == "console_pin" and not access.can_see_private(user):
+    # Cổng theo NGƯỜI, không theo `code` được hỏi: nhóm mang BẤT KỲ nhãn nhạy cảm (people_eval_privacy='console_pin') hoặc chưa xác nhận ⇒ cần PIN.
+    sensitive = {r.code for r in (await db.execute(text("SELECT code FROM mem.context_types WHERE policy->>'people_eval_privacy' = 'console_pin'"))).all()}
+    sensitive.add(UNCONFIRMED)
+    if not access.can_see_private(user) and any(sensitive & set(g["ctx"]) for g in groups.values()):
         return {**hidden, "hidden_pin": True}
     owner_ent = await _owner_entity(db, user.org_id)
     persons = (await db.execute(text("""SELECT DISTINCT gm.person_id FROM core.group_members gm JOIN core.groups g ON g.id = gm.group_id
@@ -205,7 +208,7 @@ async def context_detail(db: AsyncSession, user: service.CurrentUser, code: str,
     risk = [s for s in sig if s["kind"] in RISK_KINDS]
     return {"breadcrumb": [_crumb("overview", "overview", "Toàn cảnh"), _crumb("context", code, types[code])], "code": code, "label": types[code],
             "groups": out_groups, "signals": sig[:LIST_MAX], "opportunities": {"n": len(opp), "signal_ids": [s["id"] for s in opp[:10]]},
-            "risks": {"n": len(risk), "signal_ids": [s["id"] for s in risk[:10]]}, "ring": await _ring(db, user, code, gids, now),
+            "risks": {"n": len(risk), "signal_ids": [s["id"] for s in risk[:10]]}, "ring": await _ring(db, user, groups, now),
             "hidden_pin_n": await _hidden_pin(db, user, base, p) if gids else 0}
 
 

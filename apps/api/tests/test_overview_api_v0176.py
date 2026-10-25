@@ -254,3 +254,36 @@ async def test_profile_item_signals_idor_other_org_fact_404(owner_api: Api, db: 
     await db.commit()
     assert (await owner_api.get(f"/me/profile/items/{f.id}/signals")).status_code == 404
     assert (await owner_api.get(f"/me/profile/items/{uuid.uuid4()}/signals")).status_code == 404
+
+
+async def test_context_ring_gate_is_per_person_not_per_queried_code(owner_api: Api, db: AsyncSession) -> None:
+    """Tấn công: nhóm vừa kinh_doanh vừa nhan_vien — hỏi qua /contexts/kinh_doanh khi chưa PIN không được thấy vòng người nhân viên."""
+    org = await org_id(db)
+    w = await link_owner_user(db, org)
+    g = await mk_group(db, org, w.channel, "Nhóm kép")
+    await _ctx(db, org, g, "kinh_doanh")
+    await db.execute(text("""INSERT INTO mem.group_contexts (org_id, group_id, context, is_primary, source, confidence)
+                             VALUES (:o, :g, 'nhan_vien', false, 'owner', 1.0)"""), {"o": org, "g": g})
+    p, _ = await mk_person(db, org, w.channel, "Bạn Hùng", "h-2")
+    await db.execute(text("INSERT INTO core.group_members (group_id, person_id) VALUES (:g, :p)"), {"g": g, "p": p})
+    ent = (await entities.ensure_person(db, org, p)).id
+    from gh.biz.mem import heat
+    await db.execute(text("""INSERT INTO mem.relation_heat_weekly (org_id, entity_a, entity_b, week, heat, state)
+                             VALUES (:o, :a, :b, :w, 40, 'warm')"""), {"o": org, "a": w.owner, "b": ent, "w": heat.week_start(datetime.now(UTC))})
+    await db.commit()
+    for code in ("kinh_doanh", "nhan_vien"):
+        r = await owner_api.get(f"/contexts/{code}")
+        assert r.json()["ring"]["hidden_pin"] is True and r.json()["ring"]["ring1"] == [] and "Bạn Hùng" not in r.text
+    await verify_pin(owner_api)
+    assert [x["label"] for x in (await owner_api.get("/contexts/kinh_doanh")).json()["ring"]["ring1"]] == ["Bạn Hùng"]
+
+
+async def test_context_ring_unconfirmed_bucket_needs_pin(owner_api: Api, db: AsyncSession) -> None:
+    org = await org_id(db)
+    w = await link_owner_user(db, org)
+    g = await mk_group(db, org, w.channel, "Nhóm chưa gán")
+    p, _ = await mk_person(db, org, w.channel, "Chị Lụa", "l-1")
+    await db.execute(text("INSERT INTO core.group_members (group_id, person_id) VALUES (:g, :p)"), {"g": g, "p": p})
+    await db.commit()
+    r = await owner_api.get("/contexts/chua_xac_nhan")
+    assert r.json()["ring"]["hidden_pin"] is True
