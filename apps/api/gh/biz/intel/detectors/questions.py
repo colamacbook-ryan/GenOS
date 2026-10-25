@@ -174,15 +174,28 @@ async def scan_units(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> list
     NGƯỜI THÂN (`owner_key_relation`) mà tin gốc quá `SCAN_SLA_MIN` phút chưa có tin ĐI trả lời đúng người đó ⇒ `emit`. Người gửi do CODE
     xác định qua `core.person_identities` (không do model). Nhân viên bị bỏ (câu nội bộ chặn việc cần cờ `blocks_work` của model).
     Tránh trùng THEO NGƯỜI HỎI với `slow_response` (cũng gom theo người): người đang có `slow_response` hoặc tín hiệu câu hỏi mở thì không
-    tạo thêm; queue/jobs.py cũng bỏ người đã có tín hiệu. Lấy tin MỚI nhất trước; loại người hỏi "other" và tin đã có tín hiệu ngay trong SQL."""
+    tạo thêm; queue/jobs.py cũng bỏ người đã có tín hiệu. Lấy tin MỚI nhất trước; loại người hỏi "other" và tin đã có tín hiệu ngay trong SQL.
+
+    T12: đường brain-out/1 ghi mọi đơn vị là `event_type = 'GroupUnit'` ⇒ nhận thêm đơn vị `kind_hint = 'cau_hoi_cho_xu_ly'` (cờ
+    `blocks_work`/`needs_owner`/`explicit_urgent` của model đi theo). Khởi động lạnh (Hồ sơ chưa có fact `customer_of` nào): người hỏi trong
+    nhóm Sếp ĐÃ XÁC NHẬN `kinh_doanh`, không phải Sếp/người của Sếp, được coi là khách (`generic.cold_customer`); nhóm chưa xác nhận ⇒ vẫn
+    bỏ (an toàn, không spam). Các rào chống spam giữ nguyên: quá SLA chưa ai trả lời, một người một dòng."""
+    from gh.biz.intel.detectors import generic as g
     from gh.biz.mem import profile_read
     from gh.data.common import NO_REPLY_KINDS, outbound_to_sql
 
     key_rel = (await profile_read.snapshot(db, org_id)).key_relation_entity_ids()
+    sets = await g.org_sets(db, org_id)
+    cold = not sets.customers
+    biz = list((await db.execute(text("""SELECT DISTINCT group_id FROM mem.group_contexts WHERE org_id = :o AND source = 'owner'
+                                          AND context = 'kinh_doanh'"""), {"o": org_id})).scalars().all()) if cold else []
     rows = (await db.execute(text(f"""
-        SELECT c.raw_id, c.occurred_at, c.group_id, c.person_id, c.body_text, c.member_count
+        SELECT c.raw_id, c.occurred_at, c.group_id, c.person_id, c.body_text, c.member_count, c.unit_flags, c.person_type
         FROM (
           SELECT e.id AS raw_id, e.received_at, e.channel_id, e.group_id, e.occurred_at, e.body_text, p.id AS person_id, p.person_type, g.member_count,
+                 (SELECT mu.flags FROM clean.evidence ev JOIN clean.meaning_units mu ON mu.id = ev.meaning_unit_id AND mu.observed_at = ev.meaning_observed_at
+                  WHERE ev.raw_event_id = e.id AND ev.raw_received_at = e.received_at AND mu.superseded_by IS NULL
+                    AND mu.kind_hint = 'cau_hoi_cho_xu_ly' ORDER BY mu.observed_at DESC LIMIT 1) AS unit_flags,
                  ARRAY(SELECT x.id FROM core.person_identities x WHERE x.person_id = pi.person_id AND x.channel_id = e.channel_id) AS ids,
                  ARRAY(SELECT NULLIF(split_part(x.external_id, '@', 1), '') FROM core.person_identities x
                        WHERE x.person_id = pi.person_id AND x.channel_id = e.channel_id) AS ext
@@ -194,13 +207,15 @@ async def scan_units(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> list
           WHERE e.org_id = :o AND e.direction = 'inbound' AND e.kind <> ALL(CAST(:nokind AS text[]))
             AND e.body_text IS NOT NULL AND e.body_text <> '' AND COALESCE(p.person_type, '') <> 'staff'
             AND (p.person_type = 'customer' OR pe.id = ANY(:key)            -- người hỏi "other" bị loại ngay trong SQL
+                 OR e.group_id = ANY(CAST(:biz AS uuid[]))                  -- khởi động lạnh: nhóm kinh_doanh đã xác nhận (lọc tiếp ở dưới)
                  OR EXISTS (SELECT 1 FROM mem.facts f WHERE f.org_id = e.org_id AND f.subject_id = pe.id AND f.predicate = 'customer_of'
                             AND f.valid_to IS NULL AND f.status IN ('asserted', 'owner_confirmed')))
             AND e.occurred_at < CAST(:now AS timestamptz) - make_interval(mins => :sla)
             AND e.occurred_at > CAST(:now AS timestamptz) - make_interval(hours => :win)
             AND EXISTS (SELECT 1 FROM clean.evidence ev JOIN clean.meaning_units mu ON mu.id = ev.meaning_unit_id
                          AND mu.observed_at = ev.meaning_observed_at AND mu.superseded_by IS NULL
-                        WHERE ev.raw_event_id = e.id AND ev.raw_received_at = e.received_at AND mu.event_type = ANY(CAST(:need AS text[])))
+                        WHERE ev.raw_event_id = e.id AND ev.raw_received_at = e.received_at
+                          AND (mu.event_type = ANY(CAST(:need AS text[])) OR mu.kind_hint = 'cau_hoi_cho_xu_ly'))
         ) c
         WHERE NOT EXISTS (
           SELECT 1 FROM raw.events o2 WHERE o2.channel_id = c.channel_id AND o2.direction = 'outbound'
@@ -213,7 +228,7 @@ async def scan_units(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> list
                           AND (a.alert_type = 'slow_response' OR (a.kind = 'cau_hoi_cho_xu_ly' AND a.detector = 'questions')))   -- một người một dòng
         ORDER BY c.occurred_at DESC LIMIT :lim"""),  # noqa: S608 — outbound_to_sql là hằng nội bộ
                             {"o": org_id, "now": now, "sla": SCAN_SLA_MIN, "win": SCAN_WINDOW_H, "lim": SCAN_LIMIT * 4,
-                             "nokind": list(NO_REPLY_KINDS), "need": list(NEEDS_REPLY), "key": list(key_rel)})).all()
+                             "nokind": list(NO_REPLY_KINDS), "need": list(NEEDS_REPLY), "key": list(key_rel), "biz": biz})).all()
     out: list[signals.Signal] = []
     seen: set[uuid.UUID] = set()
     for r in rows:
@@ -231,11 +246,15 @@ async def scan_units(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> list
                                                             AND valid_to IS NULL AND status IN ('asserted', 'owner_confirmed'))"""),
                                     {"p": r.person_id, "o": org_id, "e": ent})).scalar_one()
         asker: AskerKind = "kin" if ent in key_rel else ("customer" if customer else "other")
+        if asker == "other" and r.group_id in biz and g.cold_customer(g.Who(ent, r.person_id, r.person_type), sets, biz_group=True):
+            asker = "customer"                                    # khởi động lạnh (chỉ nhóm kinh_doanh đã xác nhận)
         if asker == "other":
             continue
+        uf = r.unit_flags if isinstance(r.unit_flags, dict) else {}
         body = str(r.body_text)
         q = QuestionIn(asked_at=r.occurred_at, raw_event_id=r.raw_id, span_end=min(len(body), 80), quote=body[:80], asker=asker,
-                       asker_person_id=r.person_id, thread=levels.Thread(type="group" if r.group_id else "dm_owner", size=int(r.member_count or 0),
+                       asker_person_id=r.person_id, blocks_work=uf.get("blocks_work") is True, needs_owner=uf.get("needs_owner") is True,
+                       explicit_urgent=uf.get("explicit_urgent") is True, thread=levels.Thread(type="group" if r.group_id else "dm_owner", size=int(r.member_count or 0),
                                                                            owner_in_thread=True, agent_in_thread=True),
                        thread_key=f"g:{r.group_id}" if r.group_id else None, group_id=r.group_id)
         try:
