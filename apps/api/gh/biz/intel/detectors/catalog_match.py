@@ -5,7 +5,8 @@ Detector KHÔNG gán mức: chỉ dựng `levels.SignalIn` (điểm khớp catal
 rồi gọi `signals.upsert`; mức, tắt theo bối cảnh (`gia_dinh`/`ban_be`, nhóm chưa xác nhận) và cổng 5 do `levels.compute` quyết.
 
 - Hàng của Sếp (`biz.catalog_items` active) được phản chiếu thành tín hiệu cung tổng hợp trong `biz.market_signals` với `meaning_unit_id` = id
-  hàng (không cần cột mới; `/matches?source=catalog` nhận ra qua đó) rồi chấm bằng `score_match` qua adapter `market.service.catalog_as_supply`.
+  hàng (không cần cột mới; `/matches?source=catalog` nhận ra qua đó) (KHÔNG lưu giá: `value_vnd` NULL — bảng giá nội bộ không rò qua `/supply`, `/matches`; giá tính trong bộ nhớ lúc chấm)
+  rồi chấm bằng `score_match` qua adapter `market.service.catalog_as_supply`.
 - Nguồn lực: catalog một mình là suy luận (≥ 75 điểm); `resource_owner_confirmed` chỉ khi có fact `owner_resource` (owner_confirmed) khớp mặt hàng.
 - Hồ sơ Sếp: chỉ `owner_confirmed` (snapshot). `owner_value_limit` dạng "không nhận đơn dưới N triệu" ⇒ giá trị cầu < N thì `touches_value_limit`
   (trần impact 1, không cổng); dạng "không làm hàng X" và cầu cùng mặt hàng ⇒ KHÔNG tạo cơ hội (trái Hồ sơ, không báo).
@@ -90,10 +91,10 @@ async def sync_supply(db: AsyncSession, org_id: uuid.UUID) -> dict[uuid.UUID, uu
         if it.state == "active":
             out[it.id] = (await db.execute(text("""
                 INSERT INTO biz.market_signals (org_id, side, item, quantity, unit, value_vnd, status, meaning_unit_id)
-                VALUES (:o, 'supply', :n, NULL, :u, :p, 'open', :i)
+                VALUES (:o, 'supply', :n, NULL, :u, NULL, 'open', :i)
                 ON CONFLICT (meaning_unit_id) WHERE meaning_unit_id IS NOT NULL
-                DO UPDATE SET item = EXCLUDED.item, unit = EXCLUDED.unit, value_vnd = EXCLUDED.value_vnd, status = 'open'
-                RETURNING id"""), {"o": org_id, "n": it.name[:300], "u": it.unit, "p": it.price_vnd, "i": it.id})).scalar_one()
+                DO UPDATE SET item = EXCLUDED.item, unit = EXCLUDED.unit, value_vnd = NULL, status = 'open'
+                RETURNING id"""), {"o": org_id, "n": it.name[:300], "u": it.unit, "i": it.id})).scalar_one()
     inactive = [it.id for it in items if it.state != "active"]
     if inactive:
         await db.execute(text("UPDATE biz.market_signals SET status = 'closed' WHERE org_id = :o AND side = 'supply' AND meaning_unit_id = ANY(:i)"),

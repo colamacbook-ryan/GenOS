@@ -34,7 +34,7 @@ from gh.biz.market.service import CLOSED_STAGES, OPEN_STAGES, STAGES, person_or_
 from gh.chassis import actionlog
 from gh.data.common import iso, mask_text, parse_cursor
 from gh.db import DB
-from gh.errors import ApiError, field_errors
+from gh.errors import ApiError, field_errors, forbidden
 
 router = APIRouter(tags=["market"])
 
@@ -44,10 +44,21 @@ WRITE = require("opportunity.write")
 
 # ═══ Bảng cơ hội ══════════════════════════════════════════════════════════════
 
+def _catalog_supply_sql(alias: str) -> str:
+    """Cung tổng hợp từ hàng của Sếp (`meaning_unit_id` trỏ `biz.catalog_items`, T6): bảng giá nội bộ, chỉ Owner thấy."""
+    return (f"({alias}.meaning_unit_id IS NOT NULL AND EXISTS "
+            f"(SELECT 1 FROM biz.catalog_items ci WHERE ci.id = {alias}.meaning_unit_id))")
+
+
+def _hide_catalog_sql(role: str, alias: str) -> str:
+    return "TRUE" if role == rbac.OWNER else f"NOT {_catalog_supply_sql(alias)}"
+
+
 def _opp_select(role: str) -> str:
     """`_OPP_SELECT` cho một vai: bản cầu–cung gợi ý cũng theo «Quyền xem» của nhóm phía cung (v0.1.71)."""
     gate = group_view_sql(role, "ms.group_id")
-    return _OPP_SELECT.replace("{SM_GATE}", "TRUE" if gate == "TRUE" else f"(ms.group_id IS NULL OR {gate})")
+    group_gate = "TRUE" if gate == "TRUE" else f"(ms.group_id IS NULL OR {gate})"
+    return _OPP_SELECT.replace("{SM_GATE}", f"{group_gate} AND {_hide_catalog_sql(role, 'ms')}")
 
 
 _OPP_SELECT = f"""
@@ -306,7 +317,7 @@ async def list_supply(side: Literal["demand", "supply"] | None = None,
                       db: AsyncSession = DB) -> dict[str, Any]:
     sc = await scope_for(db, user, "opportunity.read")
     scope_sql, scope_params = person_or_group_scope_sql(sc, "s.person_id", "s.group_id")
-    conds = ["s.org_id = :o", scope_sql]
+    conds = ["s.org_id = :o", scope_sql, _hide_catalog_sql(user.role_code, "s")]
     params: dict[str, Any] = {"o": user.org_id, **scope_params}
     if side:
         conds.append("s.side = :side")
@@ -333,7 +344,8 @@ async def list_supply(side: Literal["demand", "supply"] | None = None,
 
 async def _signal_or_404(db: AsyncSession, sc: Scope, org_id: uuid.UUID, signal_id: uuid.UUID) -> Any:
     scope_sql, scope_params = person_or_group_scope_sql(sc, "s.person_id", "s.group_id")
-    r = (await db.execute(text(_SIGNAL_SELECT + f" WHERE s.id = :i AND s.org_id = :o AND {scope_sql}"),  # noqa: S608
+    hide = _hide_catalog_sql(sc.role, "s")
+    r = (await db.execute(text(_SIGNAL_SELECT + f" WHERE s.id = :i AND s.org_id = :o AND {scope_sql} AND {hide}"),  # noqa: S608
                           {"i": signal_id, "o": org_id, **scope_params})).one_or_none()
     if r is None:
         raise not_found("Tín hiệu")
@@ -350,6 +362,7 @@ async def get_supply(signal_id: uuid.UUID, user: service.CurrentUser = Depends(R
     same_side = "demand_id" if r.side == "demand" else "supply_id"
     og_view = group_view_sql(user.role_code, "os.group_id")      # bên kia nằm trong nhóm «Chỉ Sếp» ⇒ ẩn (v0.1.71)
     other_gate = "TRUE" if og_view == "TRUE" else f"(os.group_id IS NULL OR {og_view})"
+    other_gate += f" AND {_hide_catalog_sql(user.role_code, 'os')}"
     matches = (await db.execute(text(f"""
         SELECT m.id, m.score, m.reasons, m.status, os.item AS other_item, os.side AS other_side,
                op.id AS op_id, op.code AS op_code, op.display_name AS op_name, op.person_type AS op_type,
@@ -393,7 +406,8 @@ def _match_item(r: Any, *, owner: bool) -> dict[str, Any]:
 def _supply_gate(sc: Scope) -> str:
     """Phía cung của gợi ý ghép nằm trong nhóm «Chỉ Sếp» ⇒ ẩn cả gợi ý với vai khác (v0.1.71)."""
     gv = group_view_sql(sc.role, "s.group_id")
-    return "TRUE" if gv == "TRUE" else f"(s.group_id IS NULL OR {gv})"
+    base = "TRUE" if gv == "TRUE" else f"(s.group_id IS NULL OR {gv})"
+    return f"{base} AND {_hide_catalog_sql(sc.role, 's')}"
 
 
 @router.get("/matches")
@@ -403,6 +417,8 @@ async def list_matches(status: Literal["suggested", "introduced", "accepted", "r
                        limit: int = Query(50, ge=1, le=200), user: service.CurrentUser = Depends(READ),
                        db: AsyncSession = DB) -> dict[str, Any]:
     """Danh sách gợi ý ghép — phạm vi theo phía **cầu** (khách hàng của mình, `docs/api/phase-3-market.md`)."""
+    if source == "catalog" and user.role_code != rbac.OWNER:     # hàng/giá của Sếp: chỉ Owner
+        raise forbidden("market.catalog_source")
     sc = await scope_for(db, user, "opportunity.read")
     scope_sql, scope_params = person_or_group_scope_sql(sc, "d.person_id", "d.group_id")
     conds = ["d.org_id = :o", scope_sql, _supply_gate(sc), "m.score >= :min_score"]

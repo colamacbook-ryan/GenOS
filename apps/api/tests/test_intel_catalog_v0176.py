@@ -314,3 +314,36 @@ async def test_matches_endpoint_source_filter(app, db, owner_api) -> None:  # ty
     assert (await owner_api.get("/matches?source=market")).json()["total"] == 0
     assert (await owner_api.get("/matches")).json()["total"] == 1
     assert (await owner_api.get("/matches?source=bua")).status_code == 422
+
+
+async def test_catalog_supply_hidden_from_non_owner_but_owner_sees(app, db, client, owner_api) -> None:  # type: ignore[no-untyped-def]
+    """Bảng giá nội bộ: tín hiệu cung tổng hợp từ catalog không lưu giá, và `/supply`, `/matches`, `?source=catalog`, `/opportunities` ẩn với
+    vai không phải Owner (kể cả vai phạm vi ALL như operator/auditor)."""
+    from tests.test_owner_profile_support import link_owner_user
+    from tests.test_rbac_api import login_as
+
+    org = (await db.execute(text("SELECT id FROM core.organizations LIMIT 1"))).scalar_one()
+    w = await link_owner_user(db, org)
+    await catalog.create(db, org, name="thép phi 16", user_id=w.user, unit="tấn", price_vnd=14_600_000)
+    await db.commit()
+    await _demand(db, w)
+    assert (await db.execute(text("SELECT count(*) FROM biz.market_signals WHERE org_id = :o AND side = 'supply' AND value_vnd IS NOT NULL"),
+                             {"o": org})).scalar_one() == 0                                    # không lưu giá bán của Sếp
+    cat_supply = (await db.execute(text("SELECT id FROM biz.market_signals WHERE org_id = :o AND side = 'supply'"), {"o": org})).scalar_one()
+    mid = (await db.execute(text("SELECT id FROM biz.matches WHERE org_id = :o"), {"o": org})).scalar_one()
+
+    owner_supply = (await owner_api.get("/supply?side=supply")).json()
+    assert owner_supply["total"] == 1 and "thép phi 16" in owner_supply["items"][0]["item"]
+    assert (await owner_api.get("/matches?source=catalog")).json()["total"] == 1
+
+    for role in ("operator", "auditor"):
+        api = await login_as(client, db, role)
+        sup = await api.get("/supply?side=supply")
+        assert sup.status_code == 200 and sup.json()["total"] == 0 and "thép phi 16" not in sup.text and "14600000" not in sup.text
+        assert (await api.get(f"/supply/{cat_supply}")).status_code == 404
+        m = await api.get("/matches")
+        assert m.status_code == 200 and m.json()["total"] == 0 and "thép phi 16" not in m.text and "14.600.000" not in m.text
+        assert (await api.get("/matches?source=catalog")).status_code == 403
+        assert (await api.get("/matches?source=market")).json()["total"] == 0
+        assert "thép phi 16" not in (await api.get("/opportunities")).text
+        assert (await api.send("POST", f"/matches/{mid}/reject")).status_code in (403, 404)   # auditor không có quyền ghi
