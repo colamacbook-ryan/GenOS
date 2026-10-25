@@ -13,7 +13,10 @@ Các hàm `_hom_nay`, `_viec`, `_suc_khoe`, `_todos`, `_read_context` giữ làm
 tra tại thời điểm gọi, nên test vá (`monkeypatch.setattr(commands, "_todos", …)`) vẫn có tác dụng như trước khi tách.
 """
 
+import logging
 from typing import Any
+
+from sqlalchemy import text
 
 from gh.owner_cmd import core as oc
 from gh.owner_cmd.core import (  # noqa: F401 — hằng/tên cũ của module này, test và poller còn dùng
@@ -36,12 +39,20 @@ from gh.owner_cmd.core import (  # noqa: F401 — hằng/tên cũ của module n
     owner_user,
     short_id,
 )
-from gh.telegram import inbound
+from gh.telegram import backup, inbound
+
+log = logging.getLogger("gh.telegram.commands")
 
 VIA: oc.Via = "telegram"
 PURPOSE = oc.purpose_of(VIA)  # "gen.telegram"
 #: Các loại lệnh Telegram hiểu — phải khớp lõi chung (`oc.KINDS`).
 KINDS = ("start", "tro_giup", "help", "hom_nay", "viec", "suc_khoe", "nhap", "hoi")
+#: v0.1.76: lệnh riêng của Telegram (kênh phụ), không thuộc lõi chung.
+TELEGRAM_ONLY_KINDS = (inbound.LOCK_KIND,)
+LOCKED_TEXT = ("Đã KHOÁ trợ lý: kênh quản trị và chế độ hỗ trợ nhóm đã tắt, tin đang chờ gửi đã huỷ. "
+               "Mở khoá và bật lại từng phần trên Console (cần mã PIN).")
+ALREADY_LOCKED = "Trợ lý đã khoá từ trước. Mở khoá trên Console (cần mã PIN)."
+LOCK_DENIED = "Em không khoá được từ tài khoản này. Sếp khoá trên Console."
 
 Reply = tuple[str, list[Button]]
 
@@ -66,8 +77,27 @@ async def _read_context(ctx: Context) -> str:
     return await oc.read_context(ctx, VIA)
 
 
+async def _lock(cmd: inbound.TelegramCommand, ctx: Context) -> Reply:
+    """v0.1.76 (T2): lệnh khẩn "khoá trợ lý" — CHỈ khoá (không có đường mở khoá ở đây).
+    `backup.lock_assistant` kiểm LẠI người ra lệnh theo `from.id` + `chat.id` đã ghép."""
+    try:
+        async with ctx.sm() as db:
+            await db.execute(text("SELECT set_config('app.org_id', :o, true)"), {"o": str(ctx.org_id)})
+            res = await backup.lock_assistant(db, ctx.org_id, via="telegram", tg_user_id=cmd.user_id,
+                                              chat_id=cmd.chat_id)
+            await db.commit()
+    except Exception:  # noqa: BLE001 — không được làm sập vòng nhận tin; Sếp còn Console
+        log.exception("telegram: khoá trợ lý lỗi")
+        return oc.FAILED, []
+    if not res.ok:
+        return LOCK_DENIED, []
+    return (ALREADY_LOCKED if res.already else LOCKED_TEXT), []
+
+
 async def handle(cmd: inbound.TelegramCommand, ctx: Context) -> Reply:
     """Trả (chữ trả lời, nút link). Nút chỉ có khi vừa soạn đề xuất: "Mở Console để Xác nhận". Không ném."""
+    if cmd.kind == inbound.LOCK_KIND:
+        return await _lock(cmd, ctx)
     owner_cmd = oc.OwnerCommand(
         via=VIA, kind=cmd.kind, text=cmd.text, message_ref=str(cmd.message_id), received_at=cmd.received_at
     )
