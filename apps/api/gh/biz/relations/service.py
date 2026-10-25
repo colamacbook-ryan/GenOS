@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """Nền dùng chung của cụm Quan hệ & Đối tượng: hình dạng (PersonRef/GroupRef/UserRef/AgentRef), BOT + mức tự trị
 riêng từng người/nhóm (`attrs.agent_id` / `attrs.autonomy_level` — cùng quy ước với `gh.biz.core.drafts`), điểm
 theo bucket cho 5 hàng bộ lọc của Nhóm & Con người (`docs/handoff/01-ui-screens.md` §directory).
@@ -129,3 +130,41 @@ async def set_group_bot(db: AsyncSession, group_id: uuid.UUID, *, agent_id: uuid
     await db.execute(text("""UPDATE core.groups SET assigned_agent_id = :a, attrs = CAST(:attrs AS jsonb),
                              updated_at = now() WHERE id = :i"""),
                      {"a": agent_id, "attrs": orjson.dumps(attrs).decode(), "i": group_id})
+
+
+# ─── v0.1.76 (T8): lọc riêng tư cho Hồ sơ tóm tắt (§4.5 R3, CNS-069) ───────────────────────────────────────────
+
+FRAUD_SIGNAL = "rui_ro_lua_dao"
+FAMILY_CONTEXTS = ("gia_dinh", "ban_be")
+
+
+def fact_visible_in_brief(sensitivity: str, status: str, predicate: str, *, pin: bool, fraud_predicates: frozenset[str]) -> bool:
+    """Sự thật có được vào bản tóm tắt chat không: `hr` KHÔNG BAO GIỜ; sự thật lừa đảo `disputed` KHÔNG BAO GIỜ; nhạy cảm
+    (SĐT, sức khoẻ, người nhà, STK…) chỉ khi Sếp đang có phiên PIN. Giá trị lạ ⇒ không hiện."""
+    if sensitivity == "hr" or (status == "disputed" and predicate in fraud_predicates):
+        return False
+    if status in ("retracted", "superseded") or predicate == "payment_account":    # đã rút/thay; STK chỉ qua `payment.verified`
+        return False
+    return sensitivity == "normal" or (sensitivity == "sensitive" and pin)
+
+
+async def fraud_predicates(db: AsyncSession) -> frozenset[str]:
+    rows = (await db.execute(text("SELECT code FROM mem.predicates WHERE dispute_signal_kind = :k"), {"k": FRAUD_SIGNAL})).scalars().all()
+    return frozenset(rows)
+
+
+async def is_family_or_friend(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID, entity_id: uuid.UUID | None) -> bool:
+    """Bối cảnh gia đình/bạn bè không bao giờ có trường đánh giá (§4.5 R3): người có sự thật `family_of`, hoặc mọi nhóm họ nói
+    trong đó đều đã được Sếp xác nhận là gia đình/bạn bè."""
+    if entity_id is not None:
+        fam = (await db.execute(text("""SELECT 1 FROM mem.facts WHERE org_id = :o AND subject_id = :e AND predicate = 'family_of'
+                                        AND status IN ('owner_confirmed', 'asserted') LIMIT 1"""), {"o": org_id, "e": entity_id})).first()
+        if fam is not None:
+            return True
+    rows = (await db.execute(text("""
+        SELECT g.gid, EXISTS (SELECT 1 FROM mem.group_contexts gc WHERE gc.org_id = :o AND gc.group_id = g.gid
+                              AND gc.source = 'owner' AND gc.context = ANY(:c)) AS fam
+        FROM (SELECT DISTINCT e.group_id AS gid FROM raw.events e JOIN core.person_identities pi ON pi.id = e.sender_identity_id
+              WHERE e.org_id = :o AND pi.person_id = :p AND e.group_id IS NOT NULL) g"""),
+        {"o": org_id, "p": person_id, "c": list(FAMILY_CONTEXTS)})).all()
+    return bool(rows) and all(r.fam for r in rows)

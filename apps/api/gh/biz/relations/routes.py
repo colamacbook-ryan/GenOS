@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """API Quan hệ & Đối tượng (docs/api/phase-3-relations.md): Nhóm & Con người, Hồ sơ sống, Sổ tay nhận thức,
 Tài liệu. Nền chung: `docs/api/phase-3.md` (PersonRef/GroupRef/Score/EvidenceRef, ScopeFilter, chứng cứ).
 
@@ -34,12 +35,15 @@ from gh.biz.core.scope import (
     not_found,
     scope_for,
 )
+from gh.biz.intel import access as intel_access
+from gh.biz.mem import entities as mem_entities
+from gh.biz.mem import view_routes
 from gh.biz.relations import service as rsvc
 from gh.chassis import actionlog
 from gh.chassis.objects import ObjectNotFound, content_hash, get_object_store, new_key
 from gh.data.common import iso, live_person, mask_text, parse_cursor
 from gh.db import DB
-from gh.errors import ApiError
+from gh.errors import ApiError, pin_required
 from gh.memory import notebook
 
 router = APIRouter(tags=["relations"])
@@ -418,7 +422,7 @@ async def _profile_payload(person_id: uuid.UUID, user: service.CurrentUser, db: 
 
     scores = (await db.execute(text("""
         SELECT dimension, value, trend, updated_at FROM clean.current_scores
-        WHERE subject_type = 'person' AND subject_id = :p ORDER BY dimension"""), {"p": person_id})).all()
+        WHERE subject_type = 'person' AND subject_id = :p AND dimension <> 'reliability' ORDER BY dimension"""), {"p": person_id})).all()
 
     dm_sql, dm_params = direct_visible_sql(user, "mu.group_id", "mu.person_id")   # tin 1-1: chỉ Owner/người được giao
     timeline = (await db.execute(text(f"""
@@ -480,6 +484,98 @@ async def _profile_payload(person_id: uuid.UUID, user: service.CurrentUser, db: 
                            "to_person": str(m.to_person), "identities": [str(i) for i in (m.identities or [])],
                            "at": iso(m.at), "reverted_at": iso(m.reverted_at)} for m in merges],
     }
+
+
+BRIEF_FACT_PREDICATES_OPEN = ("promised_to", "owes", "asked_waiting")
+
+
+@router.get("/profile/{person_id}/brief")
+async def get_profile_brief(person_id: uuid.UUID, tier: Literal["summary", "full"] = "summary",
+                            user: service.CurrentUser = Depends(READ), db: AsyncSession = DB) -> dict[str, Any]:
+    """Hồ sơ TÓM TẮT một người (spec §7.3, W6): đọc `mem.facts` + `mem.entity_summaries` thay vì tin thô; mỗi dòng có `fact_ids`;
+    sự thật nguồn ngoài nói «theo lời X». `summary` (mặc định, và LUÔN dùng cho chat) KHÔNG có điểm đánh giá. `full` chỉ Owner
+    có phiên PIN, và vẫn không có đánh giá ở bối cảnh gia đình/bạn bè. Lọc §4.5: không `hr`, không sự thật lừa đảo `disputed`,
+    nhạy cảm chỉ khi có PIN; tín hiệu lừa đảo về người này chỉ báo «có cảnh báo cần xem: mở Console (PIN)»."""
+    sc = await scope_for(db, user, "profile.read")
+    owner = user.role_code == rbac.OWNER
+    if tier == "full":
+        if not owner:
+            raise ApiError(403, "FORBIDDEN", "Chỉ Sếp xem bản đầy đủ")
+        if not user.pin_active():
+            raise pin_required()
+    await ensure_person(db, sc, person_id)
+    live = await live_person(db, person_id)
+    if live != person_id:
+        await ensure_person(db, sc, live)
+        person_id = live
+    r = await _person_or_404(db, sc, person_id)
+    org = user.org_id
+    pin = owner and user.pin_active()
+
+    dm_sql, dm_params = direct_visible_sql(user, "mu.group_id", "mu.person_id")
+    # §4.5 R3 / CNS-069: đơn vị lừa đảo KHÔNG bao giờ tóm tắt (chỉ câu cảnh báo); sức khoẻ cần PIN; nhân sự (staff/candidate) cần PIN.
+    hr_person = r.type in ("staff", "candidate")
+    events = [] if hr_person and not pin else (await db.execute(text(f"""
+        SELECT mu.id, mu.event_type, mu.conclusion, mu.observed_at FROM clean.meaning_units mu
+        WHERE mu.org_id = :o AND mu.person_id = :p AND mu.superseded_by IS NULL AND {dm_sql}
+          AND mu.kind_hint IS DISTINCT FROM :fr AND (CAST(:pin AS boolean) OR mu.kind_hint IS DISTINCT FROM :hl)
+        ORDER BY mu.observed_at DESC LIMIT 5"""), {"o": org, "p": person_id, "fr": rsvc.FRAUD_SIGNAL, "hl": "suc_khoe_an_toan",  # noqa: S608
+                                                   "pin": pin, **dm_params})).all()
+    fraud_unit = owner and (await db.execute(text(f"""
+        SELECT 1 FROM clean.meaning_units mu WHERE mu.org_id = :o AND mu.person_id = :p AND mu.superseded_by IS NULL AND {dm_sql}
+          AND mu.kind_hint = :fr LIMIT 1"""), {"o": org, "p": person_id, "fr": rsvc.FRAUD_SIGNAL, **dm_params})).first() is not None  # noqa: S608
+
+    out: dict[str, Any] = {
+        "tier": tier,
+        "person": {"id": str(r.id), "code": r.code, "name": mask_text(r.name, owner), "type": r.type,
+                   "relation_to_owner": r.relation_to_owner},
+        "events": [{"text": mask_text(e.conclusion, owner), "event_type": e.event_type, "observed_at": iso(e.observed_at),
+                    "evidence": [{"quote": mask_text(e.conclusion, owner), "at": iso(e.observed_at),
+                                  "link": f"/explain/meaning_unit/{e.id}"}]} for e in events],
+        "facts": [], "open_items": [], "summary": None,
+        "warning": "có cảnh báo cần xem: mở Console (PIN)" if fraud_unit else None,
+        "events_withheld": "nhan_su_can_pin" if hr_person and not pin else None}
+
+    ent = (await db.execute(text("SELECT id FROM mem.entities WHERE org_id = :o AND person_id = :p AND forgotten_at IS NULL"),
+                            {"o": org, "p": person_id})).scalar_one_or_none()
+    if ent is not None and owner:               # trí nhớ là của Sếp: vai khác chỉ thấy phần sự kiện
+        ent = (await mem_entities.canonical(db, ent))
+        fraud = await rsvc.fraud_predicates(db)
+        members = await mem_entities.members(db, ent)
+        rows = await view_routes._facts_rows(db, org, "f.subject_id = ANY(:m) AND f.status IN ('owner_confirmed', 'asserted', 'disputed') "
+                                                      "AND f.evidence_n >= 1 AND f.valid_from <= now() AND (f.valid_to IS NULL OR f.valid_to > now())",
+                                             {"m": members}, limit=60)
+        ok = [f for f in rows if rsvc.fact_visible_in_brief(f.sensitivity, f.status, f.predicate, pin=pin, fraud_predicates=fraud)]
+        shaped = [{**x, "evidence": [{"quote": x["text"], "at": iso(x["valid_from"]), "link": f"/entities/{x['subject']['id']}"}]}
+                  for x in await view_routes._present(db, org, ok[:20])]
+        out["facts"] = shaped
+        out["open_items"] = [x for x in shaped if x["predicate"] in BRIEF_FACT_PREDICATES_OPEN]
+        summ = (await db.execute(text("SELECT summary, fact_ids, built_at FROM mem.entity_summaries WHERE entity_id = :e AND org_id = :o"),
+                                 {"e": ent, "o": org})).one_or_none()
+        if summ is not None:                    # dòng tóm tắt đi theo sự thật của nó: sự thật bị chặn ⇒ dòng bị bỏ
+            by_id = {f.id: f for f in await view_routes._facts_rows(db, org, "f.id = ANY(:i)", {"i": list(summ.fact_ids)}, limit=200)}
+            lines = []
+            for t, fid in zip(summ.summary.split("\n"), summ.fact_ids, strict=False):
+                f = by_id.get(fid)
+                if f is not None and rsvc.fact_visible_in_brief(f.sensitivity, f.status, f.predicate, pin=pin, fraud_predicates=fraud):
+                    lines.append({"text": t, "fact_ids": [str(fid)]})
+            out["summary"] = {"built_at": iso(summ.built_at), "lines": lines}
+        # §4.5 R3: tín hiệu lừa đảo về người này không tóm tắt ở chat — chỉ báo có cảnh báo
+        fr = (await db.execute(text(f"""SELECT 1 FROM biz.alerts a WHERE a.org_id = :o AND a.subject_type = 'person' AND a.subject_id = :p
+                                        AND a.kind = :k AND a.status = 'open'
+                                        AND NOT {intel_access.alert_hidden_group_sql(user.role_code, 'a')} LIMIT 1"""),  # noqa: S608
+                                {"o": org, "p": person_id, "k": rsvc.FRAUD_SIGNAL})).first()
+        if fr is not None:
+            out["warning"] = "có cảnh báo cần xem: mở Console (PIN)"
+    if tier == "full":
+        fam = await rsvc.is_family_or_friend(db, org, person_id, ent if owner else None)
+        scores = [] if fam else (await db.execute(text("""
+            SELECT dimension, value, trend FROM clean.current_scores WHERE subject_type = 'person' AND subject_id = :p
+            ORDER BY dimension"""), {"p": person_id})).all()
+        out["scores"] = [{"dimension": s.dimension, "label": {**explain.DIMENSION_LABELS, "reliability": "độ tin cậy lời hứa"}.get(s.dimension, s.dimension),
+                          "value": float(s.value), "trend": s.trend} for s in scores]
+        out["scores_withheld"] = "gia_dinh_ban_be" if fam else None
+    return out
 
 
 class ProfilePatch(BaseModel):

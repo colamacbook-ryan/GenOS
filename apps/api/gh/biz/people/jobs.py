@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """Việc nền của cụm Con người & Chất lượng:
 
 - `recompute_people_reviews_org` (gọi tay được, và qua cron `people_review_recompute` mỗi ngày): với mỗi kỳ
@@ -211,5 +212,140 @@ async def people_review_recompute(ctx: dict[str, Any]) -> dict[str, int]:
     return out
 
 
+# ─── v0.1.76 (T8, r4 P7): độ tin cậy lời hứa của MỌI loại người — chỉ hiện ở `tier=full` (Owner + PIN) ──────────────────────
+RELIABILITY = "reliability"
+RELIABILITY_WINDOW_DAYS = 90
+RELIABILITY_MIN_EVIDENCE = 3        # R5: ≥ 3 bằng chứng (lời hứa đã chốt giữ/vỡ, có tin gốc) …
+RELIABILITY_MIN_DAYS = 2            # … ở ≥ 2 ngày khác nhau
+RELIABILITY_MAX_PEOPLE = 500        # cận số người mỗi lượt/org
+
+
+async def _reliability_eligible(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID, now: datetime, window_days: int) -> bool:
+    """Chỉ chấm khi ĐỦ cả: (1) ≥ 1 nhóm Sếp đã xác nhận bối cảnh có `score_people` (người chỉ nhắn 1-1 / nhóm chưa xác nhận ⇒ không);
+    (2) không nhóm nào họ nói trong đó là gia đình/bạn bè; (3) không là `owner_key_relation`; (4) không có `family_of` hai chiều;
+    (5) R5: ≥ 2 tin gốc không phải forwarded làm chứng cho các lời hứa đã chốt trong cửa sổ."""
+    from gh.biz.mem import entities
+
+    g = (await db.execute(text("""
+        SELECT bool_or(COALESCE((ct.policy->>'score_people')::boolean, false)) AS scoring,
+               bool_or(gc.context IN ('gia_dinh', 'ban_be')) AS fam
+        FROM (SELECT DISTINCT e.group_id FROM raw.events e JOIN core.person_identities pi ON pi.id = e.sender_identity_id
+              WHERE e.org_id = :o AND pi.person_id = :p AND e.group_id IS NOT NULL) g
+        JOIN mem.group_contexts gc ON gc.org_id = :o AND gc.group_id = g.group_id AND gc.source = 'owner'
+        JOIN mem.context_types ct ON ct.code = gc.context"""), {"o": org_id, "p": person_id})).one()
+    if not g.scoring or g.fam:
+        return False
+    ent = (await db.execute(text("SELECT id FROM mem.entities WHERE org_id = :o AND person_id = :p AND forgotten_at IS NULL"),
+                            {"o": org_id, "p": person_id})).scalar_one_or_none()
+    if ent is not None:
+        members = await entities.members(db, await entities.canonical(db, ent))
+        bad = (await db.execute(text("""
+            SELECT 1 FROM mem.facts WHERE org_id = :o AND status NOT IN ('superseded', 'retracted')
+              AND ((predicate = 'owner_key_relation' AND object_entity_id = ANY(:m))
+                   OR (predicate = 'family_of' AND (subject_id = ANY(:m) OR object_entity_id = ANY(:m)))) LIMIT 1"""),
+                              {"o": org_id, "m": members})).first()
+        if bad is not None:
+            return False
+    sources = (await db.execute(text("""
+        SELECT count(DISTINCT ev.raw_event_id) FROM biz.promises pr
+        JOIN clean.evidence ev ON ev.meaning_unit_id = pr.meaning_unit_id
+        JOIN raw.events e ON e.id = ev.raw_event_id AND e.org_id = :o
+        WHERE pr.org_id = :o AND pr.promiser_person_id = :p AND (pr.kept_at IS NOT NULL OR pr.broken = true)
+          AND pr.due_at >= :df AND pr.due_at <= :dt AND COALESCE(e.payload->>'forwarded', 'false') <> 'true'"""),
+                                 {"o": org_id, "p": person_id, "df": now - timedelta(days=window_days), "dt": now})).scalar_one()
+    return int(sources) >= RELIABILITY_MIN_EVIDENCE_SOURCES
+
+
+RELIABILITY_MIN_EVIDENCE_SOURCES = 2
+
+
+async def reliability_still_eligible(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID, *, now: datetime | None = None) -> bool:
+    """Kiểm LẠI điều kiện chấm (cho `/explain/score` — không tin dòng điểm cũ): đủ bằng chứng trong cửa sổ + `_reliability_eligible`."""
+    now = now or datetime.now(UTC)
+    r = (await db.execute(text("""
+        SELECT count(*) AS n, count(DISTINCT due_at::date) AS days FROM biz.promises
+        WHERE org_id = :o AND promiser_person_id = :p AND meaning_unit_id IS NOT NULL AND (kept_at IS NOT NULL OR broken = true)
+          AND due_at >= :df AND due_at <= :dt"""),
+                          {"o": org_id, "p": person_id, "df": now - timedelta(days=RELIABILITY_WINDOW_DAYS), "dt": now})).one()
+    if r.n < RELIABILITY_MIN_EVIDENCE or r.days < RELIABILITY_MIN_DAYS:
+        return False
+    return await _reliability_eligible(db, org_id, person_id, now, RELIABILITY_WINDOW_DAYS)
+
+
+async def recompute_reliability_org(db: AsyncSession, org_id: uuid.UUID, *, now: datetime | None = None,
+                                    window_days: int = RELIABILITY_WINDOW_DAYS, max_people: int = RELIABILITY_MAX_PEOPLE) -> int:
+    """Điểm `reliability` = % lời hứa đã chốt mà giữ được, trong `window_days` gần nhất, cho người có ≥ 3 lời hứa chốt có tin gốc
+    ở ≥ 2 ngày và đủ điều kiện `_reliability_eligible`. Bị cận theo org, cửa sổ thời gian và `max_people` (số người xử lý/lượt).
+    Chỉ ghi `score_snapshots` khi giá trị ĐỔI; XOÁ điểm hiện tại của người không còn đủ điều kiện (thành người thân, dưới ngưỡng…)."""
+    now = now or datetime.now(UTC)
+    rows = (await db.execute(text("""
+        SELECT pr.promiser_person_id AS pid, count(*) AS n, count(*) FILTER (WHERE pr.broken IS NOT TRUE AND pr.kept_at IS NOT NULL) AS kept,
+               (array_agg(pr.meaning_unit_id ORDER BY pr.due_at DESC))[1:5] AS units
+        FROM biz.promises pr JOIN core.persons p ON p.id = pr.promiser_person_id
+        WHERE pr.org_id = :o AND p.org_id = :o AND p.deleted_at IS NULL AND p.merged_into_id IS NULL
+          AND pr.meaning_unit_id IS NOT NULL AND (pr.kept_at IS NOT NULL OR pr.broken = true)
+          AND pr.due_at >= :df AND pr.due_at <= :dt
+        GROUP BY pr.promiser_person_id HAVING count(*) >= :mn AND count(DISTINCT pr.due_at::date) >= :md
+        ORDER BY count(*) DESC, pr.promiser_person_id"""),
+        {"o": org_id, "df": now - timedelta(days=window_days), "dt": now, "mn": RELIABILITY_MIN_EVIDENCE,
+         "md": RELIABILITY_MIN_DAYS})).all()
+    existing = set((await db.execute(text("""
+        SELECT cs.subject_id FROM clean.current_scores cs JOIN core.persons p ON p.id = cs.subject_id AND p.org_id = :o
+        WHERE cs.subject_type = 'person' AND cs.dimension = :d"""), {"o": org_id, "d": RELIABILITY})).scalars().all())
+    # Người ĐÃ có điểm luôn được xét lại điều kiện, kể cả khi vượt cận `max_people` (cận chỉ giới hạn người MỚI).
+    batch = list(rows[:max_people]) + [r for r in rows[max_people:] if r.pid in existing]
+    n, scored = 0, set()
+    for r in batch:
+        if not await _reliability_eligible(db, org_id, r.pid, now, window_days):
+            continue
+        scored.add(r.pid)
+        value = round(100.0 * r.kept / r.n, 2)
+        prev = (await db.execute(text("""SELECT value FROM clean.current_scores
+                                         WHERE subject_type = 'person' AND subject_id = :p AND dimension = :d"""),
+                                 {"p": r.pid, "d": RELIABILITY})).scalar_one_or_none()
+        n += 1
+        if prev is not None and float(prev) == value:
+            continue                                                   # giá trị không đổi ⇒ không ghi thêm snapshot
+        trend = None if prev is None else ("up" if value > float(prev) + TREND_EPSILON else "down" if value < float(prev) - TREND_EPSILON else "flat")
+        expl = {"method": "promises", "window_days": window_days,
+                "factors": [{"label": f"{r.kept}/{r.n} lời hứa chốt đã giữ", "value": value,
+                             "evidence": [{"type": "meaning_unit", "id": str(u)} for u in r.units if u]}]}
+        snap = (await db.execute(text("""
+            INSERT INTO clean.score_snapshots (org_id, subject_type, subject_id, dimension, value, confidence, explanation)
+            VALUES (:o, 'person', :p, :d, :v, :c, CAST(:e AS jsonb)) RETURNING id"""),
+            {"o": org_id, "p": r.pid, "d": RELIABILITY, "v": value, "c": min(1.0, round(r.n / 10, 3)),
+             "e": orjson.dumps(expl).decode()})).scalar_one()
+        await db.execute(text("""
+            INSERT INTO clean.current_scores (subject_type, subject_id, dimension, value, trend, snapshot_id, updated_at)
+            VALUES ('person', :p, :d, :v, :tr, :s, now())
+            ON CONFLICT (subject_type, subject_id, dimension) DO UPDATE
+              SET value = EXCLUDED.value, trend = EXCLUDED.trend, snapshot_id = EXCLUDED.snapshot_id, updated_at = EXCLUDED.updated_at"""),
+            {"p": r.pid, "d": RELIABILITY, "v": value, "tr": trend, "s": snap})
+    # Dọn: người có điểm cũ mà không còn đủ điều kiện ⇒ xoá điểm hiện hành VÀ snapshot (lịch sử không được lộ qua explain).
+    stale = existing - scored
+    if stale:
+        await db.execute(text("""DELETE FROM clean.current_scores WHERE subject_type = 'person' AND dimension = :d
+                                 AND subject_id = ANY(:ids)"""), {"d": RELIABILITY, "ids": list(stale)})
+        await db.execute(text("""DELETE FROM clean.score_snapshots WHERE org_id = :o AND subject_type = 'person' AND dimension = :d
+                                 AND subject_id = ANY(:ids)"""), {"o": org_id, "d": RELIABILITY, "ids": list(stale)})
+    return n
+
+
+async def reliability_recompute(ctx: dict[str, Any]) -> dict[str, int]:
+    from gh.db import sessionmaker
+
+    sm = sessionmaker()
+    out: dict[str, int] = {}
+    async with sm() as db:
+        orgs = (await db.execute(text("SELECT id FROM core.organizations"))).scalars().all()
+    for org in orgs:
+        async with sm() as db:
+            n = await recompute_reliability_org(db, org)
+            await db.commit()
+        out[str(org)] = n
+    return out
+
+
 # v0.1.36 (F-45): 04:40 giờ VN (WorkerSettings.timezone) — ngoài giờ làm việc và cửa sổ cập nhật genh 02:30–03:30.
-JOBS: list[CronJob] = [(people_review_recompute, {"hour": {4}, "minute": {40}})]
+JOBS: list[CronJob] = [(people_review_recompute, {"hour": {4}, "minute": {40}}),
+                       (reliability_recompute, {"hour": {4}, "minute": {50}})]
