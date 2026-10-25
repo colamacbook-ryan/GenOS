@@ -1,5 +1,8 @@
-"""Báo chủ động cho Sếp qua kênh quản trị — CHỈ SỰ KIỆN ĐẶC BIỆT (Sếp quyết định 18/10/2026): KHÔNG báo định kỳ, KHÔNG
-bản tóm tắt, KHÔNG gộp theo giờ. Mức tối thiểu để đẩy là «quan trọng» (`settings.owner_report.min_severity`);
+# ruff: noqa: E501
+"""Báo chủ động cho Sếp qua kênh quản trị. Sự kiện đặc biệt (Sếp quyết định 18/10/2026) VÀ — từ v0.1.76 (Q6, Sếp chốt 22/10) —
+bản tin 07:30/17:30 (`kind` bản tin, do `gh.biz.intel.pipes.delivery` dựng; tắt được bằng «tắt bản tin»): bản tin miễn
+`min_severity` và `max_per_hour`; giờ yên lặng tách khỏi `urgent` bằng `bypass_quiet`; ghi `refs` ("1 ok / sai 2" trỏ đúng mục).
+ĐANG KHOÁ TRỢ LÝ ⇒ không xếp, không gửi. Mức tối thiểu để đẩy là «quan trọng» (`settings.owner_report.min_severity`);
 thấp hơn thì
 bỏ (không dồn vào đâu cả). Giờ yên lặng 21:00–07:00 giờ VN: tin chờ tới 07:00 (trừ mức `urgent`). Trần `max_per_hour`.
 
@@ -43,19 +46,38 @@ def prefs_of(settings: dict[str, Any], channel_prefs: dict[str, Any] | None = No
     return out
 
 
-def release_time(now: datetime, severity: str, prefs: dict[str, Any]) -> datetime:
-    """Giờ sớm nhất được gửi: `urgent` gửi ngay; còn lại, trong giờ yên lặng thì chờ tới `quiet_end` (giờ VN)."""
-    if severity == "urgent":
+def _hhmm(v: Any) -> int | None:
+    if isinstance(v, str) and len(v) == 5 and v[2] == ":" and v[:2].isdigit() and v[3:].isdigit():
+        h, m = int(v[:2]), int(v[3:])
+        if h < 24 and m < 60:
+            return h * 60 + m
+    return None
+
+
+def intel_quiet(settings: dict[str, Any]) -> tuple[int, int] | None:
+    """Giờ yên lặng MỘT nguồn (CNS-117): `settings.intel.quiet_start/quiet_end` "HH:MM" (phút trong ngày) khi có đủ và hợp lệ."""
+    intel = settings.get("intel")
+    if not isinstance(intel, dict):
+        return None
+    a, b = _hhmm(intel.get("quiet_start")), _hhmm(intel.get("quiet_end"))
+    return (a, b) if a is not None and b is not None else None
+
+
+def release_time(now: datetime, severity: str, prefs: dict[str, Any], bypass_quiet: bool | None = None) -> datetime:
+    """Giờ sớm nhất được gửi. `bypass_quiet` (mặc định = severity là `urgent`, giữ hành vi cũ) ⇒ gửi ngay; còn lại, trong giờ
+    yên lặng thì chờ tới `quiet_end` (giờ VN)."""
+    if (severity == "urgent") if bypass_quiet is None else bypass_quiet:
         return now
-    start, end = int(prefs["quiet_start"]), int(prefs["quiet_end"])
+    start = int(prefs.get("quiet_start_min", int(prefs["quiet_start"]) * 60))
+    end = int(prefs.get("quiet_end_min", int(prefs["quiet_end"]) * 60))
     if start == end:
         return now
     local = now.astimezone(VN_TZ)
-    h = local.hour
-    quiet = (h >= start or h < end) if start > end else (start <= h < end)
+    m = local.hour * 60 + local.minute
+    quiet = (m >= start or m < end) if start > end else (start <= m < end)
     if not quiet:
         return now
-    wake = local.replace(hour=end, minute=0, second=0, microsecond=0)
+    wake = local.replace(hour=end // 60, minute=end % 60, second=0, microsecond=0)
     if wake <= local:
         wake += timedelta(days=1)
     return wake.astimezone(UTC)
@@ -69,38 +91,48 @@ def _links_text(body: str, links: list[tuple[str, str]]) -> str:
 
 
 async def enqueue(db: AsyncSession, org_id: uuid.UUID, channel: str, *, kind: str, severity: str, text_: str,
-                  dedupe_key: str, links: list[tuple[str, str]] | None = None, now: datetime | None = None) -> bool:
+                  dedupe_key: str, links: list[tuple[str, str]] | None = None, now: datetime | None = None,
+                  refs: list[dict[str, Any]] | None = None, bypass_quiet: bool | None = None) -> bool:
     """Xếp một báo cáo vào hàng đợi kênh quản trị (trong transaction người gọi). Trả True nếu đã xếp. Không xếp
     khi: kênh
     quản trị chưa bật (hoặc không phải tài khoản bot), mức dưới ngưỡng, trùng `dedupe_key`, hoặc quá `max_per_hour`."""
-    if kind not in ("ask", "alert", "reply") or severity not in SEVERITY_RANK:
+    if kind not in ("ask", "alert", "reply", "digest") or severity not in SEVERITY_RANK:
         raise ValueError("loại/mức báo cáo không hợp lệ")
     oi = await owner_ids(db, org_id, channel)
     if not oi.enabled:
         return False
+    from gh.telegram import backup  # import muộn: tránh vòng import
+
+    if await backup.is_locked(db, org_id):
+        return False                    # khoá trợ lý: không gì ra Zalo
     now = now or datetime.now(UTC)
     chan_prefs = (await db.execute(text("""SELECT report_prefs FROM ops.owner_channels
                                            WHERE org_id = :o AND channel_type = :c"""),
                                    {"o": org_id, "c": channel})).scalar_one_or_none()
-    prefs = prefs_of(await org_settings(db, org_id), chan_prefs)
-    if SEVERITY_RANK[severity] < SEVERITY_RANK[str(prefs["min_severity"])]:
+    settings = await org_settings(db, org_id)
+    prefs = prefs_of(settings, chan_prefs)
+    quiet = intel_quiet(settings)
+    if quiet is not None:
+        prefs["quiet_start_min"], prefs["quiet_end_min"] = quiet
+    is_digest = kind == "digest"
+    if not is_digest and SEVERITY_RANK[severity] < SEVERITY_RANK[str(prefs["min_severity"])]:
         return False
     recent = (await db.execute(text("""
         SELECT count(*) FROM ops.owner_outbox WHERE org_id = :o AND channel_type = :c
           AND created_at > :since"""), {"o": org_id, "c": channel, "since": now - timedelta(hours=1)})).scalar_one()
-    if int(recent) >= int(prefs["max_per_hour"]) and severity != "urgent":
+    if int(recent) >= int(prefs["max_per_hour"]) and severity != "urgent" and not is_digest:
         log.info("owner_outbox: vượt %s tin/giờ, bỏ báo cáo %s", prefs["max_per_hour"], kind)
         return False
-    not_before = release_time(now, severity, prefs)
+    not_before = release_time(now, severity, prefs, bypass_quiet)
     row = (await db.execute(text("""
         INSERT INTO ops.owner_outbox (org_id, channel_type, kind, severity, dedupe_key, text, buttons,
-                                      created_at, not_before, next_attempt_at)
-        VALUES (:o, :c, :k, :s, :d, :t, CAST(:b AS jsonb), :now, :nb, :nb)
+                                      created_at, not_before, next_attempt_at, refs)
+        VALUES (:o, :c, :k, :s, :d, :t, CAST(:b AS jsonb), :now, :nb, :nb, CAST(:refs AS jsonb))
         ON CONFLICT (org_id, channel_type, dedupe_key) DO NOTHING RETURNING id"""),
         {"o": org_id, "c": channel, "k": kind, "s": severity, "d": dedupe_key,
          "t": _links_text(text_, links or []),
          "b": orjson.dumps([{"label": a, "url": b} for a, b in links or []]).decode(),
-         "now": now, "nb": not_before})).scalar_one_or_none()
+         "now": now, "nb": not_before, "refs": orjson.dumps(refs or []).decode()})).scalar_one_or_none()
     return row is not None
 
 
@@ -126,8 +158,16 @@ async def flush(sm: Any, bus: Any, redis: Any, now: datetime | None = None) -> d
             WHERE sent_at IS NULL AND failed_code IS NULL AND not_before <= :now AND next_attempt_at <= :now
             ORDER BY created_at LIMIT :n"""), {"now": now, "n": BATCH})).all()
         await db.rollback()
+    locked: dict[Any, bool] = {}
     for r in rows:
         try:
+            if r.org_id not in locked:
+                from gh.telegram import backup
+
+                async with sm() as db:
+                    locked[r.org_id] = await backup.is_locked(db, r.org_id)
+            if locked[r.org_id]:
+                continue                # khoá trợ lý: giữ nguyên hàng, không gửi gì
             async with sm() as db:
                 res = await send_auto(db, bus, redis, org_id=r.org_id, channel=r.channel_type, basis=Basis.OWNER_DM,
                                       trigger=Trigger("report", str(r.id)), text=r.text, now=now)
