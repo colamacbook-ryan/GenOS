@@ -402,3 +402,59 @@ async def test_t12_safety_unit_merging_into_raw_tail_case_does_not_push_twice(db
                 harm="nguy hiểm tính mạng", at=NOW - timedelta(minutes=10))
     out = await G.project_units(db, w.org, NOW)
     assert [s.id for s in out] == [first.id] and out[0].delivery == "merge", out
+
+
+# ─── review T12 MINOR 3/4: một đơn vị hỏng không chặn cả lô; một lượt mỗi tổ chức ────────────────────────────
+
+async def test_t12_broken_unit_does_not_block_fraud_unit_and_gives_up_after_max_fails(db: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    w = await _world(db)
+    pid, iid, ent = await _person(db, w, "Ngọc")
+    await _staff_of(db, w, ent)
+    raw = await mk_raw(db, w.org, w.channel, identity=iid, body=CRED_BODY, group=w.group, at=NOW - timedelta(minutes=30))
+    await _unit(db, w, raw, levels.FR, person=pid, flags={"credentials_entered": True}, people=[("nguoi_bi_anh_huong", ent)], harm="mất tiền",
+                at=NOW - timedelta(minutes=30))
+    raw2 = await mk_raw(db, w.org, w.channel, identity=iid, body="x", group=w.group, at=NOW - timedelta(minutes=10))
+    bad = await _unit(db, w, raw2, "co_hoi_ket_noi", person=pid, at=NOW - timedelta(minutes=10), v={"msg_at": "2026-10-23T13:50:00"})   # mốc thiếu múi giờ
+    real = U.signal_input
+
+    def boom(kind: str, *a: Any, **k: Any) -> levels.SignalIn:
+        if kind == "co_hoi_ket_noi":
+            raise RuntimeError("hỏng")
+        return real(kind, *a, **k)
+
+    monkeypatch.setattr(U, "signal_input", boom)
+    out = await U.project(db, w.org, NOW)            # đơn vị mới nhất (hỏng) xếp TRƯỚC đơn vị lừa đảo
+    await db.commit()
+    assert [(s.kind, s.level) for s in out] == [(levels.FR, "red")]
+    for _ in range(U.MAX_FAILS - 1):
+        assert await U.project(db, w.org, NOW) == []
+        await db.commit()
+    n = (await db.execute(text("SELECT count(*) FROM ops.action_log WHERE org_id = :o AND action = 'intel.units.done' AND target_id = :t"),
+                          {"o": w.org, "t": str(bad)})).scalar_one()
+    assert n == 1                                    # đủ MAX_FAILS ⇒ thôi lấy lại
+    monkeypatch.setattr(U, "signal_input", real)
+    assert await U.project(db, w.org, NOW) == []
+
+
+async def test_t12_naive_timestamp_in_verified_fields_is_handled(db: AsyncSession) -> None:
+    w = await _world(db)
+    pid, iid, _ = await _person(db, w, "Người A")
+    raw = await mk_raw(db, w.org, w.channel, identity=iid, body="x", group=w.group, at=NOW - timedelta(minutes=10))
+    await _unit(db, w, raw, "co_hoi_ket_noi", person=pid, at=NOW - timedelta(minutes=10), v={"msg_at": "2026-10-23T06:50:00"})
+    out = await U.project(db, w.org, NOW)
+    assert len(out) == 1
+
+
+async def test_t12_units_one_run_per_org(db: AsyncSession) -> None:
+    from gh.db import sessionmaker
+
+    w = await _world(db)
+    pid, iid, _ = await _person(db, w, "Người A")
+    raw = await mk_raw(db, w.org, w.channel, identity=iid, body="x", group=w.group, at=NOW - timedelta(minutes=10))
+    await _unit(db, w, raw, "co_hoi_ket_noi", person=pid, at=NOW - timedelta(minutes=10))
+    async with sessionmaker()() as other:
+        await other.execute(text("SELECT pg_advisory_xact_lock(hashtext('intel_units:' || :o))"), {"o": str(w.org)})
+        assert await U.project(db, w.org, NOW) == []
+        await other.rollback()
+    await db.rollback()
+    assert len(await U.project(db, w.org, NOW)) == 1

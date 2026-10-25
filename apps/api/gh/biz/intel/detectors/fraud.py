@@ -159,14 +159,30 @@ _QTY = re.compile(r"\b(\d{2,6})\s*(?:thung|bao|tan|cai|chiec|may|kg|container|co
                   r"cay|met|m2|m3|tui|phan|suat|ly|coc)\b")
 _UNC = re.compile(r"\b(?:giao dich thanh cong|chuyen khoan thanh cong|chuyen tien thanh cong|ck thanh cong|chuyen thanh cong|"
                   r"giao dich hoan tat|da chuyen khoan|da ck|da chuyen tien|transfer successful|successful transaction)\b")
-#: "đã điền/đăng nhập … rồi" (≤ 10 từ chen giữa — câu thật "đăng nhập bằng tài khoản portal đại lý của mình rồi", T12) rồi bị (a) hỏi/đòi
-#: OTP/thẻ/mật khẩu, hoặc (b) "gửi mã OTP … bảo nhập" (bị dụ nhập tiếp mã vừa về máy).
+#: "đã điền/đăng nhập … rồi" rồi bị hỏi/đòi OTP/thẻ/mật khẩu (kb1 S28). Ba dạng (T12, review BLOCKER 1):
+#: - HẸP: ≤ 3 từ chen giữa "đăng nhập … rồi" — luật cứng trừ khi là ngữ cảnh app/thiết bị của chính mình mà không có dấu hiệu lừa;
+#: - RỘNG: 4–10 từ chen giữa (câu thật "đăng nhập bằng tài khoản portal đại lý của mình rồi"), không nhận "cần" — luật cứng CHỈ khi có dấu hiệu lừa;
+#: - "gửi mã OTP … bảo nhập" — luật cứng CHỈ khi có dấu hiệu lừa (quà/khuyến mãi, link/trang lạ, xác minh tài khoản, người lạ…).
+#: Không đủ điều kiện ⇒ ỨNG VIÊN MỀM (`Scan.cred_soft`): không luật cứng, không cờ — chỉ (d2) (hoặc lượt model) mới xác nhận được.
 _CRED_SECRET = r"(?:so the|ma the|ma otp|otp|mat khau|cvv|cvc|ma pin|pin|ma xac (?:thuc|minh|nhan)|thong tin the)\b"
-_CRED_FORM = re.compile(
-    rf"\b(?:dien|nhap|dang nhap|login|dien form|dien thong tin|khai)\b{_g(0, 10)}[\s,]+(?:roi|xong)\b.{{0,80}}?"
-    rf"(?:\b(?:hoi|doi|yeu cau|bat|xin|can|bao nhap|bao dien|nhap tiep|dien tiep|hoi them|doi them)\b{_g(0, 4)}[\s,]+{_CRED_SECRET}"
-    rf"|\b(?:gui|nhan|ve|bao ve)\b{_g(0, 2)}[\s,]+(?:ma otp|otp|ma xac (?:thuc|minh|nhan)|ma pin)\b.{{0,60}}?"
-    r"\b(?:bao nhap|bat nhap|yeu cau nhap|doi nhap|bao dien|bat dien)\b)")
+_CRED_ENTER = r"\b(?:dien|nhap|dang nhap|login|dien form|dien thong tin|khai)\b"
+_CRED_ASK = r"(?:hoi|doi|yeu cau|bat|xin|can|bao nhap|bao dien|nhap tiep|dien tiep|hoi them|doi them)"
+_CRED_NARROW = re.compile(rf"{_CRED_ENTER}{_g(0, 3)}[\s,]+(?:roi|xong)\b.{{0,80}}?\b{_CRED_ASK}\b{_g(0, 4)}[\s,]+{_CRED_SECRET}")
+_CRED_WIDE = re.compile(rf"{_CRED_ENTER}{_g(4, 10)}[\s,]+(?:roi|xong)\b.{{0,80}}?\b{_CRED_ASK.replace('|can|', '|')}\b{_g(0, 4)}[\s,]+{_CRED_SECRET}")
+_CRED_SENT = re.compile(rf"{_CRED_ENTER}{_g(0, 10)}[\s,]+(?:roi|xong)\b.{{0,80}}?\b(?:gui|nhan|ve|bao ve)\b{_g(0, 2)}[\s,]+"
+                        r"(?:ma otp|otp|ma xac (?:thuc|minh|nhan)|ma pin)\b.{0,60}?\b(?:bao nhap|bat nhap|yeu cau nhap|doi nhap|bao dien|bat dien)\b")
+def _cred_match(fold: str) -> tuple[re.Match[str] | None, bool]:
+    """(khớp, luật cứng?) của mẫu "điền/đăng nhập rồi … đòi mã". Không khớp ⇒ (None, False)."""
+    from gh.refinery import prefilter
+
+    lure = prefilter.CRED_LURE.search(fold) is not None
+    m = _CRED_NARROW.search(fold)
+    if m:
+        return m, lure or not prefilter.cred_own(fold, m.start(), m.end())       # ngữ cảnh của chính mình: chỉ trong CÂU chứa khớp
+    m = _CRED_WIDE.search(fold) or _CRED_SENT.search(fold)
+    return (m, lure) if m else (None, False)
+
+
 _NEG = re.compile(r"\b(?:chua|khong|ko|dung|dung co|chang)\s+(?:dien|nhap|dang nhap|login|khai)\b")
 _ADDRESS = re.compile(r"(?i:(?<![\w])(anh|chị|chi|em|cô|co|chú|chu|bác|bac|ông|ong|bà|ba|sếp|sep|boss|a|c))\s+(\w+(?:\s+\w+)?)")
 #: Chủ ngữ ngôi thứ ba ("mẹ em đã nhập") — đồng bộ ý với `prefilter._THIRD` (L2).
@@ -203,6 +219,7 @@ class Scan:
     amount_vnd: int | None = None
     addressed: tuple[str, ...] = ()
     pay_verb: tuple[int, int] | None = None       # có động từ trả/chuyển tiền (kể cả khi không đọc được STK)
+    cred_soft: tuple[int, int] | None = None      # ứng viên MỀM "đòi mã sau khi đăng nhập" (không luật cứng; chỉ (d2) xác nhận) — T12
 
     @property
     def money_ask(self) -> bool:
@@ -210,7 +227,8 @@ class Scan:
 
     @property
     def any(self) -> bool:
-        return bool(self.accounts or self.change or self.ask_money or self.goods or self.cred or self.takeover or self.phishing or self.unc)
+        return bool(self.accounts or self.change or self.ask_money or self.goods or self.cred or self.takeover or self.phishing or self.unc
+                    or self.cred_soft)
 
 
 def _digest(digits: str) -> str | None:
@@ -337,7 +355,7 @@ def scan(body: str | None, source_field: str = "body") -> Scan:
     return Scan(source_field, tuple(accts.values()), first("change"), first("pay_ask"), first("ask_money"), first("goods"), first("unc"),
                 first("cred"), cred_part[1].cred_first_person if cred_part else True, first("takeover"), first("phishing"),
                 next((sc.domain for _a, sc in parts if sc.domain), None), max(amounts) if amounts else None,
-                tuple(dict.fromkeys(x for _a, sc in parts for x in sc.addressed))[:3], pay_verb=first("pay_verb"))
+                tuple(dict.fromkeys(x for _a, sc in parts for x in sc.addressed))[:3], pay_verb=first("pay_verb"), cred_soft=first("cred_soft"))
 
 
 def _clean(t: str) -> tuple[str, list[int]]:
@@ -371,7 +389,7 @@ def _remap(sc: Scan, cmap: list[int], n: int) -> Scan:
         return (cmap[a], min(n, cmap[b - 1] + 1))
 
     return replace(sc, accounts=tuple(replace(x, span=m(x.span) or x.span) for x in sc.accounts), change=m(sc.change), pay_ask=m(sc.pay_ask),
-                   pay_verb=m(sc.pay_verb), ask_money=m(sc.ask_money), goods=m(sc.goods), unc=m(sc.unc), cred=m(sc.cred),
+                   pay_verb=m(sc.pay_verb), ask_money=m(sc.ask_money), goods=m(sc.goods), unc=m(sc.unc), cred=m(sc.cred), cred_soft=m(sc.cred_soft),
                    takeover=m(sc.takeover), phishing=m(sc.phishing))
 
 
@@ -400,14 +418,19 @@ def _scan_core(t: str, source_field: str) -> Scan:
         cands = []
     cred_c = next((c for c in cands if c.flag == "credentials_entered"), None)
     take_c = next((c for c in cands if c.flag == "account_takeover"), None)
-    cred: tuple[int, int] | None = cred_c.span if cred_c else None
+    cred: tuple[int, int] | None = cred_c.span if cred_c and cred_c.hard_rule_hit else None
     first_person = cred_c.first_person if cred_c else True
+    cred_soft: tuple[int, int] | None = cred_c.span if cred_c and not cred_c.hard_rule_hit else None   # L2 hạ thành ứng viên mềm (T12)
     if cred is None:
-        m = _CRED_FORM.search(fold)
+        m, hard_cred = _cred_match(fold)
         if m and not _NEG.search(fold[max(0, m.start() - 12):m.start() + 20]):
-            cred = _orig_span(idx, n, m.start(), m.end())
-            lo = max((x.end() for x in re.finditer(r"[.!?\n;]", fold[:m.start()])), default=0)
-            first_person = _THIRD.search(fold[lo:m.end()]) is None
+            sp = _orig_span(idx, n, m.start(), m.end())
+            if hard_cred:
+                cred = sp
+                lo = max((x.end() for x in re.finditer(r"[.!?\n;]", fold[:m.start()])), default=0)
+                first_person = _THIRD.search(fold[lo:m.end()]) is None
+            elif cred_soft is None:
+                cred_soft = sp
     accts = _accounts(fold, idx, n)
     change = _CHANGE.search(fold)
     pay_any = _PAY_VERB.search(fold)
@@ -428,7 +451,7 @@ def _scan_core(t: str, source_field: str) -> Scan:
     return Scan(source_field, tuple(accts), _span(change, idx, n), _span(pay, idx, n), _span(ask, idx, n), goods, _span(unc, idx, n), cred,
                 first_person, take_c.span if take_c else None,
                 (_span(pm, idx, n) or (0, min(n, 1))) if phish else None, suspicious.domain_of(t), amount, addressed,
-                pay_verb=_span(pay_any, idx, n))
+                pay_verb=_span(pay_any, idx, n), cred_soft=cred_soft)
 
 
 # ─── tầng thuần: quyết định từ quét + ngữ cảnh người ─────────────────────────────────────────────────────────────────────
@@ -622,6 +645,12 @@ def decide(sc: Scan, ctx: Ctx) -> Decision | None:
         rules.append("phishing")
         spans.append(sc.phishing)
 
+    # 8. ứng viên MỀM "đòi mã sau khi đăng nhập" (T12): không luật cứng, không cờ — `run` chỉ ghi khi (d2) xác nhận `credentials_entered`
+    if sc.cred_soft and not rules:
+        rules.append("credentials_suspect")
+        victims.append(ctx.sender.rel())
+        spans.append(sc.cred_soft)
+
     if not rules:
         if sc.accounts:
             return Decision((), (), {}, (), (), "none", payee, None, sc.accounts[0].span, sc.source_field, record_only=True,
@@ -648,6 +677,8 @@ def wording(d: Decision, place: str, name: str | None) -> tuple[str, str, str]:
     r = d.rules
     if "credentials_entered" in r:
         return (f"Có người báo đã nhập OTP / mật khẩu / số thẻ trong {place}", "có thể bị rút tiền trong tài khoản/thẻ ngay", ACTION_CRED)
+    if r == ("credentials_suspect",):
+        return (f"Có người có thể đã bị đòi mã OTP / mật khẩu sau khi đăng nhập trong {place}", "có thể bị rút tiền nếu đã nhập mã", ACTION_CRED)
     if "goods_no_deposit_rush" in r:
         return (f"Có đơn hàng lớn không cọc, giục gửi ngay trong {place}", "có thể mất hàng không thu được tiền", ACTION_GOODS)
     if "stk_change" in r or "stk_change_unverified" in r or "stk_unhashed" in r or "stk_change_claim" in r:
@@ -1214,7 +1245,29 @@ async def run(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, call: Any =
                 if processed is not None:
                     processed.append(_seen_key(row))
                 continue
-            want_d2 = d2_left > 0 and await _d2_allowed(db, org_id, p.upsert.thread_key or "", now)
+            allowed = d2_left > 0 and await _d2_allowed(db, org_id, p.upsert.thread_key or "", now)
+            want_d2 = allowed
+            if p.decision.rules == ("credentials_suspect",):
+                # Ứng viên MỀM (T12) — không fail-open: (d2) đồng ý ⇒ ghi (🔴 chỉ khi xác nhận cờ `credentials_entered`); (d2)
+                # KHÔNG đồng ý ⇒ bỏ; không bộ định tuyến / tổ chức hết trần lượt an toàn ⇒ ghi ngay mức thấp (không cờ ⇒ tối đa 🟠); hết trần (d2) lượt này ⇒ KHÔNG đánh
+                # dấu "đã quét" (lượt sau thử lại); (d2) lỗi ⇒ đếm lỗi, đủ `MAX_FAILS` ⇒ ghi mức thấp.
+                if call is None or (d2_left > 0 and not allowed):
+                    out.append(await _write(db, org_id, p, now))   # không chạy được (d2) (không định tuyến / hết trần lượt an toàn) ⇒ ≤ 🟠
+                elif not want_d2:
+                    continue                                       # chỉ hết trần (d2) của CHÍNH lượt này ⇒ để lượt sau
+                else:
+                    d2_left -= 1
+                    p = await run_d2(db, org_id, p, call)
+                    d2 = p.upsert.level_input.d2
+                    if d2.error or d2.verdict is None:
+                        if await seen.fail(org_id, _seen_key(row)) < MAX_FAILS:
+                            continue
+                        out.append(await _write(db, org_id, p, now))
+                    elif d2.verdict == "agree":
+                        out.append(await _write(db, org_id, p, now))   # 🔴 chỉ khi (d2) xác nhận cờ `credentials_entered`; còn lại ≤ 🟠
+                if processed is not None:
+                    processed.append(_seen_key(row))
+                continue
             if p.decision.hard:
                 sig = await _write(db, org_id, p, now)
                 if want_d2:

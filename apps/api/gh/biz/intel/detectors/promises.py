@@ -358,6 +358,8 @@ async def project_units(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, l
         except signals.SignalError as e:
             log.warning("promises: bỏ qua đơn vị %s: %s", u.id, type(e).__name__)
             await U.mark(db, org_id, u.id, type(e).__name__, action="intel.promises.unit_done")
+        except Exception as e:  # noqa: BLE001 — một đơn vị hỏng không chặn cả lô (savepoint đã hoàn tác phần của nó)
+            await U.failed(db, org_id, u.id, e, done_action="intel.promises.unit_done")
     return out
 
 

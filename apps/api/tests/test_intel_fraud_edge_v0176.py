@@ -214,3 +214,85 @@ def test_fraud_no_master_key_uses_claim_rule_and_warns_once(monkeypatch: pytest.
         d = F.decide(F.scan("Anh chuyển tiền hàng vào STK 0123456789 MB giúp em"), CTX["ncc_hist"])
         assert d is not None and F.H_STK_CLAIM in d.hard and "stk_unhashed" in d.rules
     assert sum("thiếu khoá master" in r.getMessage() for r in caplog.records) == 1
+
+
+# — T12 review (BLOCKER 1): câu thường có "đăng nhập/điền … rồi … mã/mật khẩu" KHÔNG được thành luật cứng `credentials_entered`.
+# Đo trên bộ dưới: bản trước T12 bắt nhầm 8/12, bản T12 đầu bắt nhầm 12/12, bản sửa 0/12. Luật cứng chỉ khi có dấu hiệu lừa (quà, link/trang
+# lạ, "xác minh", người lạ…) hoặc mẫu hẹp mà không phải ngữ cảnh app/thiết bị của chính mình; còn lại là ỨNG VIÊN MỀM (chỉ đi (d2)/model).
+CRED_FP = [
+    "anh đăng nhập app ngân hàng rồi, ngân hàng gửi mã OTP bảo nhập để xác nhận chuyển khoản cho nhà cung cấp",
+    "em đăng nhập zalo trên máy tính rồi, nó gửi mã xác nhận về điện thoại bảo nhập",
+    "anh đăng nhập vào hệ thống kế toán rồi, cần mật khẩu wifi không anh",
+    "điền form đăng ký khoá học xong rồi, trung tâm gửi mã xác nhận bảo nhập",
+    "em đăng nhập rồi, cần mật khẩu wifi không chị",
+    "chị nhập xong rồi, nó hỏi mã PIN máy in là gì vậy",
+    "em khai rồi, bên thuế yêu cầu mật khẩu chữ ký số để nộp tờ khai",
+    "em đăng nhập email công ty rồi, hệ thống bắt đổi mật khẩu mới",
+    "anh login rồi nha, app hỏi mã OTP lần nữa để chuyển tiền cho NCC",
+    "em điền xong rồi, máy hỏi mã PIN thẻ để thanh toán tiền điện ở quầy",
+    "anh đăng nhập máy tính quầy rồi, cần mật khẩu phần mềm bán hàng không em",
+    "em nhập đơn hàng xong rồi, kế toán xin mật khẩu file excel",
+]
+
+
+@pytest.mark.parametrize("body", CRED_FP)
+def test_fraud_cred_rule_no_false_hard_hit(body: str) -> None:
+    d = F.decide(F.scan(body), CTX["staff"])
+    assert d is None or (F.H_CRED not in d.hard and not d.flags.get("credentials_entered")), body
+
+
+def test_fraud_cred_soft_candidate_has_no_hard_rule_and_no_flag() -> None:
+    """Mẫu "gửi mã OTP … bảo nhập" không dấu hiệu lừa ⇒ ứng viên mềm: không luật cứng, không cờ (chỉ (d2) mới xác nhận được)."""
+    sc = F.scan(CRED_FP[1])
+    assert sc.cred is None and sc.cred_soft is not None
+    d = F.decide(sc, CTX["staff"])
+    assert d is not None and d.rules == ("credentials_suspect",) and not d.hard and not d.flags
+
+
+def test_fraud_cred_lure_keeps_ngoc_hard() -> None:
+    body = next(c[1] for c in CASES if c[0] == "otp_ngoc")
+    assert F.scan(body).cred is not None
+
+
+# — security review: ngữ cảnh "của chính mình" chỉ tính trong CÂU chứa khớp; bí mật đã đưa/nhập không bao giờ hạ mềm —
+CRED_STILL_HARD = [
+    "Em lỡ nhập OTP rồi. App ngân hàng của em vẫn bình thường mà",
+    "em lỡ đưa mã OTP cho nó rồi",
+    "Em đăng nhập rồi, nó hỏi mã OTP. Em dùng app ngân hàng VCB",
+    "Chị nhập xong rồi, nó hỏi mã PIN. Máy in nhà chị hỏng rồi",
+    "Em đăng nhập zalo rồi, nó bảo nhập mã OTP để nhận quà",
+]
+
+
+@pytest.mark.parametrize("body", CRED_STILL_HARD)
+def test_fraud_cred_own_context_cannot_be_injected_elsewhere(body: str) -> None:
+    d = F.decide(F.scan(body), CTX["staff"])
+    assert d is not None and F.H_CRED in d.hard, body
+
+
+def test_prefilter_never_softens_secret_given_rules() -> None:
+    from gh.refinery import prefilter
+
+    assert prefilter.CRED_SOFTENABLE == frozenset({"cred_enter_done2"})
+    c = next(c for c in prefilter.scan_text("em lỡ đưa mã OTP cho nó rồi, đang dùng app ngân hàng") if c.flag == "credentials_entered")
+    assert c.hard_rule_hit == "credentials_entered"
+
+
+# — security review vòng cuối: ngữ cảnh "của mình" chỉ trong câu chứa ĐỘNG TỪ đăng nhập; token mơ hồ không hạ mềm —
+CRED_STILL_HARD_2 = [
+    "Em dùng máy tính công ty. Em đăng nhập rồi, nó hỏi mã OTP",
+    "Em đăng nhập rồi. Máy tính công ty hỏi mã OTP luôn",
+    "Em đăng nhập rồi, nó hỏi mã OTP, hệ thống báo lỗi gì đó",
+    "Em nhập xong rồi, nó hỏi mã PIN, lát em quay lại",
+    "Em đăng nhập rồi, nó hỏi mật khẩu file excel",
+]
+
+
+@pytest.mark.parametrize("body", CRED_STILL_HARD_2)
+def test_fraud_cred_own_only_in_login_sentence_and_no_vague_tokens(body: str) -> None:
+    d = F.decide(F.scan(body), CTX["staff"])
+    assert d is not None and F.H_CRED in d.hard, body
+
+
+def test_fraud_cred_link_lure_after_own_context_sentence_not_softened() -> None:
+    assert F.scan("Em dùng máy tính công ty. Nó bảo đăng nhập link này rồi gửi mã OTP").cred_soft is None
