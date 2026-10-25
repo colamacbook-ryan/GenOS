@@ -453,7 +453,7 @@ async def test_enqueue_only_special_events_to_enabled_bot_channel(app, db, redis
     assert await enq(db, org, severity="important", dedupe_key="a") is False             # trùng khoá
     assert await enq(db, org, severity="urgent", dedupe_key="b") is True
     with pytest.raises(ValueError):
-        await enq(db, org, kind="digest")                                                # không có bản tóm tắt định kỳ
+        await enq(db, org, kind="newsletter")                                                # loại lạ bị từ chối (bản tin là loại riêng từ v0.1.76)
     assert not hasattr(reports, "digest") and "digest" not in reports.__doc__.replace("KHÔNG bản tóm tắt", "")
     await db.execute(text("UPDATE core.channel_sessions SET account_kind = 'owner_self'"))
     await db.commit()

@@ -253,6 +253,14 @@ async def _refused(db: AsyncSession, org_id: uuid.UUID, channel: str, basis: str
     return AutoSendResult(False, err.code, None, err.rules)
 
 
+async def _assistant_locked(db: AsyncSession, org_id: uuid.UUID) -> bool:
+    """Cờ `settings.intel.assistant_locked_at` (một nguồn: `gh.telegram.backup.is_locked`).
+    Import muộn tránh vòng import."""
+    from gh.telegram import backup
+
+    return await backup.is_locked(db, org_id)
+
+
 async def send_auto(db: AsyncSession, bus: EventBus | Any, redis: Redis, *, org_id: uuid.UUID, channel: str,
                     basis: Basis, trigger: Trigger, text: str, group_id: uuid.UUID | None = None, canary: str = "",
                     now: datetime | None = None) -> AutoSendResult:
@@ -268,6 +276,8 @@ async def send_auto(db: AsyncSession, bus: EventBus | Any, redis: Redis, *, org_
         return AutoSendResult(False, "CHANNEL_NOT_SUPPORTED")
     try:
         await db.execute(sql("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"autosend:{org_id}:{channel}"})
+        if await _assistant_locked(db, org_id):
+            raise _Refuse("ASSISTANT_LOCKED")     # v0.1.76: "khoá trợ lý" (T10) ⇒ không tự gửi gì, ở cả ba cơ sở
         sess = await active_session(db, org_id, channel)
         if sess is None:
             raise _Refuse("SESSION_NOT_ACTIVE")

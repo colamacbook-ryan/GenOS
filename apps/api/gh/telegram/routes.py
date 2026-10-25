@@ -25,8 +25,8 @@ from gh.auth import rbac, service
 from gh.auth.deps import require, require_owner, require_pin
 from gh.chassis import actionlog
 from gh.db import DB, sessionmaker
+from gh.telegram import backup, inbound, poller
 from gh.telegram import client as tg
-from gh.telegram import inbound, poller
 from gh.telegram import service as tsvc
 
 router = APIRouter(prefix="/notify/telegram", tags=["notify"])
@@ -54,6 +54,15 @@ def client(request: Request) -> tg.TelegramClient:
     return tg.client_for(getattr(request.app.state, "telegram_transport", None))
 
 
+async def _rebind_notice(request: Request, db: AsyncSession, user: service.CurrentUser, what: str,
+                         *, paired_only: bool = False) -> None:
+    """Đổi / gỡ / ghép lại kênh phụ = hạ phòng thủ (§8.1): báo NGAY tới kênh CŨ trước khi đổi."""
+    from gh.biz.intel import strong_confirm
+
+    await backup.warn_old_channel(db, user.org_id, client(request), what, paired_only=paired_only)
+    await strong_confirm.require(db, user.org_id, "rebind_backup_channel", via="console", pin_verified=True)
+
+
 async def _payload(db: AsyncSession, org_id: Any, redis: Any = None) -> dict[str, Any]:
     row = await tsvc.get_config(db, org_id)
     ib = inbound.view(await inbound.load(db, org_id))
@@ -76,6 +85,11 @@ async def put_telegram(body: TelegramIn, request: Request, _m: service.CurrentUs
                        user: service.CurrentUser = Depends(require_owner),
                        _p: service.CurrentUser = Depends(require_pin("notify.change")),
                        db: AsyncSession = DB) -> dict[str, Any]:
+    cur = await tsvc.get_config(db, user.org_id)
+    new_chat = (body.chat_id or "").strip()
+    changes = bool((body.token or "").strip()) or bool(new_chat and new_chat != cur.chat_id if cur else False)
+    if cur is not None and (changes or (body.enabled is False and cur.enabled)):
+        await _rebind_notice(request, db, user, "đổi / tắt kênh phụ Telegram")
     row = await tsvc.save_config(db, user.org_id, body.token, body.chat_id, enabled=body.enabled,
                                  briefing=body.briefing, reminders=body.reminders, user_id=user.id,
                                  client=client(request))
@@ -97,6 +111,7 @@ async def delete_telegram(request: Request, _m: service.CurrentUser = Depends(MA
                           _p: service.CurrentUser = Depends(require_pin("notify.change")),
                           db: AsyncSession = DB) -> dict[str, Any]:
     row = await tsvc.get_config(db, user.org_id)
+    await _rebind_notice(request, db, user, "gỡ kênh phụ Telegram")
     await tsvc.delete_config(db, user.org_id, redis=request.app.state.redis)
     await actionlog.record(db, org_id=user.org_id, actor_type="user", actor_id=user.actor_id,
                            action="notify.telegram.delete", target_type="notify_channel", target_id="telegram",
@@ -114,6 +129,7 @@ async def pair_start(request: Request, _m: service.CurrentUser = Depends(MANAGE)
                      _p: service.CurrentUser = Depends(require_pin("notify.change")),
                      db: AsyncSession = DB) -> dict[str, Any]:
     """Cấp mã ghép 6 số (sống 10 phút). Mã chỉ có trong phản hồi này — DB chỉ lưu băm, Action Log không có mã."""
+    await _rebind_notice(request, db, user, "ghép lại kênh phụ Telegram", paired_only=True)
     code, expires = await inbound.start_pairing(db, user.org_id, user.id)
     row = await tsvc.get_config(db, user.org_id)
     await actionlog.record(db, org_id=user.org_id, actor_type="user", actor_id=user.actor_id,
@@ -146,6 +162,7 @@ async def unpair(request: Request, _m: service.CurrentUser = Depends(MANAGE),
                  _p: service.CurrentUser = Depends(require_pin("notify.change")),
                  db: AsyncSession = DB) -> dict[str, Any]:
     """Gỡ ghép + tắt nhận tin + huỷ mã đang chờ."""
+    await _rebind_notice(request, db, user, "gỡ ghép kênh phụ Telegram", paired_only=True)
     await inbound.unpair(db, user.org_id)
     await actionlog.record(db, org_id=user.org_id, actor_type="user", actor_id=user.actor_id,
                            action=inbound.ACTION_UNPAIRED, target_type="notify_channel", target_id="telegram",

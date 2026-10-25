@@ -79,7 +79,7 @@ async def live_sessions() -> list[Any]:
 def code_in(reply: str) -> str:
     import re
 
-    m = re.search(r"#[0-9A-F]{6}", reply)
+    m = re.search(r"#[A-HJ-NP-Z2-9]{5}\b|#[0-9A-F]{6}", reply)   # v0.1.76: mã ask 5 ký tự (mã hex cũ: đề xuất chưa có ask)
     assert m, reply
     return m.group(0)
 
@@ -282,7 +282,20 @@ async def test_outbound_bare_ok_is_refused_needs_code_and_nothing_is_sent(chat: 
     assert (await proposals.load(chat.redis, p["id"]))["status"] == "pending"
 
 
+async def strong_ok(chat: Chat) -> None:
+    """v0.1.76 (T2): tin gửi khách cần xác nhận mạnh — ngoài giờ yên lặng + Sếp đã «mở khoá hôm nay» (Console + PIN)."""
+    from gh.biz.intel import strong_confirm
+    from tests.test_strong_confirm_v0176 import set_quiet
+
+    async with admin_sessionmaker()() as s:
+        await set_quiet(s, chat.org, now_quiet=False)
+        uid = (await s.execute(text("SELECT owner_user_id FROM ops.owner_channels WHERE org_id = :o AND channel_type = 'zalo'"), {"o": chat.org})).scalar_one()
+        assert await strong_confirm.unlock_today(s, chat.org, user_id=uid, pin_verified=True)
+        await s.commit()
+
+
 async def test_outbound_ok_with_code_goes_through_drafts_path_with_chat_basis(chat: Chat, world: dict[str, Any]) -> None:
+    await strong_ok(chat)
     p = await outbound_proposal(chat, world)
     code = chat_pending.code_of(p["id"])
     reply = await chat.say(f"OK {code}")
@@ -297,6 +310,7 @@ async def test_outbound_ok_with_code_goes_through_drafts_path_with_chat_basis(ch
 
 
 async def test_two_outbound_need_separate_codes_no_batch(chat: Chat, world: dict[str, Any]) -> None:
+    await strong_ok(chat)
     a = await outbound_proposal(chat, world, "Tin A", "A")
     b = await outbound_proposal(chat, world, "Tin B", "B")
     assert "kèm mã" in await chat.say("OK") and "không làm hàng loạt" in await chat.say("ok tất cả")
@@ -411,9 +425,9 @@ async def test_p21_bare_ok_on_stale_or_superseded_proposal_needs_code(chat: Chat
     pid = (await chat_pending.entries(chat.redis, chat.org, "zalo"))[0]
     await chat.redis.set(chat_pending.last_key(chat.org, "zalo"), f"{pid}|{time.time() - chat_pending.FRESH_S - 5}")
     reply = await chat.say("OK")
-    assert "Gọi anh Nam" in reply and f"OK {chat_pending.code_of(pid)}" in reply and await count("biz.tasks") == before
+    assert "Gọi anh Nam" in reply and f"OK {chat_pending.code_of(await proposals.load(chat.redis, pid))}" in reply and await count("biz.tasks") == before
     assert (await proposals.load(chat.redis, pid))["status"] == "pending"
-    await chat.say(f"OK {chat_pending.code_of(pid)}")
+    await chat.say(f"OK {chat_pending.code_of(await proposals.load(chat.redis, pid))}")
     assert await count("biz.tasks") == before + 1
 
 

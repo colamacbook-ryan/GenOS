@@ -330,7 +330,7 @@ async def test_backup_restore_round_trip_preserves_seed_demo_data(app, db, redis
         WHERE o.org_id = :o AND p.display_name = 'Nguyễn Văn Mẫu'"""), {"o": org})).one()
     before_alert = (await db.execute(text("""
         SELECT a.priority, a.alert_type, p.display_name FROM biz.alerts a JOIN core.persons p ON p.id = a.subject_id
-        WHERE a.org_id = :o AND a.alert_type = 'repeated_complaint'"""), {"o": org})).one()
+        WHERE a.org_id = :o AND a.kind = 'xung_dot_khieu_nai'"""), {"o": org})).one()   # v0.1.76 (T5): R-03 ⇒ tín hiệu
     before_counts = {k: v for k, v in (await db.execute(text("""
         SELECT 'raw', (SELECT count(*) FROM raw.events e JOIN core.channels c ON c.id = e.channel_id
                        WHERE c.org_id = :o)
@@ -360,14 +360,14 @@ async def test_backup_restore_round_trip_preserves_seed_demo_data(app, db, redis
                 after_opp = cur.fetchone()
                 cur.execute("""SELECT a.priority, a.alert_type, p.display_name FROM biz.alerts a
                                JOIN core.persons p ON p.id = a.subject_id
-                               WHERE a.org_id = %s AND a.alert_type = 'repeated_complaint'""", (org,))
+                               WHERE a.org_id = %s AND a.kind = 'xung_dot_khieu_nai'""", (org,))
                 after_alert = cur.fetchone()
 
         assert after_counts == before_counts  # nguyên vẹn tổng số ở mọi bảng chính, không chỉ một bảng
         assert after_opp == (before_opp.code, before_opp.value_vnd, before_opp.display_name)
         assert after_opp[1] == 1_200_000_000  # giá trị cụ thể khớp docs/design/seed-data.json (OPP-1842)
         assert after_alert == (before_alert.priority, before_alert.alert_type, before_alert.display_name)
-        assert after_alert[0] == "P1" and after_alert[2] == "Đặng Văn Mẫu Bảy"
+        assert after_alert[2] == "Đặng Văn Mẫu Bảy"  # mức do levels quyết (v0.1.76 T5); ưu tiên giữ nguyên: dòng trên
     finally:
         _admin(f"DROP DATABASE IF EXISTS {target} WITH (FORCE)")
 

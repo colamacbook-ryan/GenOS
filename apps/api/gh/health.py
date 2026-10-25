@@ -617,6 +617,16 @@ async def collect(db: AsyncSession, redis: Any, org_id: uuid.UUID, *, now: datet
     except Exception:  # noqa: BLE001
         log.warning("Không đọc được nhịp cầu nối tin nhắn", exc_info=True)
 
+    # v0.1.76 (T10): dòng Tình báo — kênh phụ, khoá trợ lý, phiên kênh, sự cố watchdog. CHỈ có khối khi có gì để hiện.
+    intel: dict[str, Any] | None = None
+    try:
+        from gh.biz.intel.pipes import watchdog
+
+        async with db.begin_nested():
+            intel = await watchdog.health_block(db, org_id, now)
+    except Exception:  # noqa: BLE001
+        log.warning("Không đọc được dòng Tình báo", exc_info=True)
+
     queues: list[dict[str, Any]] = []
     try:
         queues = await _dlq_queues(redis)
@@ -736,6 +746,8 @@ async def collect(db: AsyncSession, redis: Any, org_id: uuid.UUID, *, now: datet
         out["bridge"] = bridge
     if agy_box["state"] != "not_installed":
         out["agy_box"] = agy_box
+    if intel is not None:
+        out["intel"] = intel
     if boss_checks:
         # Chỉ khi đã có ít nhất một lần kiểm (như 'autostart': khuôn cũ giữ nguyên khi chưa có gì để xem).
         out["boss_checks"] = boss_checks

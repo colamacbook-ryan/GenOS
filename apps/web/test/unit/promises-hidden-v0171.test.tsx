@@ -14,6 +14,9 @@ import { CareScreen } from '../../src/screens/people/CareScreen';
 import { TasksScreen } from '../../src/screens/queue/TasksScreen';
 import { queryClient } from '../../src/lib/queryClient';
 
+// v0.1.76 (T11): cờ thật đã bật (T4 ghi `biz.promises`) — file này giữ nguyên các kiểm tra "khi cờ tắt" bằng cách ghi đè cờ.
+vi.mock('../../src/lib/features', () => ({ PROMISES_TRACKED: false }));
+
 const json = (status: number, body?: unknown) =>
   new Response(body === undefined ? null : JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 

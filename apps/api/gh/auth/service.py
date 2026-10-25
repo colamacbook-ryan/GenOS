@@ -64,6 +64,8 @@ PIN_OPERATIONS: dict[str, str] = {
     "defaults.reset_all": "Về mặc định tất cả cài đặt",
     # v0.1.62 (F064/F102): phát lại tin khách nằm trong hàng lỗi / xoá hàng lỗi đã xem (không hoàn tác được).
     "queue.manage": "Phát lại / xoá việc nền bị lỗi",
+    # v0.1.76 (T11): thẻ "Tình báo" — mở khoá trợ lý / hôm nay, đổi cách chạy, xác minh STK.
+    "intel.console": "Tình báo: mở khoá trợ lý, mở khoá hôm nay, đổi cách chạy, xác minh số tài khoản",
 }
 
 

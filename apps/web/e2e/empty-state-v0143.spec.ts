@@ -69,13 +69,18 @@ test.describe('v0.1.43 · DataEmptyState (F-29)', () => {
     }
   });
 
-  test('/tasks: chưa có bộ ghi lời hứa (v0.1.71) ⇒ không có khối «Lời hứa» để trống mãi', async ({ page }) => {
+  test('/tasks: đã có bộ ghi lời hứa (v0.1.76) ⇒ khối «Lời hứa» hiện, danh sách trống thì hiện trạng thái trống hợp lệ', async ({ page }) => {
     await loginAsOwner(page);
     await fakeHeader(page, 0, 0);
     await emptyLists(page);
     await page.goto('/tasks');
     await expect(page.getByRole('heading', { name: 'Việc & Nhắc hẹn', level: 2 })).toBeVisible();
-    await expect(page.locator('.tk-promises')).toHaveCount(0);
+    const promises = page.locator('.tk-promises');
+    await expect(promises).toHaveCount(1);
+    await expect(promises.getByRole('tablist', { name: 'Tab lời hứa' })).toBeVisible();
+    // trống mà không vỡ: hoặc DataEmptyState (chưa có kênh) hoặc EmptyState «Không có lời hứa nào ở mục này», không dòng lời hứa nào
+    await expect(promises.getByTestId('data-empty-state').or(promises.getByText('Không có lời hứa nào ở mục này'))).toBeVisible();
+    await expect(promises.locator('.tk-promise')).toHaveCount(0);
   });
 
   test('đã có kênh + nhóm: giữ trạng thái trống cũ của màn', async ({ page }) => {

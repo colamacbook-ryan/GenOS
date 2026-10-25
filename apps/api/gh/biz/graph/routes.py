@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """API Bản đồ quan hệ (docs/api/phase-3-graph.md): 4 chế độ trên **một** màn (`graph`) — danh sách + bộ lọc
 mạnh, đồ thị Người↔Người, đồ thị Nhóm↔Nhóm, Luồng chủ đề — cộng vị trí node đã lưu và một điểm bấm tay để
 dựng lại đồ thị. Dữ liệu cạnh (`clean.relationships`) do `gh.biz.graph.jobs.recompute_org` tính — xem đó để
@@ -15,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gh.auth import rbac, service
 from gh.auth.deps import require
-from gh.biz.core.scope import scope_for
+from gh.biz.core.scope import ensure_person, scope_for
 from gh.biz.graph import jobs as gjobs
 from gh.biz.graph.service import MAX_NODES, build_graph
 from gh.chassis import actionlog
@@ -213,6 +214,30 @@ async def graph_people(node_id: uuid.UUID | None = None, min_weight: float = 0.0
                        node_limit: int = Query(MAX_NODES, ge=1, le=MAX_NODES),
                        user: service.CurrentUser = Depends(READ), db: AsyncSession = DB) -> dict[str, Any]:
     return await _people_graph(db, user, node_id=node_id, min_weight=min_weight, topic=None, node_limit=node_limit)
+
+
+@router.get("/graph/person/{person_id}")
+async def graph_person(person_id: uuid.UUID, user: service.CurrentUser = Depends(READ), db: AsyncSession = DB) -> dict[str, Any]:
+    """Quanh MỘT người (§7.3 `graph.person`, "ai hay nói chuyện với X"): top 10 người hay tương tác, vai cầu nối, trạng thái lạnh.
+    Chỉ người trong phạm vi của người gọi (cùng `person_sql` với đồ thị)."""
+    sc = await scope_for(db, user, "profile.read")
+    await ensure_person(db, sc, person_id)
+    g = await _people_graph(db, user, node_id=person_id, min_weight=0.0, topic=None, node_limit=MAX_NODES)
+    me = str(person_id)
+    names = {n["id"]: n for n in g["nodes"]}
+    peers = []
+    for e in sorted(g["edges"], key=lambda x: -x["weight"]):
+        other = e["to"] if e["from"] == me else e["from"]
+        n = names.get(other)
+        if n is None:
+            continue
+        peers.append({"id": other, "name": n["name"], "type": n["type"], "weight": e["weight"], "interactions": e["interactions"],
+                      "last_at": e["last_at"], "state": e["state"]})
+    bridge = (await db.execute(text("""SELECT max(weight) FROM clean.relationships WHERE org_id = :o AND kind = 'bridges'
+                                       AND from_type = 'person' AND from_id = :p"""), {"o": user.org_id, "p": person_id})).scalar_one()
+    top = peers[:10]
+    return {"person_id": me, "top_people": top, "bridge_score": int(bridge or 0), "owns_bridges": bool(bridge),
+            "cold_n": sum(1 for x in peers if x["state"] == "cold"), "total_people": len(peers)}
 
 
 # ═══ Nhóm↔Nhóm ════════════════════════════════════════════════════════════════

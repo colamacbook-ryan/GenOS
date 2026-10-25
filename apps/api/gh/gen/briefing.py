@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """Bản tin Gen 07:30 / 17:30 giờ VN — v0.1.41 (F-8b).
 
 Mỗi khung giờ, mỗi tổ chức bật Gen cho Owner: gom 6 mục (việc đến hạn, khách nóng, nháp chờ duyệt, sự cố, Facebook
@@ -36,6 +37,7 @@ TỪNG Owner + một chuông.
 """
 
 import asyncio
+import contextvars
 import logging
 import re
 import uuid
@@ -51,7 +53,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from gh import notifications
 from gh.boss_checks import service as boss_service
 from gh.chassis import actionlog
-from gh.chassis.masking import mask_for_model, mask_for_prompt
+from gh.chassis.masking import mask_for_model
 from gh.gen import memory_notes, store
 from gh.gen.engine import wrap_untrusted
 from gh.hub_link import service as hub
@@ -466,16 +468,32 @@ def _for_summary(s: dict[str, Any]) -> dict[str, Any]:
     return {k: s[k] for k in ("title", "count", "lines")}
 
 
+def _scrub(data: Any, secrets: tuple[str, ...]) -> Any:
+    """Q9 (CNS-081): chữ chat tới model NGUYÊN VĂN (tên, SĐT, STK, tiền). Chỉ bí mật HỆ THỐNG (`secrets`) và thông tin đăng nhập
+    (OTP, mật khẩu, CVV, số thẻ, token) bị thay nhãn — cùng hàm với `refinery.extract`."""
+    from gh.refinery.extract import scrub_secrets
+
+    if isinstance(data, str):
+        return scrub_secrets(data, secrets)
+    if isinstance(data, list):
+        return [_scrub(v, secrets) for v in data]
+    if isinstance(data, dict):
+        return {str(k): _scrub(v, secrets) for k, v in data.items()}
+    return data
+
+
+_SECRETS: contextvars.ContextVar[tuple[str, ...]] = contextvars.ContextVar("briefing_secrets", default=())
+
+
 async def _summarize(router: ModelRouter, org: uuid.UUID, sections: list[dict[str, Any]],
-                     notes: list[str] | None = None) -> str | None:
+                     notes: list[str] | None = None, secrets: tuple[str, ...] | None = None) -> str | None:
     """None khi nguồn AI lỗi / quá 60 giây. Việc nền: Antigravity CLI dùng được (v0.1.62), Claude Code CLI chỉ khi Owner
     cho phép (F-86).
 
     v0.1.50 (QD-18): `notes` = ghi chú Gen nhớ của tổ chức (Sếp đã xác nhận) — thêm vào system message để bản tóm tắt
     theo sở thích của Sếp. Chỉ có mặt khi có nguồn AI (hàm này chỉ chạy khi có nguồn)."""
-    # v0.1.71 (P2-3): dòng của các mục (tên khách, kết luận trích từ tin nhắn) là chữ người ngoài viết ⇒ che OTP, mật
-    # khẩu, SĐT, số tài khoản trước khi vào prompt (số tiền, ngày giờ, mã đối tượng giữ nguyên).
-    data = orjson.dumps(mask_for_prompt([_for_summary(s) for s in sections])).decode()
+    # v0.1.76 (Q9, CNS-081; thay v0.1.71 P2-3): bỏ che SĐT/STK/tiền khi gửi model; chỉ bí mật hệ thống + thông tin đăng nhập bị thay.
+    data = orjson.dumps(_scrub([_for_summary(s) for s in sections], _SECRETS.get() if secrets is None else secrets)).decode()
     system = SYSTEM_PROMPT
     block = memory_notes.prompt_block(notes or [])
     if block:
@@ -539,6 +557,9 @@ async def _one_org(sm: async_sessionmaker[AsyncSession], redis: Any, router: Mod
         # v0.1.50 (QD-18): ghi chú Gen nhớ — đọc trong cùng phiên này (trước rollback), chỉ khi có nguồn AI tóm tắt.
         notes = await memory_notes.texts(db, org) if has_source else []
         required = await _required(db, org)
+        from gh.refinery.runner import system_secrets
+
+        secrets = await system_secrets(db, org) if has_source else ()
         await db.rollback()
     # v0.1.49 (QD-16): mục Gen-hub — ngoài phiên trên (hub tự mở phiên, tự commit). Chèn ngay sau "incidents".
     hub_secs, hub_hint = await _hub_sections(sm, redis, org, now) if hub_linked else ([], None)
@@ -547,7 +568,12 @@ async def _one_org(sm: async_sessionmaker[AsyncSession], redis: Any, router: Mod
         sections = sections[:at] + hub_secs + sections[at:]
     needs_api_key = not has_source
     # Không truyền `notes` khi trống: hàm thay thế `_summarize` trong test cũ có chữ ký (router, org, sections).
-    summary = None if needs_api_key else await _summarize(router, org, sections, **({"notes": notes} if notes else {}))
+    token = _SECRETS.set(secrets)       # bí mật hệ thống cho `_summarize` (không đổi chữ ký hàm: test cũ thay thế nó)
+    try:
+        extra: dict[str, Any] = {"notes": notes} if notes else {}
+        summary = None if needs_api_key else await _summarize(router, org, sections, **extra)
+    finally:
+        _SECRETS.reset(token)
     content = build_content(slot, sections, summary=summary, summary_source="model" if summary else "none",
                             needs_api_key=needs_api_key, summary_failed=not needs_api_key and summary is None,
                             hub_hint=hub_hint, required=required)

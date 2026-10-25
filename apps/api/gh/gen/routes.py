@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gh.auth import rbac, service
 from gh.auth.deps import current_user, require, require_owner
+from gh.biz.intel import asks
 from gh.biz.market import routes as market_routes
 from gh.biz.relations import routes as relations_routes
 from gh.chassis import actionlog
@@ -517,6 +518,24 @@ class ConfirmIn(BaseModel):
     fields: dict[str, Any] = Field(default_factory=dict)
 
 
+async def _ask_executed(db: AsyncSession, user: service.CurrentUser, pid: uuid.UUID, result: dict[str, Any]) -> None:
+    """Đóng ask của đề xuất là `executed`, ghi người quyết + kênh (phiên `chat_ok:<kênh>` ⇒ kênh đó, còn lại Console) + `result`
+    (id tài nguyên — dùng cho «hoàn tác #MÃ»). Ask đã hết hạn/đóng ⇒ chỉ đóng (không ghi kết quả)."""
+    a = await asks.get_for(db, user.org_id, "proposal", pid)
+    if a is None or a.state != "open":
+        await asks.close_for(db, user.org_id, "proposal", pid, state="executed")
+        return
+    ua = str((await db.execute(text("SELECT user_agent FROM core.sessions WHERE id = :s"),
+                               {"s": user.session_id})).scalar_one_or_none() or "")
+    via = ua.split(":", 1)[1] if ua.startswith("chat_ok:") and ua.split(":", 1)[1] in asks.VIA else "console"
+    try:
+        async with db.begin_nested():
+            await asks.decide(db, user.org_id, a.id, decision="executed", user_id=user.id, via=via,
+                              result={"type": result.get("type"), "id": result.get("id"), "code": result.get("code")})
+    except asks.AskError:
+        await asks.close_for(db, user.org_id, "proposal", pid, state="executed")
+
+
 @router.post("/proposals/{pid}/confirm")
 async def confirm_proposal(pid: uuid.UUID, request: Request, body: ConfirmIn | None = None,
                            user: service.CurrentUser = Depends(gen_user), db: AsyncSession = DB) -> dict[str, Any]:
@@ -614,6 +633,7 @@ async def confirm_proposal(pid: uuid.UUID, request: Request, body: ConfirmIn | N
     await actionlog.record(db, org_id=user.org_id, actor_type="user", actor_id=user.actor_id,
                            action="gen.proposal_confirmed", target_type=result["type"], target_id=result.get("id"),
                            target_label=str(label or "")[:200] or None, detail=detail, ip=user.ip)
+    await _ask_executed(db, user, pid, result)      # v0.1.76 (T2): một hàng — cùng transaction
     return proposals.public(p)
 
 
@@ -643,6 +663,7 @@ async def cancel_proposal(pid: uuid.UUID, request: Request, user: service.Curren
                            action="gen.proposal_cancelled", target_type="gen_proposal", target_id=p["id"],
                            detail={"via": "gen", "proposal_id": p["id"], "type": p["type"], "turn_id": p["turn_id"],
                                    "conversation_id": p["conversation_id"]}, ip=user.ip)
+    await asks.close_for(db, user.org_id, "proposal", pid, state="cancelled")  # v0.1.76 (T2): một hàng — cùng transaction
     return proposals.public(p)
 
 

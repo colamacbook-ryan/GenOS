@@ -28,6 +28,8 @@ SIMILAR_UNITS = 3
 NOTEBOOK_ENTRIES = 12
 HISTORY_ROWS = 5
 DEFAULT_CONTEXT_TOKENS = 6000
+# T8: điểm ĐÁNH GIÁ người (§4.5 R3) không bao giờ vào ngữ cảnh agent trực nhóm — câu trả lời của agent hiện trong nhóm.
+PERSON_EVAL_DIMENSIONS = ("reliability", "performance", "risk")
 OPEN_STAGES_EXCLUDED = ("won", "lost", "dormant")
 
 
@@ -259,8 +261,10 @@ async def build(db: AsyncSession, org_id: uuid.UUID, agent: Any, cand: Candidate
         scores = (await db.execute(text("""
             SELECT c.dimension, c.value, c.trend, s.confidence, s.explanation FROM clean.current_scores c
             LEFT JOIN clean.score_snapshots s ON s.id = c.snapshot_id
-            WHERE c.subject_type = :t AND c.subject_id = :s ORDER BY c.value DESC"""),
-            {"t": st, "s": sid})).all()
+            WHERE c.subject_type = :t AND c.subject_id = :s
+              AND NOT (c.subject_type = 'person' AND c.dimension = ANY(:ex))
+            ORDER BY c.value DESC"""),
+            {"t": st, "s": sid, "ex": list(PERSON_EVAL_DIMENSIONS)})).all()
         # Lý do của điểm chỉ giữ yếu tố có chứng cứ nằm trong phạm vi agent (điểm người gộp mọi nhóm).
         factor_units = {str(e.get("id")) for s in scores for f in ((s.explanation or {}).get("factors") or [])
                         if isinstance(f, dict) for e in (f.get("evidence") or []) if isinstance(e, dict)}

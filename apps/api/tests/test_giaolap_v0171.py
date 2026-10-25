@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 # ruff: noqa: F811 — fixture `world` nhập từ test_p3_market
 """v0.1.71 — lỗi tìm thấy khi giả lập toàn luồng trên v0.1.70 (ke-hoach/review/giaolap-v0170.md). Mỗi mục một khối,
 đỏ trước khi sửa, xanh sau."""
@@ -103,7 +104,7 @@ async def test_duty_context_line_masks_outsider_text() -> None:
     assert "25.000.000" in line and line.startswith("C1 ")
 
 
-async def test_briefing_summary_prompt_masks_outsider_lines(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+async def test_briefing_summary_prompt_keeps_phone_stk_but_masks_credentials(app, db, redis) -> None:  # type: ignore[no-untyped-def]
     org = await org_id(db)
     seen: list[list[Message]] = []
 
@@ -115,11 +116,15 @@ async def test_briefing_summary_prompt_masks_outsider_lines(app, db, redis) -> N
     out = await briefing._summarize(_R(), org,  # type: ignore[arg-type]
                                     [{"title": "Cơ hội", "count": "1", "lines": [SECRET_MSG]}])
     assert out == "tóm tắt" and seen
-    _no_secret("\n".join(m.content for m in seen[0]))
+    prompt = "\n".join(m.content for m in seen[0])
+    # v0.1.76 (Q9, CNS-081; thay v0.1.71 P2-3): bản tin gửi model nguyên văn SĐT/STK/tiền; OTP / mật khẩu vẫn luôn che.
+    for leak in ("482913", "abc12345xyz"):
+        assert leak not in prompt, leak
+    assert "0912 345 678" in prompt and "1234 5678 9012 3456" in prompt
     assert "25.000.000" in seen[0][-1].content
 
 
-async def test_gen_tool_results_to_model_are_masked_but_ids_survive(app, db, redis, owner_api) -> None:  # type: ignore[no-untyped-def]
+async def test_gen_tool_results_to_model_owner_keeps_phone_stk_but_masks_credentials(app, db, redis, owner_api) -> None:  # type: ignore[no-untyped-def]
     org = await org_id(db)
     await listen(db, org, "g1")
     [raw] = await put(sessionmaker(), org, msg("Cần container", sender="u1", name="Chị Lan"))
@@ -133,7 +138,10 @@ async def test_gen_tool_results_to_model_are_masked_but_ids_survive(app, db, red
     run = ToolRunner(owner_api.c._transport.app, me, token)  # type: ignore[attr-defined]
     res = await run.run("queue.list", {"tab": "all"})
     assert res.ok and str(unit) in res.text and str(unit) in run.seen_ids       # id còn nguyên cho validator
-    _no_secret(res.text)
+    # v0.1.76 (Q9, CNS-081): tool của OWNER gửi model nguyên văn SĐT/STK; OTP / mật khẩu vẫn luôn che.
+    for leak in ("482913", "abc12345xyz"):
+        assert leak not in res.text, leak
+    assert "0912 345 678" in res.text and "1234 5678 9012 3456" in res.text
 
 
 # ─── P3-5 — tin ĐI của nhân viên / tài khoản Sếp không tạo tín hiệu cầu, cơ hội ──────────────────────────────────────
@@ -366,22 +374,25 @@ async def test_raw_store_and_listen_log_hide_otp_from_auditor(app, db, redis, ow
     assert "482913" in (await owner_api.get(f"/raw/{raw}")).text
 
 
-# ─── P3-4 — chưa có bộ ghi lời hứa: không nói «không có lời hứa bị vỡ» ────────────────
+# ─── P3-4 — chỉ nói «không có lời hứa bị vỡ» khi đã có bộ ghi lời hứa (v0.1.76 T4: có) ────────────────
 
-def test_care_scenario_note_does_not_claim_no_broken_promises_while_untracked() -> None:
+def test_care_scenario_note_claims_no_broken_promises_only_when_tracked(monkeypatch) -> None:  # noqa: ANN001
     from gh.biz.people.routes import _scenario_note
+    from gh.biz.queue import service
 
+    assert service.PROMISES_TRACKED is True
+    assert "không có lời hứa bị vỡ" in _scenario_note("won", {"fast_pct": 80.0}, 0)
+    monkeypatch.setattr(service, "PROMISES_TRACKED", False)
     note = _scenario_note("won", {"fast_pct": 80.0}, 0)
     assert "lời hứa" not in note and note.startswith("Kịch bản thắng")
 
 
-def test_nothing_writes_biz_promises() -> None:
-    """Điều kiện của cờ `PROMISES_TRACKED = False`: nếu sau này có mã ghi `biz.promises`, test này đỏ để nhớ bật lại
-    cờ (máy chủ `gh.biz.queue.service` + web `src/lib/features.ts`) và gỡ Nợ #62."""
+def test_only_promises_detector_writes_biz_promises() -> None:
+    """v0.1.76 (T4): cờ `PROMISES_TRACKED = True` đúng khi có ĐÚNG MỘT bên ghi `biz.promises` — detector W1. Có thêm bên ghi khác ⇒ đỏ."""
     import pathlib
     import re
 
     root = pathlib.Path(__file__).resolve().parents[1] / "gh"
     writers = [str(p.relative_to(root)) for p in root.rglob("*.py")
                if re.search(r"INSERT\s+INTO\s+biz\.promises", p.read_text(), re.I)]
-    assert writers == [], writers
+    assert writers == ["biz/intel/detectors/promises.py"], writers

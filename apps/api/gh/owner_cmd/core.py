@@ -19,6 +19,7 @@ test_telegram_commands_v0164.py). Đề xuất chỉ nằm trong Redis (`proposa
 """
 
 import logging
+import re
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
@@ -110,6 +111,7 @@ NOT_UNDERSTOOD = "Em chưa hiểu ý Sếp để soạn đề xuất. Sếp nói
 NEED_TEXT = "Sếp gõ kèm ý cần soạn, ví dụ: /nhap nhắc tôi gọi anh Nam lúc 9h sáng mai"
 FAILED = "Em gặp lỗi khi xử lý tin này. Sếp thử lại, hoặc xem trong Console."
 NOTHING = otext.NOTHING
+ASSISTANT_LOCKED = "Trợ lý đang bị khoá nên em không làm gì. Sếp mở khoá trên Console (mã PIN)."
 
 
 @dataclass(frozen=True)
@@ -288,14 +290,43 @@ def _addr(user: service.CurrentUser | None) -> str:
 # ─── lệnh chỉ đọc ────────────────────────────────────────────────────────────
 
 
+#: v0.1.76 (T2): `/hom_nay` = bản tin KÉO từ `digest.build` (cùng bộ dựng bản tin Zalo, CNS-035), tối đa chừng này dòng mục.
+DIGEST_MAX_LINES = 10
+LEVEL_ICON = {"red": "🔴", "amber": "🟠", "grey": "⚪"}
+
+
+async def digest_lines(ctx: Context, now: datetime) -> list[str]:
+    """Mục tình báo cho kênh chat (`audience='chat'`: bỏ `console_pin`), KHÔNG đánh dấu đã gửi (kéo không "tiêu" mục)."""
+    from gh.biz.intel import digest
+
+    async with ctx.sm() as db:
+        await _set_org(db, ctx.org_id)
+        d = await digest.build(db, ctx.org_id, now, audience="chat", only_new=False)
+        await db.rollback()
+    out: list[str] = []
+    for it in d.items[:DIGEST_MAX_LINES]:
+        parts = [f"{it.n}. {LEVEL_ICON.get(it.level, '•')} {otext.line(it.title, 120)}"]
+        if it.quote:
+            parts.append(f"«{otext.line(it.quote, 80)}»")
+        parts += it.line_facts
+        if it.ask_code:
+            parts.append(f"(#{it.ask_code})")
+        out.append(otext.defang(" ".join(parts)))
+    if len(d.items) > DIGEST_MAX_LINES:
+        out.append(f"… và {len(d.items) - DIGEST_MAX_LINES} mục nữa (xem Console)")
+    return out
+
+
 async def hom_nay(ctx: Context) -> Reply:
     now = datetime.now(UTC)
+    intel = await digest_lines(ctx, now)
     async with ctx.sm() as db:
         await _set_org(db, ctx.org_id)
         sections = await briefing.collect(db, ctx.org_id, briefing.slot_for(now), now)
         await db.rollback()
     items = otext.briefing_items(sections)
-    lines = [f"Hôm nay · {briefing.slot_for(now).label}", "", *(items or [NOTHING])]
+    body = [*intel, *([""] if intel and items else []), *items]
+    lines = [f"Hôm nay · {briefing.slot_for(now).label}", "", *(body or [NOTHING])]
     lines += ["", f"Mở Console: {_console_link('/overview')}"]
     return Reply("\n".join(lines))
 
@@ -315,11 +346,52 @@ async def todos(ctx: Context) -> list[dict[str, Any]]:
     return [t for t in (got if isinstance(got, list) else []) if isinstance(t, dict)]
 
 
+#: Nhãn loại quyết định của ask (spec r4 §4.4) trên /viec.
+ASK_KIND_VI = {"self": "việc riêng — OK là làm", "internal": "OK là làm", "outbound": "tin gửi ngoài — OK #MÃ từng tin",
+               "console": "mở Console (mã PIN)"}
+
+
+async def ask_lines(ctx: Context) -> list[str]:
+    """v0.1.76 (T2): hàng Cần quyết trên chat — CÙNG cổng với `GET /asks` (`access.ask_visible_sql`, L-90). Owner kênh chat không có
+    phiên PIN ⇒ ask nói về người (`profile`/`identity`), ask gắn tín hiệu `console_pin` hoặc nhóm ẩn KHÔNG hiện, không tính vào số;
+    chỉ một dòng "có N mục cần xem trên Console"."""
+    from gh.biz.intel import access
+
+    base = """FROM ops.asks q LEFT JOIN biz.alerts a ON a.id = q.signal_id AND a.org_id = q.org_id
+              WHERE q.org_id = :o AND q.state = 'open' AND (q.expires_at IS NULL OR q.expires_at > now())"""
+    async with ctx.sm() as db:
+        await _set_org(db, ctx.org_id)
+        owner = await owner_user(db, ctx.org_id, ctx.owner_user_id)
+        if owner is None:
+            await db.rollback()
+            return []
+        vis = access.ask_visible_sql(owner, "q", "a")     # owner_user dựng KHÔNG có PIN ⇒ luôn nhánh không-PIN
+        rows = (await db.execute(text(f"""SELECT q.code, q.summary, q.decision_kind {base} AND {vis}
+                                          ORDER BY q.created_at DESC LIMIT :n"""), {"o": ctx.org_id, "n": MAX_LIST})).all()  # noqa: S608
+        n = int((await db.execute(text(f"SELECT count(*) {base} AND {vis}"), {"o": ctx.org_id})).scalar_one())  # noqa: S608
+        hidden = int((await db.execute(text(f"SELECT count(*) {base} AND NOT {vis}"), {"o": ctx.org_id})).scalar_one())  # noqa: S608
+        await db.rollback()
+    out: list[str] = []
+    if rows:
+        out.append(f"Chờ Sếp quyết ({n}):")
+        out += [f"• #{a.code} — {otext.defang(otext.line(a.summary))} · {ASK_KIND_VI.get(a.decision_kind, a.decision_kind)}"
+                for a in rows]
+        if n > MAX_LIST:
+            out.append(f"… và {n - MAX_LIST} mục nữa")
+    if hidden:
+        out.append(f"Có {hidden} mục cần xem trên Console (mã PIN).")
+    return out
+
+
 async def viec(ctx: Context, *, todos_fn: Callable[[Context], Awaitable[list[dict[str, Any]]]] | None = None) -> Reply:
+    pending = await ask_lines(ctx)
     items = await (todos_fn or todos)(ctx)
-    if not items:
+    if not items and not pending:
         return Reply(f"{NOTHING}\nMở Console: {_console_link('/overview')}")
-    lines = [f"Việc Sếp cần làm ({len(items)}):"]
+    lines = [*pending, ""] if pending else []
+    if not items:
+        return Reply("\n".join([*lines, f"Mở Console: {_console_link('/overview')}"]))
+    lines += [f"Việc Sếp cần làm ({len(items)}):"]
     lines += [f"• {otext.defang(otext.line(str(t.get('title') or t.get('key') or '?')))}" for t in items[:MAX_LIST]]
     if len(items) > MAX_LIST:
         lines.append(f"… và {len(items) - MAX_LIST} việc nữa")
@@ -589,6 +661,9 @@ async def nhap(cmd: OwnerCommand, ctx: Context) -> Reply:
         return Reply(msg)
     if cmd.via in chat_pending.CHAT_VIAS:
         return await _chat_reply(ctx, cmd, made, says, cid)
+    for p in made:
+        await chat_pending.ensure_ask(ctx.sm, ctx.redis, ctx.org_id, p, cmd.via)   # v0.1.76: một hàng, một mã
+    # Telegram dẫn Sếp sang Console (Console còn hiện mã hex — mã ask lên giao diện ở Bước 2) ⇒ giữ mã hex ở đây
     lines = [f"Đã soạn đề xuất {short_id(p['id'])}: {otext.defang(str(p['summary']))}" for p in made]
     if says:
         lines.append(otext.defang(" ".join(says)))
@@ -616,6 +691,7 @@ async def _chat_reply(
     budget = chat_pending.REPLY_MAX - chat_pending.REPLY_TAIL_RESERVE
     registered = 0
     for p in made:
+        await chat_pending.ensure_ask(ctx.sm, ctx.redis, ctx.org_id, p, cmd.via)   # v0.1.76: một hàng, một mã
         kind = chat_pending.kind_of(p)
         q = chat_pending.question(p, cmd.via)
         if kind == "outbound" and used + len(q) + 2 > budget:
@@ -639,11 +715,185 @@ async def _chat_reply(
     if len(made) > 1:
         lines.append(
             "Có nhiều đề xuất — Sếp trả lời OK kèm mã của từng cái (ví dụ OK "
-            + chat_pending.code_of(made[0]["id"])
+            + chat_pending.code_of(made[0])
             + ")."
         )
     links = [(CONSOLE_BUTTON, _console_link(f"/overview?gen={cid}"))] if console else []
     return Reply("\n\n".join(lines), links)
+
+
+# ─── v0.1.76 (T2) — W8: «ghi nhớ: anh …» ⇒ Hồ sơ Sếp ─────────────────────────
+
+#: «ghi nhớ: <đại từ của Sếp> …» trên chữ bỏ dấu. Bắt buộc có dấu hai chấm + câu bắt đầu bằng ngôi thứ nhất (về CHÍNH Sếp).
+_PROFILE_NOTE = re.compile(r"^\s*ghi nho\s*[:：]\s*((?:anh|em|toi|minh)\b.*)$", re.S)
+PROFILE_VIAS = ("zalo", "whatsapp")       # chỉ kênh quản trị 1-1 đã ghép bằng mã (Telegram: không)
+PROFILE_ONE = "Sếp ghi nhớ từng ý một giúp em (mỗi lần một câu) để em xếp đúng mục Hồ sơ."
+PROFILE_CONSOLE = ("Việc này cần mở Console (mã PIN) mới ghi được: cách báo / giờ yên lặng chạm lừa đảo hoặc sức khoẻ-an toàn "
+                   "không đổi qua chat để phòng khi tài khoản bị chiếm.")
+
+
+#: Chữ thường gặp trong lừa đảo / tiền bạc ngoài từ vựng của Hồ sơ (review bảo mật T2) — chỉ để quyết định đường ghi (Console).
+_EXTRA_DEFENSIVE = re.compile(r"\b(?:gian lan|chuyen tien|rut tien|mat tien|vay tien|nap tien|canh bao)\b")
+#: "báo" kèm khung giờ ("sau 9h", "22h trở đi", "từ 10 giờ", "ban đêm"…) ở mục cách báo / nhịp sống ⇒ Console (có thể nuốt cảnh báo).
+_BAO = re.compile(r"\bbao\b")
+_TIME_WINDOW = re.compile(r"\b\d{1,2}\s*(?:h|g|gio)\b|\b(?:ban dem|buoi toi|dem khuya|nua dem|sang som|truoc|sau|tu|den)\s+\d{1,2}\b")
+
+
+_TIME_WORDS = re.compile(r"\b(?:sang|trua|chieu|toi|dem|khuya|gio|h|am|pm|mot|hai|ba|bon|nam|sau|bay|tam|chin|muoi)\b")
+
+
+def normalize_note(raw: str) -> str:
+    """Xoá HẲN ký tự định dạng vô hình (Unicode Cf: ZWSP, WORD JOINER, BOM…) rồi chuẩn hoá NFKC (chữ full-width…) TRƯỚC khi so khớp."""
+    import unicodedata
+
+    s = "".join(ch for ch in raw if unicodedata.category(ch) != "Cf")
+    return unicodedata.normalize("NFC", unicodedata.normalize("NFKC", s))
+
+
+def profile_note(raw: str) -> str | None:
+    """Phần nội dung của «ghi nhớ: anh …» (giữ nguyên dấu, bỏ tiền tố), hoặc None nếu không đúng dạng. Sau đại từ là TÊN RIÊNG viết
+    hoa («anh Tuấn …») ⇒ nói về người khác, không phải Sếp ⇒ None (đi đường đề xuất Ghi nhớ, chờ «OK»)."""
+    from gh.textnorm import strip_accents
+
+    folded = strip_accents(raw)
+    if len(folded) != len(raw):         # bỏ dấu đổi độ dài (ký tự tổ hợp) ⇒ không cắt theo vị trí được; đi đường thường
+        return None
+    m = _PROFILE_NOTE.match(folded.lower())
+    if not m:
+        return None
+    content = raw[m.start(1):].strip()
+    words = content.split()
+    name = words[1].lstrip("\"'«“‘([{<") if len(words) > 1 else ""
+    # Giới hạn đã biết: tên riêng viết THƯỜNG («anh tuấn …») không phân biệt rẻ được với chữ thường — Sếp sửa ở Console › Tôi.
+    if name[:1].isupper():
+        return None
+    return content
+
+
+def _profile_section(content: str) -> str | None:
+    from gh.biz.mem import profile
+
+    found = profile.candidates_from_message(content)
+    section = found[0][0] if found else None
+    # sở thích báo / giờ yên lặng đi mục `report_prefs` dù câu còn khớp mục khác (để luật phòng thủ + báo kênh phụ áp được)
+    asks_quiet = profile.is_quiet_hours("report_prefs", content)
+    f = profile._fold(content)
+    about_reports = bool(_BAO.search(f) or "lam phien" in f)          # mọi câu nói về BÁO / làm phiền ⇒ mục cách báo (Console)
+    if section not in ("rhythm", "report_prefs") and (asks_quiet or about_reports or profile._NEGATIVE_REPORT_RE.search(f)):
+        section = "report_prefs"
+    return section
+
+
+def profile_defensive(section: str, content: str) -> bool:
+    """Ngoại lệ phòng thủ (§4C) — kiểm trên TOÀN nội dung, bất kể bộ xếp mục chọn mục nào (review bảo mật T2): chạm từ vựng lừa đảo /
+    tài chính / sức khoẻ-an toàn, hoặc dạng "đừng/không/khỏi báo …" ⇒ chỉ Console + PIN."""
+    from gh.biz.mem import profile
+
+    f = profile._fold(content)
+    timed = section in ("report_prefs", "rhythm") and bool(_BAO.search(f) and _TIME_WINDOW.search(f))
+    return (profile.is_defensive(section, content) or bool(profile._DEFENSIVE_RE.search(f))
+            or bool(profile._NEGATIVE_REPORT_RE.search(f)) or bool(_EXTRA_DEFENSIVE.search(f)) or timed)
+
+
+#: Ký tự được phép trong «ghi nhớ» (sau NFKC): chữ Latin (kể cả tiếng Việt), số ASCII, dấu cách thường, dấu câu cơ bản.
+_ALLOWED_PUNCT = frozenset(".,!?:;'\"()-/%«»…–—“”‘’+&")
+
+
+_ASCII_LETTERS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+#: Dấu kết hợp tiếng Việt: huyền, sắc, ngã, hỏi, nặng, mũ, trăng, móc.
+_VI_MARKS = frozenset("\u0300\u0301\u0303\u0309\u0323\u0302\u0306\u031b")
+
+
+def _allowed_char(ch: str) -> bool:
+    """Allowlist CHÍNH XÁC (review bảo mật T2): chữ ASCII; chữ tiếng Việt dựng sẵn (NFD = MỘT chữ ASCII + dấu kết hợp tiếng Việt);
+    đ/Đ; số ASCII; dấu cách thường; dấu câu cơ bản. Mọi ký tự khác (ɑ, ı, ʟ, ꞵ, small-cap, Cyrillic, Hy Lạp, chữ lấp…) ⇒ False."""
+    import unicodedata
+
+    if ch == " " or ch in "0123456789" or ch in _ALLOWED_PUNCT or ch in _ASCII_LETTERS or ch in "đĐ":
+        return True
+    d = unicodedata.normalize("NFD", ch)
+    return len(d) >= 2 and d[0] in _ASCII_LETTERS and all(m in _VI_MARKS for m in d[1:])
+
+
+def _compact_keywords() -> tuple[str, ...]:
+    from gh.biz.mem import profile
+
+    words = (*profile.DEFENSIVE_LEXICON, "gian lan", "chuyen tien", "rut tien", "mat tien", "vay tien", "nap tien", "canh bao")
+    return tuple(sorted({w.replace(" ", "") for w in words if len(w.replace(" ", "")) >= 5} | {"otp", "stk"}))
+
+
+#: Từ vựng thêm (recheck bảo mật T2) — so trên bản fold đã đổi số-thay-chữ 0→o (chỉ cho bước so khớp).
+_MORE_DEFENSIVE = re.compile(r"\b(?:mao danh|gia danh|doi no|bank|police)\b")
+#: Từ mà bỏ dấu sẽ trùng chữ thường gặp ("tiền"/"tiên" trong «ưu tiên», "vay"/"vậy"/"váy") ⇒ so CÓ DẤU trên chữ thường NFC.
+_ACCENTED_DEFENSIVE = re.compile(r"(?<!\w)(?:tiền|vay)(?!\w)")
+_IN_WORD_PUNCT = re.compile(r"[a-z][^a-z0-9\s]+[a-z]")
+
+
+def profile_suspicious(content: str) -> bool:
+    """Fail-closed (review bảo mật T2) ⇒ Console + PIN khi:
+    (a) còn ký tự ngoài allowlist sau NFKC (chữ lấp vô hình, ɑ/ı/ʟ, Cyrillic/Hy Lạp…);
+    (b) chữ bị chen dấu câu trong một từ ("l.ừa", "c-h-á-y") hoặc ≥ 2 token một chữ cái liên tiếp ("l ừ a", "b ệ n h");
+    (c) chữ lẫn số trong một từ ("l0a", "0TP"); từ khoá phòng thủ (từ vựng Hồ sơ + tiền bạc/mạo danh) khớp theo từ trên bản
+        fold có đổi 0→o ("tiền", "vay" so CÓ DẤU để khỏi trùng «ưu tiên», «vậy»),
+        hoặc khớp trên bản bỏ hết dấu câu/khoảng trắng với từ khoá dài ≥ 5 ("lừa-đảo", "l ừ a đ ả o");
+    (d) "báo" kèm số hoặc từ chỉ giờ."""
+    from gh.biz.mem import profile
+
+    if not all(_allowed_char(ch) for ch in content):
+        return True
+    f = profile._fold(content)
+    if _IN_WORD_PUNCT.search(f):
+        return True
+    tokens = re.findall(r"[a-z0-9]+", f)
+    if any(len(a) == 1 and len(b) == 1 and a.isalpha() and b.isalpha() for a, b in zip(tokens, tokens[1:], strict=False)):
+        return True
+    if any(re.search(r"[a-z]", t) and re.search(r"\d", t) for t in tokens):
+        return True                       # chữ lẫn số trong một từ ("l0a", "0TP", "8h30") ⇒ Console
+    fm = f.replace("0", "o")
+    if profile._DEFENSIVE_RE.search(fm) or _EXTRA_DEFENSIVE.search(fm) or _MORE_DEFENSIVE.search(fm):
+        return True
+    if _ACCENTED_DEFENSIVE.search(content.lower().replace("0", "o")):
+        return True
+    compact = re.sub(r"[^a-z0-9]", "", fm)
+    if any(k in compact for k in _compact_keywords()):
+        return True
+    return bool(_BAO.search(f) and (re.search(r"\d", f) or _TIME_WORDS.search(f)))
+
+
+async def profile_add(cmd: OwnerCommand, ctx: Context, owner: service.CurrentUser, content: str) -> Reply | None:
+    """Ghi một mục Hồ sơ `owner_confirmed` từ lệnh của CHÍNH Sếp (đã qua kiểm ID ở inbound + Owner còn hiệu lực ở `handle`).
+    Không xếp được mục ⇒ None (đi đường thường: Gen đề xuất Ghi nhớ, chờ «OK»)."""
+    from gh.biz.intel import strong_confirm
+    from gh.biz.mem import profile, profile_read
+
+    if len([x for x in profile._SPLIT.split(content) if x.strip()]) > 1:
+        return Reply(PROFILE_ONE)           # nhiều câu: không để câu sau (tắt báo…) núp sau mục của câu đầu
+    section = _profile_section(content)
+    risky = profile_suspicious(content)
+    if section is None and not risky:
+        return None
+    async with ctx.sm() as db:
+        await _set_org(db, ctx.org_id)
+        # deny-by-default (review bảo mật): ký tự lạ / từ khoá phòng thủ (kể cả bị chen dấu) / MỌI mục cách báo-nhịp sống qua chat
+        if risky or section in ("report_prefs", "rhythm") or profile_defensive(str(section), content):
+            await strong_confirm.require(db, ctx.org_id, "report_pref_defensive")     # đếm vào phát hiện bất thường
+            await db.commit()
+            return Reply(PROFILE_CONSOLE)
+        if section is None:                 # không tới được (section None ⇒ risky ⇒ đã trả Console); giữ cho kiểu chặt
+            return None
+        log_id = await actionlog.record(db, org_id=ctx.org_id, actor_type="user", actor_id=owner.actor_id,
+                                        action="owner_profile.chat_add", target_type="owner_profile", target_id=section,
+                                        detail={"via": cmd.via, "section": section, "text_digest": digest(content)})
+        try:
+            res = await profile.add_item(db, ctx.org_id, user_id=owner.id, section=section, text_value=content,
+                                         action_log_id=log_id, via="chat")
+        except profile.ProfileError as e:
+            await db.rollback()
+            return Reply(PROFILE_CONSOLE if e.code == "console_required" else f"Em chưa ghi được vào Hồ sơ: {e.message}.")
+        await db.commit()
+    label = profile_read.SECTION_LABEL_VI.get(section, section)
+    head = "Mục này đã có trong Hồ sơ" if res.outcome == "existing" else "Đã ghi vào Hồ sơ của Sếp"
+    return Reply(f"{head} (mục {label}): «{otext.defang(content)}». Sửa/xoá ở Console › Tôi.")
 
 
 # ─── điều phối ───────────────────────────────────────────────────────────────
@@ -681,6 +931,17 @@ async def _log(ctx: Context, cmd: OwnerCommand, action: str, **extra: Any) -> No
         log.warning("%s: không ghi được Action Log %s", cmd.via, action, exc_info=True)
 
 
+async def assistant_locked(sm: Any, org_id: uuid.UUID) -> bool:
+    """Cờ "khoá trợ lý" `settings.intel.assistant_locked_at` (T10 ghi; cùng câu đọc với `gh.telegram.backup.is_locked`) — đọc LÚC
+    XỬ LÝ. Lõi không import gói kênh nào (test quét import) nên đọc thẳng cờ."""
+    async with sm() as db:
+        await _set_org(db, org_id)
+        locked = bool((await db.execute(text("""SELECT settings->'intel'->>'assistant_locked_at' IS NOT NULL
+                                                FROM core.organizations WHERE id = :o"""), {"o": org_id})).scalar_one_or_none())
+        await db.rollback()
+    return locked
+
+
 async def handle(cmd: OwnerCommand, ctx: Context, *, overrides: Mapping[str, Handler] | None = None) -> Reply:
     """Trả `Reply`. Link chỉ có khi vừa soạn đề xuất: "Mở Console để Xác nhận". Không ném.
     `overrides` thay một lệnh chỉ đọc ('hom_nay' | 'viec' | 'suc_khoe') bằng hàm của kênh gọi."""
@@ -695,6 +956,8 @@ async def handle(cmd: OwnerCommand, ctx: Context, *, overrides: Mapping[str, Han
             await db.rollback()
         if owner is None:
             return Reply(no_owner_text(cmd.via))
+        if cmd.via in PROFILE_VIAS and await assistant_locked(ctx.sm, ctx.org_id):
+            return Reply(ASSISTANT_LOCKED)      # v0.1.76: kênh quản trị đang khoá ⇒ không đọc, không gọi model, không ghi
         async with ctx.sm() as db:
             await _set_org(db, ctx.org_id)
             ctx.persona = await diplomat.load(db, ctx.org_id)
@@ -709,6 +972,12 @@ async def handle(cmd: OwnerCommand, ctx: Context, *, overrides: Mapping[str, Han
             return await over.get("suc_khoe", suc_khoe)(ctx)
         if cmd.kind == "nhap":
             return await nhap(cmd, ctx)
+        if cmd.kind == "hoi" and cmd.via in PROFILE_VIAS:
+            note = profile_note(normalize_note(cmd.text))
+            if note is not None:
+                done = await profile_add(cmd, ctx, owner, note)
+                if done is not None:
+                    return done
         if cmd.kind == "hoi":
             return await (ctx.hoi_fn or hoi)(cmd, ctx)
         return Reply(UNKNOWN)

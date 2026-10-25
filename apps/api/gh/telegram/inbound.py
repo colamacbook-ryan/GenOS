@@ -21,7 +21,7 @@ import logging
 import re
 import secrets
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, TypeGuard
 
@@ -34,6 +34,7 @@ from gh.errors import ApiError
 from gh.owner_cmd import core as owner_core
 from gh.owner_cmd import parse as owner_parse
 from gh.owner_cmd.core import rate_ok as owner_rate_ok
+from gh.textnorm import strip_accents
 
 log = logging.getLogger("gh.telegram.inbound")
 
@@ -85,6 +86,9 @@ _FORWARD_KEYS = (
     "forward_signature",
     "is_automatic_forward",
 )
+#: v0.1.76 (T2): lệnh khẩn "khoá trợ lý" (CHỈ khoá; mở khoá chỉ Console + PIN). `/khoa_tro_ly` hoặc câu «khoá trợ lý».
+LOCK_KIND = "khoa_tro_ly"
+_LOCK_TEXT = re.compile(r"^\s*khoa tro ly\s*[.!]*\s*$")
 _PAIR_RE = re.compile(r"^/start(?:@[A-Za-z0-9_]{3,64})?\s+(\d{6})\s*$")
 
 
@@ -98,6 +102,8 @@ class TelegramCommand:
     chat_id: str
     message_id: int
     received_at: datetime
+    #: v0.1.76: `from.id` đã khớp tài khoản ghép (để `backup.lock_assistant` kiểm LẠI theo ID, không theo tên).
+    user_id: str | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -170,8 +176,15 @@ def evaluate(update: Any, cfg: InboundConfig, *, now: datetime | None = None) ->
     if not isinstance(body, str) or not body.strip() or not _is_int(mid):
         return R_NO_TEXT
     kind, rest = parse_text(body)
+    if kind == "hoi" and _LOCK_TEXT.match(strip_accents(body).lower()):
+        kind, rest = LOCK_KIND, ""
     return TelegramCommand(
-        kind=kind, text=rest, chat_id=str(chat["id"]), message_id=mid, received_at=datetime.fromtimestamp(date, UTC)
+        kind=kind,
+        text=rest,
+        chat_id=str(chat["id"]),
+        message_id=mid,
+        received_at=datetime.fromtimestamp(date, UTC),
+        user_id=str(sender["id"]),
     )
 
 
@@ -378,6 +391,13 @@ async def try_pair(
             text("UPDATE ops.notify_channels SET pair_attempts = :a WHERE org_id = :o"), {"a": attempts, "o": org_id}
         )
         return False, R_PAIR_WRONG
+    new_chat = str(chat["id"])
+    if row.owner_chat_id and str(row.owner_chat_id) != new_chat:
+        # Ghép sang chat KHÁC chat đã ghép: báo chat CŨ (đích lưu theo dòng, flush không theo cấu hình mới) — spec §8.1.
+        from gh.biz.intel import strong_confirm
+
+        await strong_confirm.require(db, org_id, "rebind_backup_channel", via="console", pin_verified=True,
+                                     notify_chat=str(row.owner_chat_id))
     await db.execute(
         text("""
         UPDATE ops.notify_channels SET owner_chat_id = :c, owner_tg_user_id = :t, owner_user_id = pair_user_id,

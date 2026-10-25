@@ -34,8 +34,24 @@ async def create(db: AsyncSession, org_id: uuid.UUID, *, kind: str, subject_id: 
                 {"o": org_id, "c": code, "k": kind, "s": subject_id, "p": orjson.dumps(payload or {}).decode(),
                  "now": now, "exp": now + ttl})).one_or_none()
         if row is not None:
+            await _ask(db, org_id, row, kind)
             return row
     raise RuntimeError("không cấp được mã câu hỏi")
+
+
+#: Tóm tắt ask do HỆ THỐNG viết theo loại câu hỏi (v0.1.76, một hàng Cần quyết).
+ASK_SUMMARY = {"listen_confirm": "Bật nghe một nhóm?", "group_added": "Nhóm mới thêm em vào — nghe hay bỏ?",
+               "support_confirm": "Xác nhận bật chế độ hỗ trợ nhóm"}
+
+
+async def _ask(db: AsyncSession, org_id: uuid.UUID, row: Any, kind: str) -> None:
+    """v0.1.76 (T2, spec r4 §4.6): mỗi câu hỏi `owner_questions` ghi thêm MỘT ask cùng transaction
+    (nguồn `question`, hạn = hạn câu hỏi).
+    Trả lời vẫn bằng lệnh cũ (/nghe, /bo, /xac_nhan với mã 4 ký tự) — ask đóng theo khi câu hỏi được trả lời."""
+    from gh.biz.intel import asks
+
+    await asks.create(db, org_id, source="question", ref_id=row.id, decision_kind="self",
+                      summary=ASK_SUMMARY.get(kind, "Câu hỏi chờ Sếp trả lời"), expires_at=row.expires_at)
 
 
 async def open_by_code(db: AsyncSession, org_id: uuid.UUID, code: str, *, kind: str | None = None,
@@ -50,6 +66,12 @@ async def open_by_code(db: AsyncSession, org_id: uuid.UUID, code: str, *, kind: 
 
 async def answer(db: AsyncSession, question_id: uuid.UUID, answer_: str) -> bool:
     res = await db.execute(text("""UPDATE ops.owner_questions SET answered_at = now(), answer = :a
-                                   WHERE id = :i AND answered_at IS NULL RETURNING id"""),
+                                   WHERE id = :i AND answered_at IS NULL RETURNING id, org_id"""),
                            {"a": answer_[:40], "i": question_id})
-    return res.first() is not None
+    row = res.first()
+    if row is None:
+        return False
+    from gh.biz.intel import asks
+
+    await asks.close_for(db, row.org_id, "question", row.id, state="executed")   # v0.1.76: cùng transaction
+    return True
