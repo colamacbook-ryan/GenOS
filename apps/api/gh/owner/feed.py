@@ -129,6 +129,7 @@ WITH handled AS (
   LEFT JOIN biz.alerts a ON i.item_type = 'alert' AND a.id = i.item_id
   LEFT JOIN refinery.item_marks m ON m.item_type = i.item_type AND m.item_id = i.item_id
   WHERE i.org_id = :o
+    AND i.privacy = 'chat_ok'   -- v0.1.76 (T1): console_pin chỉ xem ở Tình báo khi đã mở PIN
     AND (i.item_type <> 'unit' OR i.created_at > now() - make_interval(days => :days))
     AND {qsvc.not_silenced_sql("i")}
     AND COALESCE(gc.type, '') <> 'facebook'

@@ -506,8 +506,8 @@ async def tasks(db: AsyncSession, org_id: uuid.UUID) -> dict[str, Any]:
     # ⇒ lấy hết). Chỉ mục alerts (org_id, status, …), item_marks (org_id, observed_at DESC), meaning_units
     # (org_id, observed_at).
     alerts = (await db.execute(text("""
-        SELECT id, title, created_at FROM biz.alerts WHERE org_id = :o AND status = 'open'
-        ORDER BY created_at DESC LIMIT :n"""), {"o": org_id, "n": GROUP_ITEMS})).all()
+        SELECT id, title, created_at FROM biz.alerts WHERE org_id = :o AND status = 'open' AND privacy = 'chat_ok'
+        ORDER BY created_at DESC LIMIT :n"""), {"o": org_id, "n": GROUP_ITEMS})).all()   # v0.1.76: bỏ console_pin
     if cfg["enabled"]:
         kept_where = ("FROM refinery.item_marks m JOIN clean.meaning_units mu ON mu.id = m.item_id "
                       "AND mu.observed_at = m.observed_at WHERE m.org_id = :o AND m.item_type = 'unit' "
@@ -520,7 +520,8 @@ async def tasks(db: AsyncSession, org_id: uuid.UUID) -> dict[str, Any]:
         order = "mu.observed_at"
     p = {"o": org_id, "q": minq}
     kept_n = await _count(db, f"SELECT 1 {kept_where} LIMIT :cap", p)  # noqa: S608
-    alert_n = await _count(db, "SELECT 1 FROM biz.alerts WHERE org_id = :o AND status = 'open' LIMIT :cap", p)
+    alert_n = await _count(db, "SELECT 1 FROM biz.alerts WHERE org_id = :o AND status = 'open' "
+                                   "AND privacy = 'chat_ok' LIMIT :cap", p)
     kept = (await db.execute(text(f"SELECT mu.event_type, mu.conclusion, mu.observed_at {kept_where} "  # noqa: S608
                                   f"ORDER BY {order} DESC LIMIT :n"), {**p, "n": GROUP_ITEMS})).all()
     inbox_items = [{"title": _text(a.title), "at": iso(a.created_at), "to": "/inbox?tab=alert"} for a in alerts]

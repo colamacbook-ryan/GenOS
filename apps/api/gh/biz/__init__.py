@@ -1,5 +1,5 @@
 # ruff: noqa: E501
-"""Giai đoạn 3 — các màn kinh doanh, mỗi cụm một gói con (core, queue, relations, graph, market, people, duty, mem, media, intel).
+"""Giai đoạn 3 — các màn kinh doanh, mỗi cụm một gói con (core, queue, relations, graph, market, people, duty, intel, mem, media).
 
 Mỗi gói con có `routes.router` (gắn vào /api/v1) và `jobs.HOOKS` / `jobs.JOBS` (worker tự đăng ký), nên thêm cụm
 không phải sửa app.py hay worker.py.
@@ -11,7 +11,7 @@ from fastapi import APIRouter
 
 from gh.biz.hooks import CronJob, Hook
 
-CLUSTERS = ("core", "queue", "relations", "graph", "market", "people", "duty", "mem", "media", "intel")
+CLUSTERS = ("core", "queue", "relations", "graph", "market", "people", "duty", "intel", "mem", "media")
 
 
 def routers() -> list[APIRouter]:

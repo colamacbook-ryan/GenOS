@@ -83,7 +83,8 @@ async def tail(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, limit: int
         up = signals.UpsertIn(kind=kind, title="Cảnh báo theo luật cứng" if kind == "rui_ro_lua_dao" else "Sự cố an toàn theo luật cứng",
                               detector="raw_tail", detector_version="1", level_input=li, evidence=ev,
                               case_key=levels.case_key(kind, at=r.occurred_at, raw_event_id=str(r.id)), thread_key=tk,
-                              group_id=r.group_id, person_ids=[r.person_id] if r.person_id else [])
+                              group_id=r.group_id, subject_type="group" if r.group_id else None, subject_id=r.group_id,
+                              person_ids=[r.person_id] if r.person_id else [])
         try:
             async with db.begin_nested():
                 out.append(await signals.upsert(db, org_id, up, now))

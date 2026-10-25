@@ -155,6 +155,39 @@ CREATE INDEX IF NOT EXISTS alerts_raw_event_ids_idx ON biz.alerts USING gin (raw
 CREATE OR REPLACE VIEW biz.signals WITH (security_invoker = true) AS
   SELECT * FROM biz.alerts WHERE kind NOT IN ('system', 'legacy');
 
+-- Hàng chung (view của cụm queue, 0005): cảnh báo mang `group_id` thật của tín hiệu (không chỉ khi subject_type='group') và cột
+-- `privacy` (thêm ở CUỐI — CREATE OR REPLACE chỉ cho thêm cột cuối) để mọi đường đọc hàng chung lọc `console_pin` cùng một cổng.
+CREATE OR REPLACE VIEW biz.inbox_items AS
+SELECT mu.org_id, 'unit'::text AS item_type, mu.id AS item_id, NULL::text AS code,
+       mu.event_type AS title, mu.conclusion AS summary,
+       CASE WHEN mu.person_id IS NOT NULL THEN 'person' WHEN mu.group_id IS NOT NULL THEN 'group' END AS subject_type,
+       COALESCE(mu.person_id, mu.group_id) AS subject_id,
+       mu.group_id, mu.person_id,
+       CASE WHEN mu.event_type = 'Complained' THEN 'P1' WHEN mu.confidence >= 0.8 THEN 'P2' ELSE 'P3' END AS priority,
+       mu.observed_at AS created_at, mu.confidence AS score, 'chat_ok'::text AS privacy
+FROM clean.meaning_units mu
+WHERE mu.superseded_by IS NULL
+
+UNION ALL
+
+SELECT a.org_id, 'alert'::text, a.id, a.code, a.title, a.summary,
+       a.subject_type, a.subject_id,
+       COALESCE(a.group_id, CASE WHEN a.subject_type = 'group' THEN a.subject_id END),
+       CASE WHEN a.subject_type = 'person' THEN a.subject_id END,
+       a.priority, a.created_at, NULL::numeric, a.privacy
+FROM biz.alerts a
+WHERE a.status = 'open'
+
+UNION ALL
+
+SELECT d.org_id, 'draft'::text, d.id, d.code, COALESCE(d.title, d.kind), d.body->>'text',
+       d.subject_type, d.subject_id, d.group_id,
+       CASE WHEN d.subject_type = 'person' THEN d.subject_id END,
+       CASE WHEN (d.flags->>'over_threshold')::boolean THEN 'P1' ELSE 'P2' END,
+       d.created_at, NULL::numeric, 'chat_ok'::text
+FROM biz.action_drafts d
+WHERE d.status = 'pending';
+
 -- ─── c) liên kết / phản hồi / mute / một hàng Cần quyết ─────────────────────
 CREATE TABLE IF NOT EXISTS biz.signal_links (
   org_id     uuid NOT NULL REFERENCES core.organizations(id) ON DELETE CASCADE,

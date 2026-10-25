@@ -62,17 +62,14 @@ _UUID_RE = "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-f
 
 
 def alert_in_hidden_group_sql(role_code: str, alias: str) -> str:
-    """Cảnh báo có chứng cứ (đơn vị ý nghĩa / tin thô) thuộc một nhóm mà `role_code` không được xem. Cảnh báo gắn vào
-    NGƯỜI (đối thủ xuất hiện, phản hồi chậm…) vẫn mang kết luận / tên khách trích từ tin trong nhóm «Chỉ Sếp»."""
-    uid = f"CASE WHEN ev->>'id' ~ '{_UUID_RE}' THEN (ev->>'id')::uuid END"
-    return (
-        "EXISTS (SELECT 1 FROM biz.alerts hal CROSS JOIN LATERAL jsonb_array_elements("
-        "CASE WHEN jsonb_typeof(hal.evidence) = 'array' THEN hal.evidence ELSE '[]'::jsonb END) ev"
-        f" WHERE hal.id = {alias}.item_id AND ("
-        f"(ev->>'type' = 'meaning_unit' AND EXISTS (SELECT 1 FROM clean.meaning_units hu WHERE hu.id = {uid}"
-        f" AND hu.group_id IS NOT NULL AND NOT ({group_view_sql(role_code, 'hu.group_id')})))"
-        f" OR (ev->>'type' = 'raw' AND EXISTS (SELECT 1 FROM raw.events hr WHERE hr.id = {uid}"
-        f" AND hr.group_id IS NOT NULL AND NOT ({group_view_sql(role_code, 'hr.group_id')})))))")
+    """Cảnh báo thuộc một nhóm mà `role_code` không được xem: cột `group_id` của tín hiệu, `subject_type='group'`,
+    hoặc chứng cứ (đơn vị ý nghĩa / tin thô `raw` / `raw_event` của đường nhanh T1 / mọi phần tử mang `raw_event_id`).
+    Cảnh báo gắn vào NGƯỜI vẫn mang kết luận / tên khách trích từ tin trong nhóm «Chỉ Sếp».
+    v0.1.76: MỘT cổng với `gh.biz.intel.access` (L-90)."""
+    from gh.biz.intel.access import alert_hidden_group_sql
+
+    return (f"EXISTS (SELECT 1 FROM biz.alerts hal WHERE hal.id = {alias}.item_id"
+            f" AND {alert_hidden_group_sql(role_code, 'hal')})")
 
 
 def item_scope_sql(sc: Scope, alias: str, user: CurrentUser) -> tuple[str, dict[str, Any]]:
@@ -92,6 +89,13 @@ def item_scope_sql(sc: Scope, alias: str, user: CurrentUser) -> tuple[str, dict[
         dm_cond = (f"({dm_cond} AND ({alias}.group_id IS NULL OR {gv})"
                    f" AND ({alias}.subject_type IS DISTINCT FROM 'group' OR {sv})"
                    f" AND ({alias}.item_type <> 'alert' OR NOT {alert_in_hidden_group_sql(user.role_code, alias)}))")
+    # v0.1.76 (T1): tín hiệu `privacy='console_pin'` chỉ Owner có PIN thấy — cùng cổng với `/signals`
+    # (gh.biz.intel.access).
+    from gh.biz.intel.access import privacy_sql
+
+    pv = privacy_sql(user, f"{alias}.privacy")
+    if pv != "TRUE":
+        dm_cond = f"({dm_cond} AND ({alias}.item_type <> 'alert' OR {pv}))"
     if sc.is_all:
         return dm_cond, dp
     sw, sp = sc.subject_sql(f"{alias}.subject_type", f"{alias}.subject_id")

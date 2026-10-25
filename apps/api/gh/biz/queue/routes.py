@@ -202,6 +202,11 @@ async def list_inbox(tab: Literal["all", "opportunity", "alert", "approval", "re
 
 
 async def _load_item(db: AsyncSession, user: service.CurrentUser, sc: Scope, item_id: uuid.UUID) -> Any:
+    # v0.1.76 (T1): cảnh báo/tín hiệu đi qua CÙNG cổng với `/signals/{id}` (console_pin: vai khác 404,
+    # Owner chưa PIN 423; nhóm ẩn 404).
+    from gh.biz.intel import access
+
+    await access.require_alert(db, user, item_id)
     where, params = qsvc.item_scope_sql(sc, "i", user)
     r = (await db.execute(
         text(_ITEMS_CTE.format(scope=where, silence="TRUE") + " SELECT * FROM items WHERE item_id = :i"),  # noqa: S608

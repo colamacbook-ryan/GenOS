@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gh.auth import rbac, service
 from gh.auth.deps import current_user, require, require_owner
-from gh.biz.intel import asks, catalog, digest, levels, mutes, signals
+from gh.biz.intel import access, catalog, digest, levels, mutes, signals
 from gh.chassis import actionlog
 from gh.db import DB
 from gh.errors import ApiError, not_found, pin_required
@@ -33,7 +33,7 @@ _LIST_COLS = """a.id, a.code, a.kind, a.level, a.gate, a.candidate, a.delivery, 
 
 
 def _can_see_private(user: service.CurrentUser) -> bool:
-    return user.role_code == rbac.OWNER and user.pin_active()
+    return access.can_see_private(user)
 
 
 def _item(r: Any) -> dict[str, Any]:
@@ -62,8 +62,8 @@ async def list_signals(kind: str | None = None, level: str | None = None, status
                AND (CAST(:c AS text) IS NULL OR EXISTS (SELECT 1 FROM mem.group_contexts gc WHERE gc.org_id = a.org_id
                     AND gc.group_id = a.group_id AND gc.context = :c AND gc.source = 'owner'))"""
     rows = (await db.execute(text(f"""SELECT {_LIST_COLS} FROM biz.alerts a WHERE {where}
-                                      AND (:p OR a.privacy = 'chat_ok') ORDER BY a.created_at DESC LIMIT :n"""),  # noqa: S608
-                             {**params, "p": private})).all()
+                                      AND {access.alert_visible_sql(user, 'a')} ORDER BY a.created_at DESC LIMIT :n"""),  # noqa: S608
+                             params)).all()
     hidden = 0
     if not private and user.role_code == rbac.OWNER:
         hidden = int((await db.execute(text(f"SELECT count(*) FROM biz.alerts a WHERE {where} AND a.privacy = 'console_pin'"),  # noqa: S608
@@ -72,6 +72,7 @@ async def list_signals(kind: str | None = None, level: str | None = None, status
 
 
 async def _load(db: AsyncSession, user: service.CurrentUser, signal_id: uuid.UUID) -> Any:
+    await access.require_alert(db, user, signal_id)        # console_pin / nhóm ẩn — một cổng với /inbox, /explain
     r = (await db.execute(text(f"SELECT {_LIST_COLS}, a.evidence, a.fact_ids FROM biz.alerts a WHERE a.id = :i AND a.org_id = :o"),  # noqa: S608
                           {"i": signal_id, "o": user.org_id})).one_or_none()
     if r is None or r.kind in ("system", "legacy"):
@@ -133,10 +134,18 @@ async def signal_transition(signal_id: uuid.UUID, body: TransitionIn, user: serv
 
 @router.get("/asks")
 async def list_asks(user: service.CurrentUser = Depends(require_owner), db: AsyncSession = DB) -> dict[str, Any]:
-    items = await asks.list_open(db, user.org_id)
+    """Hàng Cần quyết đang mở. Ask gắn tín hiệu `console_pin` / nhóm ẩn, và ask nói về người (`profile`, `identity`) chỉ hiện khi
+    đã mở PIN — còn lại chỉ báo số ẩn (`hidden_pin_n`), như `/signals`."""
+    base = """FROM ops.asks q LEFT JOIN biz.alerts a ON a.id = q.signal_id AND a.org_id = q.org_id
+              WHERE q.org_id = :o AND q.state = 'open' AND (q.expires_at IS NULL OR q.expires_at > now())"""
+    vis = access.ask_visible_sql(user, "q", "a")
+    rows = (await db.execute(text(f"""SELECT q.id, q.code, q.source, q.decision_kind, q.summary, q.signal_id, q.expires_at {base}
+                                      AND {vis} ORDER BY q.created_at DESC LIMIT 50"""), {"o": user.org_id})).all()  # noqa: S608
+    hidden = int((await db.execute(text(f"SELECT count(*) {base} AND NOT {vis}"), {"o": user.org_id})).scalar_one())  # noqa: S608
     return {"items": [{"id": str(a.id), "code": a.code, "source": a.source, "decision_kind": a.decision_kind, "summary": a.summary,
                        "signal_id": str(a.signal_id) if a.signal_id else None,
-                       "expires_at": a.expires_at.isoformat() if a.expires_at else None} for a in items]}
+                       "expires_at": a.expires_at.isoformat() if a.expires_at else None} for a in rows],
+            "hidden_pin_n": hidden}
 
 
 class MuteIn(BaseModel):
