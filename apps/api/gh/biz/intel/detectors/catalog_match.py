@@ -39,7 +39,9 @@ MAX_DEMANDS = 500
 _MONEY = re.compile(r"(\d+(?:[.,]\d+)*)\s*(tỷ|tỉ|triệu|tr|nghìn|ngàn|k|đồng|đ)\b", re.I)
 _UNIT = {"tỷ": 1e9, "tỉ": 1e9, "triệu": 1e6, "tr": 1e6, "nghìn": 1e3, "ngàn": 1e3, "k": 1e3, "đồng": 1.0, "đ": 1.0}
 _BELOW = re.compile(r"(?:dưới|ít hơn|nhỏ hơn|thấp hơn|<)\s*(\d+(?:[.,]\d+)*)\s*(tỷ|tỉ|triệu|tr|nghìn|ngàn|k|đồng|đ)\b", re.I)
-_FORBID = re.compile(r"không\s+(?:làm|bán|nhận|kinh doanh|buôn)\s+(?:mặt\s+)?hàng\s+(.+)$", re.I)
+_FORBID = re.compile(r"không\s+(?:làm|bán|nhận|kinh doanh|buôn)\s+(?:mặt\s+)?(?:hàng\s+)?(.+)$", re.I)
+# "không bán chịu", "không nhận đơn lẻ", "không làm cuối tuần"… không phải mặt hàng: bỏ qua (không tự suy diễn)
+_NOT_GOODS = ("đơn", "chịu", "nợ", "khách", "cho ", "cuối tuần", "ngoài", "online", "trả", "giờ", "ngày", "tối", "đêm", "xa")
 
 
 @dataclass(frozen=True)
@@ -64,7 +66,7 @@ def parse_value_limits(limit_texts: list[str]) -> ValueLimits:
             mins.append(_amount(m.group(1), m.group(2)))
             continue
         f = _FORBID.search(t.strip())
-        if f:
+        if f and not f.group(1).strip().lower().startswith(_NOT_GOODS) and len(f.group(1).split()) <= 5:
             words = frozenset(msvc._norm_words(f.group(1)))
             if words:
                 forbidden.append(words)
@@ -83,19 +85,33 @@ def below_min(lim: ValueLimits, value_vnd: float | None) -> bool:
 
 # ─── đồng bộ hàng của Sếp → tín hiệu cung tổng hợp ───────────────────────────
 
-async def sync_supply(db: AsyncSession, org_id: uuid.UUID) -> dict[uuid.UUID, uuid.UUID]:
+@dataclass
+class Ctx:
+    """Dữ liệu dùng chung cho cả lượt chấm (một lần mỗi lượt, không lặp theo từng cầu)."""
+    items: list[catalog.Item]
+    supply_ids: dict[uuid.UUID, uuid.UUID]
+    prof: profile_read.ProfileSnapshot
+    limits: ValueLimits
+
+
+async def load_ctx(db: AsyncSession, org_id: uuid.UUID) -> Ctx:
+    items = await catalog.list_items(db, org_id, state="active")            # một tập duy nhất ⇒ mọi hàng đều có trong supply_ids
+    supply_ids = await sync_supply(db, org_id, items)
+    prof = await profile_read.snapshot(db, org_id)
+    return Ctx(items, supply_ids, prof, parse_value_limits([i.text for i in prof.items if i.predicate == "owner_value_limit"]))
+
+
+async def sync_supply(db: AsyncSession, org_id: uuid.UUID, active: list[catalog.Item]) -> dict[uuid.UUID, uuid.UUID]:
     """{catalog_item_id: supply_signal_id} cho hàng `active`; hàng khác (gợi ý chưa duyệt / lưu trữ) ⇒ đóng tín hiệu cung và gỡ gợi ý còn `suggested`."""
-    items = await catalog.list_items(db, org_id, state=None)
     out: dict[uuid.UUID, uuid.UUID] = {}
-    for it in items:
-        if it.state == "active":
-            out[it.id] = (await db.execute(text("""
-                INSERT INTO biz.market_signals (org_id, side, item, quantity, unit, value_vnd, status, meaning_unit_id)
-                VALUES (:o, 'supply', :n, NULL, :u, NULL, 'open', :i)
-                ON CONFLICT (meaning_unit_id) WHERE meaning_unit_id IS NOT NULL
-                DO UPDATE SET item = EXCLUDED.item, unit = EXCLUDED.unit, value_vnd = NULL, status = 'open'
-                RETURNING id"""), {"o": org_id, "n": it.name[:300], "u": it.unit, "i": it.id})).scalar_one()
-    inactive = [it.id for it in items if it.state != "active"]
+    for it in active:
+        out[it.id] = (await db.execute(text("""
+            INSERT INTO biz.market_signals (org_id, side, item, quantity, unit, value_vnd, status, meaning_unit_id)
+            VALUES (:o, 'supply', :n, NULL, :u, NULL, 'open', :i)
+            ON CONFLICT (meaning_unit_id) WHERE meaning_unit_id IS NOT NULL
+            DO UPDATE SET item = EXCLUDED.item, unit = EXCLUDED.unit, value_vnd = NULL, status = 'open'
+            RETURNING id"""), {"o": org_id, "n": it.name[:300], "u": it.unit, "i": it.id})).scalar_one()
+    inactive = list((await db.execute(text("SELECT id FROM biz.catalog_items WHERE org_id = :o AND state <> 'active'"), {"o": org_id})).scalars().all())
     if inactive:
         await db.execute(text("UPDATE biz.market_signals SET status = 'closed' WHERE org_id = :o AND side = 'supply' AND meaning_unit_id = ANY(:i)"),
                          {"o": org_id, "i": inactive})
@@ -121,8 +137,9 @@ def _deadline(needed_by: Any) -> datetime | None:
     return datetime.combine(needed_by, time(23, 59, 59), tzinfo=levels.VN)
 
 
-async def process_demand(db: AsyncSession, org_id: uuid.UUID, demand_id: uuid.UUID, now: datetime) -> list[signals.Signal]:
-    """Chấm tín hiệu cầu với hàng của Sếp; ghi `biz.matches` (cung tổng hợp từ catalog) và, nếu khớp Nguồn lực, một tín hiệu `co_hoi_ket_noi`."""
+async def process_demand(db: AsyncSession, org_id: uuid.UUID, demand_id: uuid.UUID, now: datetime, ctx: Ctx | None = None) -> list[signals.Signal]:
+    """Chấm tín hiệu cầu với hàng của Sếp; ghi `biz.matches` (cung tổng hợp từ catalog) và, nếu khớp Nguồn lực, một tín hiệu `co_hoi_ket_noi`.
+    `ctx` (từ `load_ctx`) do bên chạy hàng loạt truyền vào để không đồng bộ/đọc Hồ sơ lại cho từng cầu."""
     d = (await db.execute(text("""
         SELECT s.id, s.item, s.category, s.quantity, s.unit, s.value_vnd, s.location, s.needed_by, s.meaning_unit_id, s.created_at,
                mu.person_id, mu.group_id, mu.observed_at, mu.confidence
@@ -130,15 +147,14 @@ async def process_demand(db: AsyncSession, org_id: uuid.UUID, demand_id: uuid.UU
         WHERE s.id = :i AND s.org_id = :o AND s.side = 'demand' AND s.status = 'open'"""), {"i": demand_id, "o": org_id})).one_or_none()
     if d is None:
         return []
-    supply_ids = await sync_supply(db, org_id)
-    prof = await profile_read.snapshot(db, org_id)
-    lim = parse_value_limits([i.text for i in prof.items if i.predicate == "owner_value_limit"])
+    ctx = ctx or await load_ctx(db, org_id)
+    supply_ids, prof, lim = ctx.supply_ids, ctx.prof, ctx.limits
     if touches_forbidden(lim, d.item):
         return []                                                                   # trái Hồ sơ ("không làm hàng X") ⇒ không ghép, không báo
     demand = {"item": d.item, "category": d.category, "quantity": float(d.quantity) if d.quantity else None, "unit": d.unit,
               "value_vnd": float(d.value_vnd) if d.value_vnd else None, "location": d.location}
     scored: list[tuple[float, list[str], catalog.Item]] = []
-    for it in await catalog.list_items(db, org_id, state="active"):
+    for it in ctx.items:
         score, reasons = msvc.score_match(demand, msvc.catalog_as_supply(it, demand))
         if score >= msvc.MIN_MATCH_SCORE:
             scored.append((score, reasons, it))
@@ -179,6 +195,10 @@ async def process_demand(db: AsyncSession, org_id: uuid.UUID, demand_id: uuid.UU
         opportunity=levels.Opportunity(catalog_score=best[0] if best else None, resource_owner_confirmed=resource_ok, touches_value_limit=below),
         money_vnd=int(value) if value else None, money_basis="estimated" if value else None,
         impact_base=levels.impact_base(KIND, important=True), subject_entity_id=ent)
+    if (await db.execute(text("""SELECT 1 FROM biz.alerts WHERE org_id = :o AND kind = :k AND case_key = :ck
+                                 AND status IN ('resolved', 'broken', 'expired', 'dismissed') LIMIT 1"""),
+                         {"o": org_id, "k": KIND, "ck": case_key})).first() is not None:
+        return []                                                                   # thẻ đã kết thúc (Sếp bỏ qua/đã xử lý/hết hạn) ⇒ không báo lại
     first = ev[0]
     evidence = [signals.EvidenceIn(type="meaning_unit", id=d.meaning_unit_id, quote_status="verified" if verified else "unverifiable",
                                    raw_event_id=first.raw_event_id, received_at=first.raw_received_at, quote=(first.quote or None) if verified else None)]
@@ -204,12 +224,12 @@ def _json(v: Any) -> str:
 
 async def recompute_org(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> int:
     """Chấm lại mọi tín hiệu cầu còn mở gần đây (hàng của Sếp đổi: thêm/lưu trữ/đổi giá). Chạy lại an toàn (khoá `case_key`, ON CONFLICT)."""
-    await sync_supply(db, org_id)
+    ctx = await load_ctx(db, org_id)
     ids = (await db.execute(text("""SELECT id FROM biz.market_signals WHERE org_id = :o AND side = 'demand' AND status = 'open'
                                     AND created_at > :t ORDER BY created_at DESC LIMIT :n"""),
                             {"o": org_id, "t": now - timedelta(days=RECENT_DEMAND_DAYS), "n": MAX_DEMANDS})).scalars().all()
     n = 0
     for i in ids:
-        n += len(await process_demand(db, org_id, i, now))
+        n += len(await process_demand(db, org_id, i, now, ctx))
     return n
 

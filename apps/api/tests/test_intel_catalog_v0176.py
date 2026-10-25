@@ -347,3 +347,72 @@ async def test_catalog_supply_hidden_from_non_owner_but_owner_sees(app, db, clie
         assert (await api.get("/matches?source=market")).json()["total"] == 0
         assert "thép phi 16" not in (await api.get("/opportunities")).text
         assert (await api.send("POST", f"/matches/{mid}/reject")).status_code in (403, 404)   # auditor không có quyền ghi
+
+
+# ─── review: không báo lại thẻ đã kết thúc; catalog lớn; chạy lại gọn ────────
+
+@pytest.mark.parametrize("terminal", ["dismissed", "resolved", "expired"])
+async def test_recompute_never_recreates_a_finished_signal(db, terminal: str) -> None:  # type: ignore[no-untyped-def]
+    """Sếp bỏ qua/đã xử lý hoặc thẻ hết hạn: cron chấm lại KHÔNG được tạo thẻ 🔴 mới cùng `case_key`."""
+    w = await _setup(db)
+    await _demand(db, w)
+    a = await _one(db, w.org)
+    await db.execute(text("UPDATE biz.alerts SET status = :s WHERE id = :i"), {"s": terminal, "i": a.id})
+    await db.commit()
+    await catalog_match.recompute_org(db, w.org, clock.now())
+    await db.commit()
+    rows = (await db.execute(text("SELECT status FROM biz.alerts WHERE org_id = :o AND kind = 'co_hoi_ket_noi'"), {"o": w.org})).all()
+    assert [r.status for r in rows] == [terminal]
+
+
+async def test_large_catalog_does_not_break_demand_hook(db) -> None:  # type: ignore[no-untyped-def]
+    """> 500 hàng: hai tập LIMIT khác nhau từng gây KeyError làm hỏng cả hook ghi tín hiệu cầu."""
+    w = await _setup(db)
+    await db.execute(text("""INSERT INTO biz.catalog_items (org_id, name, state, source, created_at)
+                             SELECT :o, 'hàng lưu trữ ' || g, 'archived', 'owner', now() + make_interval(secs => g) FROM generate_series(1, 510) g"""),
+                     {"o": w.org})
+    await db.commit()
+    await _demand(db, w)
+    assert (await _one(db, w.org)).level == "red"
+
+
+async def test_recompute_syncs_supply_and_loads_profile_once_per_run(db, monkeypatch: pytest.MonkeyPatch) -> None:  # type: ignore[no-untyped-def]
+    """Một lượt = một lần đồng bộ cung + đọc Hồ sơ (`load_ctx`), không lặp theo từng cầu (`signals.upsert` tự đọc Hồ sơ riêng — của T1)."""
+    w = await _setup(db)
+    for n in ("A", "B", "C"):
+        await _demand(db, w, name=n)
+    calls = {"sync": 0, "ctx": 0}
+    real_sync, real_ctx = catalog_match.sync_supply, catalog_match.load_ctx
+
+    async def sync(*a: Any, **k: Any) -> Any:
+        calls["sync"] += 1
+        return await real_sync(*a, **k)
+
+    async def ctx(*a: Any, **k: Any) -> Any:
+        calls["ctx"] += 1
+        return await real_ctx(*a, **k)
+
+    monkeypatch.setattr(catalog_match, "sync_supply", sync)
+    monkeypatch.setattr(catalog_match, "load_ctx", ctx)
+    await catalog_match.recompute_org(db, w.org, clock.now())
+    assert calls == {"sync": 1, "ctx": 1}
+
+
+def test_forbidden_goods_without_the_word_hang() -> None:
+    lim = catalog_match.parse_value_limits(["không bán thép", "không bán chịu", "không nhận đơn dưới 5 triệu"])
+    assert catalog_match.touches_forbidden(lim, "thép phi 16") is True
+    assert catalog_match.touches_forbidden(lim, "xi măng") is False
+    assert lim.min_value_vnd == 5_000_000                                     # "không bán chịu" / "không nhận đơn…" không thành mặt hàng
+
+
+async def test_manual_recompute_endpoint_also_matches_catalog(app, db, owner_api) -> None:  # type: ignore[no-untyped-def]
+    from tests.test_owner_profile_support import link_owner_user
+
+    org = (await db.execute(text("SELECT id FROM core.organizations LIMIT 1"))).scalar_one()
+    w = await link_owner_user(db, org)
+    await _demand(db, w)                                                      # chưa có hàng nào
+    await catalog.create(db, org, name="thép phi 16", user_id=w.user, unit="tấn", price_vnd=14_600_000)
+    await db.commit()
+    assert (await owner_api.get("/matches?source=catalog")).json()["total"] == 0
+    assert (await owner_api.send("POST", "/matches/recompute")).status_code == 200
+    assert (await owner_api.get("/matches?source=catalog")).json()["total"] == 1

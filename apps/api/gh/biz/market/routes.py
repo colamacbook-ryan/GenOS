@@ -28,6 +28,7 @@ from gh.biz.core.scope import (
     not_found,
     scope_for,
 )
+from gh.biz.intel.detectors import catalog_match
 from gh.biz.market import service as msvc
 from gh.biz.market.jobs import recompute_matches_org
 from gh.biz.market.service import CLOSED_STAGES, OPEN_STAGES, STAGES, person_or_group_scope_sql
@@ -35,6 +36,7 @@ from gh.chassis import actionlog
 from gh.data.common import iso, mask_text, parse_cursor
 from gh.db import DB
 from gh.errors import ApiError, field_errors, forbidden
+from gh.refinery import clock
 
 router = APIRouter(tags=["market"])
 
@@ -450,6 +452,7 @@ async def matches_recompute_now(user: service.CurrentUser = Depends(WRITE), db: 
     """Chấm lại điểm ghép ngay theo yêu cầu (ngoài lịch chạy nền `gh.biz.market.jobs.matches_recompute` mỗi 15
     phút) — cùng cách `POST /graph/recompute` của cụm Bản đồ quan hệ."""
     n = await recompute_matches_org(db, user.org_id)
+    n += await catalog_match.recompute_org(db, user.org_id, clock.now())     # cả hàng của Sếp (T6)
     await actionlog.record(db, org_id=user.org_id, actor_type="user", actor_id=user.actor_id,
                            action="matches.recomputed", target_type="matches", target_id="all", result="ok",
                            detail={"matches": n}, ip=user.ip)
