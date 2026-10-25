@@ -34,6 +34,22 @@ KIND_ACTION = {"message": "message.send", "quotation": "quotation.send", "contra
 CHANNEL_LABELS = {"zalo": "Zalo", "whatsapp": "WhatsApp", "telegram": "Telegram", "linkedin": "LinkedIn"}
 SENDABLE = {"message", "quotation", "contract"}
 PENDING, APPROVED, EDITED, REJECTED, SENT, FAILED = "pending", "approved", "edited", "rejected", "sent", "failed"
+#: v0.1.76 (T2, spec r4 §4.4): tin gửi ngoài dài hơn mức này không duyệt trong chat được
+#: (= `chat_pending.OUTBOUND_TEXT_MAX`).
+CHAT_OUTBOUND_MAX = 1500
+
+
+def ask_decision_kind(kind: str, *, has_target: bool, text_len: int, over_threshold: bool) -> str:
+    """Bảng ánh xạ nháp → `decision_kind` của ask (spec r4 §4.4, luật 19/10):
+    tin có người nhận, ≤ 1.500 ký tự, không vượt ngưỡng ⇒ `outbound` («OK #MÃ» từng tin);
+    tin dài / vượt ngưỡng / không nơi nhận, báo giá, hợp đồng, ghi hệ thống ngoài, báo cáo ⇒ `console`
+    (Bàn làm việc + PIN);
+    nhắc việc ⇒ `internal`."""
+    if kind == "message":
+        return "outbound" if has_target and text_len <= CHAT_OUTBOUND_MAX and not over_threshold else "console"
+    if kind == "reminder":
+        return "internal"
+    return "console"
 DECIDED = (APPROVED, EDITED, REJECTED, SENT, FAILED)
 
 # Gửi lỗi (v0.1.61, F048): Sếp phải được báo (chuông + sự kiện `draft.failed`) bằng câu tiếng Việt theo mã; mã gốc
@@ -220,6 +236,14 @@ async def create_draft(db: AsyncSession, *, org_id: uuid.UUID, kind: str, title:
                            detail={"action_key": key, "reasons": decision.reasons, "flags": flags})
     if status == SENT:
         await _execute_internal(db, org_id, row.id, key, body_text, subject, created_by)
+    else:   # v0.1.76 (T2): mỗi nháp chờ duyệt = MỘT ask (một hàng Cần quyết); tóm tắt do HỆ THỐNG viết
+        from gh.biz.intel import asks
+
+        await asks.create(db, org_id, source="draft", ref_id=row.id,
+                          decision_kind=ask_decision_kind(kind, has_target=target is not None, text_len=len(body_text),
+                                                          over_threshold=over),
+                          summary=f"Duyệt bản nháp {row.code} ({KIND_LABELS[kind]})",
+                          created_via="console" if created_by else "job")
     if redis is not None:
         await realtime.publish(redis, "draft.new", await list_item(db, row.id), org_id=org_id)
     return {"id": row.id, "code": row.code, "status": status, "outcome": decision.outcome,

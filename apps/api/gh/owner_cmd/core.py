@@ -289,14 +289,43 @@ def _addr(user: service.CurrentUser | None) -> str:
 # ─── lệnh chỉ đọc ────────────────────────────────────────────────────────────
 
 
+#: v0.1.76 (T2): `/hom_nay` = bản tin KÉO từ `digest.build` (cùng bộ dựng bản tin Zalo, CNS-035), tối đa chừng này dòng mục.
+DIGEST_MAX_LINES = 10
+LEVEL_ICON = {"red": "🔴", "amber": "🟠", "grey": "⚪"}
+
+
+async def digest_lines(ctx: Context, now: datetime) -> list[str]:
+    """Mục tình báo cho kênh chat (`audience='chat'`: bỏ `console_pin`), KHÔNG đánh dấu đã gửi (kéo không "tiêu" mục)."""
+    from gh.biz.intel import digest
+
+    async with ctx.sm() as db:
+        await _set_org(db, ctx.org_id)
+        d = await digest.build(db, ctx.org_id, now, audience="chat", only_new=False)
+        await db.rollback()
+    out: list[str] = []
+    for it in d.items[:DIGEST_MAX_LINES]:
+        parts = [f"{it.n}. {LEVEL_ICON.get(it.level, '•')} {otext.line(it.title, 120)}"]
+        if it.quote:
+            parts.append(f"«{otext.line(it.quote, 80)}»")
+        parts += it.line_facts
+        if it.ask_code:
+            parts.append(f"(#{it.ask_code})")
+        out.append(otext.defang(" ".join(parts)))
+    if len(d.items) > DIGEST_MAX_LINES:
+        out.append(f"… và {len(d.items) - DIGEST_MAX_LINES} mục nữa (xem Console)")
+    return out
+
+
 async def hom_nay(ctx: Context) -> Reply:
     now = datetime.now(UTC)
+    intel = await digest_lines(ctx, now)
     async with ctx.sm() as db:
         await _set_org(db, ctx.org_id)
         sections = await briefing.collect(db, ctx.org_id, briefing.slot_for(now), now)
         await db.rollback()
     items = otext.briefing_items(sections)
-    lines = [f"Hôm nay · {briefing.slot_for(now).label}", "", *(items or [NOTHING])]
+    body = [*intel, *([""] if intel and items else []), *items]
+    lines = [f"Hôm nay · {briefing.slot_for(now).label}", "", *(body or [NOTHING])]
     lines += ["", f"Mở Console: {_console_link('/overview')}"]
     return Reply("\n".join(lines))
 
@@ -316,11 +345,40 @@ async def todos(ctx: Context) -> list[dict[str, Any]]:
     return [t for t in (got if isinstance(got, list) else []) if isinstance(t, dict)]
 
 
+#: Nhãn loại quyết định của ask (spec r4 §4.4) trên /viec.
+ASK_KIND_VI = {"self": "việc riêng — OK là làm", "internal": "OK là làm", "outbound": "tin gửi ngoài — OK #MÃ từng tin",
+               "console": "mở Console (mã PIN)"}
+
+
+async def ask_lines(ctx: Context) -> list[str]:
+    """v0.1.76 (T2): hàng Cần quyết — asks đang mở của tổ chức (mã, tóm tắt do hệ thống viết, loại quyết định)."""
+    from gh.biz.intel import asks
+
+    async with ctx.sm() as db:
+        await _set_org(db, ctx.org_id)
+        rows = await asks.list_open(db, ctx.org_id, limit=MAX_LIST + 1)
+        n = int((await db.execute(text("""SELECT count(*) FROM ops.asks WHERE org_id = :o AND state = 'open'
+                                          AND (expires_at IS NULL OR expires_at > now())"""), {"o": ctx.org_id})).scalar_one())
+        await db.rollback()
+    if not rows:
+        return []
+    out = [f"Chờ Sếp quyết ({n}):"]
+    out += [f"• #{a.code} — {otext.defang(otext.line(a.summary))} · {ASK_KIND_VI.get(a.decision_kind, a.decision_kind)}"
+            for a in rows[:MAX_LIST]]
+    if n > MAX_LIST:
+        out.append(f"… và {n - MAX_LIST} mục nữa")
+    return out
+
+
 async def viec(ctx: Context, *, todos_fn: Callable[[Context], Awaitable[list[dict[str, Any]]]] | None = None) -> Reply:
+    pending = await ask_lines(ctx)
     items = await (todos_fn or todos)(ctx)
-    if not items:
+    if not items and not pending:
         return Reply(f"{NOTHING}\nMở Console: {_console_link('/overview')}")
-    lines = [f"Việc Sếp cần làm ({len(items)}):"]
+    lines = [*pending, ""] if pending else []
+    if not items:
+        return Reply("\n".join([*lines, f"Mở Console: {_console_link('/overview')}"]))
+    lines += [f"Việc Sếp cần làm ({len(items)}):"]
     lines += [f"• {otext.defang(otext.line(str(t.get('title') or t.get('key') or '?')))}" for t in items[:MAX_LIST]]
     if len(items) > MAX_LIST:
         lines.append(f"… và {len(items) - MAX_LIST} việc nữa")
@@ -590,6 +648,9 @@ async def nhap(cmd: OwnerCommand, ctx: Context) -> Reply:
         return Reply(msg)
     if cmd.via in chat_pending.CHAT_VIAS:
         return await _chat_reply(ctx, cmd, made, says, cid)
+    for p in made:
+        await chat_pending.ensure_ask(ctx.sm, ctx.redis, ctx.org_id, p, cmd.via)   # v0.1.76: một hàng, một mã
+    # Telegram dẫn Sếp sang Console (Console còn hiện mã hex — mã ask lên giao diện ở Bước 2) ⇒ giữ mã hex ở đây
     lines = [f"Đã soạn đề xuất {short_id(p['id'])}: {otext.defang(str(p['summary']))}" for p in made]
     if says:
         lines.append(otext.defang(" ".join(says)))
@@ -617,6 +678,7 @@ async def _chat_reply(
     budget = chat_pending.REPLY_MAX - chat_pending.REPLY_TAIL_RESERVE
     registered = 0
     for p in made:
+        await chat_pending.ensure_ask(ctx.sm, ctx.redis, ctx.org_id, p, cmd.via)   # v0.1.76: một hàng, một mã
         kind = chat_pending.kind_of(p)
         q = chat_pending.question(p, cmd.via)
         if kind == "outbound" and used + len(q) + 2 > budget:
@@ -640,7 +702,7 @@ async def _chat_reply(
     if len(made) > 1:
         lines.append(
             "Có nhiều đề xuất — Sếp trả lời OK kèm mã của từng cái (ví dụ OK "
-            + chat_pending.code_of(made[0]["id"])
+            + chat_pending.code_of(made[0])
             + ")."
         )
     links = [(CONSOLE_BUTTON, _console_link(f"/overview?gen={cid}"))] if console else []

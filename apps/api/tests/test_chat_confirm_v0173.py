@@ -79,7 +79,7 @@ async def live_sessions() -> list[Any]:
 def code_in(reply: str) -> str:
     import re
 
-    m = re.search(r"#[0-9A-F]{6}", reply)
+    m = re.search(r"#[A-HJ-NP-Z2-9]{5}\b|#[0-9A-F]{6}", reply)   # v0.1.76: mã ask 5 ký tự (mã hex cũ: đề xuất chưa có ask)
     assert m, reply
     return m.group(0)
 
@@ -425,9 +425,9 @@ async def test_p21_bare_ok_on_stale_or_superseded_proposal_needs_code(chat: Chat
     pid = (await chat_pending.entries(chat.redis, chat.org, "zalo"))[0]
     await chat.redis.set(chat_pending.last_key(chat.org, "zalo"), f"{pid}|{time.time() - chat_pending.FRESH_S - 5}")
     reply = await chat.say("OK")
-    assert "Gọi anh Nam" in reply and f"OK {chat_pending.code_of(pid)}" in reply and await count("biz.tasks") == before
+    assert "Gọi anh Nam" in reply and f"OK {chat_pending.code_of(await proposals.load(chat.redis, pid))}" in reply and await count("biz.tasks") == before
     assert (await proposals.load(chat.redis, pid))["status"] == "pending"
-    await chat.say(f"OK {chat_pending.code_of(pid)}")
+    await chat.say(f"OK {chat_pending.code_of(await proposals.load(chat.redis, pid))}")
     assert await count("biz.tasks") == before + 1
 
 
