@@ -210,6 +210,17 @@ def test_clock_jobs_still_registered_in_production() -> None:
     assert set(stepmod.POST_TURN_HOOKS) <= {x.name for x in biz.hooks()}
 
 
+def test_every_intel_job_is_run_or_explicitly_skipped() -> None:
+    """Job `intel_*` mới của production (vd `intel_units`) mà harness không chạy ⇒ G-KB đo thiếu im lặng (bài học T12). Phải vào
+    CLOCK_JOBS hoặc SKIPPED_INTEL_JOBS kèm lý do."""
+    import step as stepmod
+
+    from gh import biz
+
+    intel = {fn.__name__ for fn, _ in biz.jobs() if fn.__name__.startswith("intel_")}
+    assert intel - set(stepmod.CLOCK_JOBS) - set(stepmod.SKIPPED_INTEL_JOBS) == set()
+
+
 def test_export_dot2_maps_raw_ids_and_splits_push_log(tmp_path: Path) -> None:
     import step as stepmod
 

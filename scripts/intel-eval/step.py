@@ -489,7 +489,10 @@ def write_error(info: dict[str, Any]) -> str | None:
 
 #: Job định kỳ của production (`gh.biz.jobs()`, đúng lịch cron đã đăng ký) đổi `biz.alerts` hoặc nuôi tín hiệu. Lịch lấy từ registry, không chép tay.
 CLOCK_JOBS = ("intel_reeval", "intel_project_disputes", "intel_fraud", "intel_generic", "intel_promises", "intel_questions_clock",
-              "intel_questions_scan", "intel_outcomes", "intel_heat_scan", "matches_recompute", "mem_heat_weekly")
+              "intel_questions_scan", "intel_units", "intel_outcomes", "intel_heat_scan", "matches_recompute", "mem_heat_weekly")
+#: Job `intel_*` của production CỐ Ý không chạy (lý do bên dưới). Mọi job `intel_*` khác PHẢI nằm trong CLOCK_JOBS — test canh
+#: (`test_every_intel_job_is_run_or_explicitly_skipped`) để job mới (vd `intel_units` của T12) không bị bỏ sót im lặng.
+SKIPPED_INTEL_JOBS = ("intel_delivery", "intel_weekly")
 #: Không chạy (lý do): intel_delivery/shadow_pack/intel_weekly — chỉ xếp tin ra kênh/đo lường, không đổi mức (🔴 đã đẩy đọc ở `pushed_at`);
 #: watchdog_tick/backup_flush — giám sát bridge thật (harness không có nhịp tim ⇒ báo động giả); duty — agent trực kênh (gọi model, ngoài Tình báo);
 #: mem_consolidate — cửa sổ giờ + `now()` của SQL theo giờ thật. Hook sau sàng lọc: chỉ `market_signal_capture` (cầu → `catalog_match`).
