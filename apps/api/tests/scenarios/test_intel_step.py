@@ -111,7 +111,12 @@ def test_step_init_next_submit_export_runs_real_pipeline_and_writes_facts(tmp_pa
         sig = tmp_path / "signals.json"
         step("export", "--out", str(sig), "--run", str(run))
         s = json.loads(sig.read_text())
-        assert s["format"] == "gkb-step-signals/1" and s["contract_errors"] == 0 and len(s["units"]) == 1 and len(s["facts"]) == 1
+        assert s["format"] == "gkb-step-signals/2" and s["contract_errors"] == 0 and len(s["units"]) == 1 and len(s["facts"]) == 1
+        # Đợt 2: job đồng hồ production chạy theo giờ dữ liệu, export có biz.alerts + bản tin sáng (owner) sau `now` cuối
+        assert s["clock"]["ticks"] > 0 and s["clock"]["job_runs"]["intel_reeval"] > 0 and s["clock"]["job_runs"]["intel_generic"] > 0
+        assert s["clock"]["job_errors"] == {} and "market_signal_capture" in s["clock"]["hooks"]
+        assert isinstance(s["alerts"], list) and isinstance(s["pushed"], list) and s["alerts_at"].endswith("07:30:00+07:00")
+        assert s["digest"]["audience"] == "owner" and s["digest"]["at"] == s["alerts_at"] and s["alerts_end_at"] < s["alerts_at"]
         assert s["facts"][0]["predicate"] == "contact_phone" and s["units"][0]["verified"] is True
         # facts THẬT được ghi bởi pipeline (verify.check → facts.assert_fact), không chỉ nằm trong đầu ra của model
         with psycopg.connect(f"{PG}/{cfg['db']}") as c:
@@ -164,3 +169,57 @@ def test_write_error_reports_failed_writes() -> None:
     assert stepmod.write_error({"write_errors": ["write_failed"]}) == "write_failed×1"
     assert stepmod.write_error({"write_errors": ["unit_write_failed", "unit_write_failed_safety", "unit_write_failed"]}) == \
         "unit_write_failed×2,unit_write_failed_safety×1"
+
+
+def test_fire_times_follow_worker_cron_in_vn_time() -> None:
+    """Lịch job đồng hồ = lịch arq của worker (giờ VN): mỗi phút, 5 phút lệch 3, giờ cố định; đầu khoảng mở, cuối khoảng đóng."""
+    from zoneinfo import ZoneInfo
+
+    import step as stepmod
+
+    vn = ZoneInfo("Asia/Ho_Chi_Minh")
+    t0 = h.datetime(2026, 10, 1, 8, 0, 30, tzinfo=vn)
+    assert [x.minute for x in stepmod.fire_times({"minute": set(range(60))}, t0, t0 + h.timedelta(minutes=3), vn)] == [1, 2, 3]
+    assert [x.minute for x in stepmod.fire_times({"minute": set(range(3, 60, 5))}, t0, t0 + h.timedelta(minutes=20), vn)] == [3, 8, 13, 18]
+    utc = h.datetime(2026, 9, 30, 12, 0, tzinfo=h.timezone.utc)                      # = 19:00 giờ VN
+    heat = stepmod.fire_times({"hour": {1, 7, 19}, "minute": {55}}, utc, utc + h.timedelta(days=2), vn)
+    assert [(x.day, x.hour) for x in heat] == [(30, 19), (1, 1), (1, 7), (1, 19), (2, 1), (2, 7)]
+    assert all(x.utcoffset() == h.timedelta(hours=7) for x in heat)
+
+
+def test_next_morning_digest_is_first_0730_after_end() -> None:
+    from zoneinfo import ZoneInfo
+
+    import step as stepmod
+
+    vn = ZoneInfo("Asia/Ho_Chi_Minh")
+    d = h.datetime(2026, 10, 1, 6, 0, tzinfo=vn)
+    assert stepmod.next_morning_digest(d, vn) == d.replace(hour=7, minute=30)
+    assert stepmod.next_morning_digest(d.replace(hour=7, minute=30), vn) == d.replace(day=2, hour=7, minute=30)
+    assert stepmod.next_morning_digest(h.datetime(2026, 10, 1, 2, 0, tzinfo=h.timezone.utc), vn) == d.replace(day=2, hour=7, minute=30)   # 09:00 VN
+
+
+def test_clock_jobs_still_registered_in_production() -> None:
+    """Harness lấy lịch từ registry worker (`gh.biz.jobs()`/`hooks()`): job/hook Đợt 2 đổi tên hay bị gỡ ⇒ đỏ ở đây, không âm thầm bỏ đo."""
+    import step as stepmod
+
+    from gh import biz
+
+    names = {fn.__name__ for fn, _ in biz.jobs()}
+    assert set(stepmod.CLOCK_JOBS) <= names
+    assert set(stepmod.POST_TURN_HOOKS) <= {x.name for x in biz.hooks()}
+
+
+def test_export_dot2_maps_raw_ids_and_splits_push_log(tmp_path: Path) -> None:
+    import step as stepmod
+
+    (tmp_path / "state.json").write_text(json.dumps({"status": "done", "clock": {"ticks": 3}}))
+    a = {"id": "s1", "code": "ALR-0001", "kind": "rui_ro_lua_dao", "raw_event_ids": ["u1", "u9"]}
+    (tmp_path / "alerts_final.json").write_text(json.dumps({"at": "2026-10-02T07:30:00+07:00", "alerts": [a], "first_seen": {"s1": "2026-10-01T09:00:00+07:00"}}))
+    log = [{"event": "new", "id": "s1"}, {"event": "push", "id": "s1", "pushed_at": "x"}, {"event": "shadow_push", "id": "s1"}]
+    (tmp_path / "alerts_log.jsonl").write_text("\n".join(json.dumps(x) for x in log) + "\n")
+    d = stepmod.export_dot2(tmp_path, {"m_u1": "t0007"})
+    assert d["alerts"][0]["raw_ids"] == ["t0007", "u9"] and "raw_event_ids" not in d["alerts"][0]
+    assert d["alerts"][0]["first_seen_at"] == "2026-10-01T09:00:00+07:00" and d["clock"] == {"ticks": 3}
+    assert [e["event"] for e in d["pushed"]] == ["push"] and len(d["shadow_pushed"]) == 1 and len(d["alert_events"]) == 1
+    assert d["alerts_end"] == [] and d["digest"] is None                    # lần chạy thiếu tệp ⇒ rỗng, không lỗi
