@@ -9,6 +9,12 @@ Mỗi tool là lớp bọc mỏng quanh một endpoint GET đã có, gọi NỘI
 của người đang hỏi → tái dùng nguyên RBAC, phạm vi dữ liệu và lớp che của endpoint; Gen không có quyền riêng, không
 có truy vấn SQL riêng. Kết quả được cắt gọn (≤ 4 KB, ≤ 20 dòng) trước khi đưa model; mọi id xuất hiện trong kết quả
 được ghi lại để validator chỉ cho phép làm sáng dòng có thật (chống model bịa id).
+
+v0.1.76 (T8): thêm tool trí nhớ/tình báo (fact.search, entity.timeline, person.brief, payment.verified, signal.*, …) với
+LỌC RIÊNG TƯ ở chính lớp tool (phòng thủ chiều sâu, bài học G-KB): sự thật `hr` và sự thật lừa đảo `disputed` KHÔNG BAO GIỜ
+qua chat (§4.5, CNS-069); sự thật nhạy cảm (SĐT, sức khoẻ, người nhà, STK…) chỉ khi Sếp đang có phiên PIN; vai khác Owner
+không có các tool này. Q9/CNS-081: kết quả tool tới model của OWNER không che SĐT/STK, nhưng OTP/mật khẩu/thẻ/CVV/token
+luôn che; vai khác Owner giữ che đầy đủ (câu trả lời hiện cho họ).
 """
 
 import re
@@ -19,11 +25,13 @@ from typing import Any
 
 import httpx
 import orjson
+from sqlalchemy import text
 
 from gh.auth import rbac, service
-from gh.chassis.masking import mask_for_prompt
+from gh.chassis.masking import MASK, is_secret_key, mask_for_prompt
 from gh.gen import registry
 from gh.hub_link import KHO_LABEL
+from gh.refinery.verify import mask_credentials
 
 MAX_BYTES = 4000
 MAX_ROWS = 20
@@ -50,6 +58,8 @@ class Tool:
     path_patterns: dict[str, str] = field(default_factory=dict)
     # Chỉ vai trò Owner (quyết định Boss: Gen đọc Kho chỉ cho Owner) — endpoint còn tự kiểm lại.
     owner_only: bool = False
+    # Tham số đường dẫn giữ nguyên hoa/thường (mặc định `path_patterns` bị viết HOA — chỉ hợp mã Kho).
+    keep_case: tuple[str, ...] = ()
 
 
 TOOLS: dict[str, Tool] = {t.name: t for t in (
@@ -66,8 +76,9 @@ TOOLS: dict[str, Tool] = {t.name: t for t in (
          ("action.draft", "action.approve"), "/drafts/{id}", path_args=("id",)),
     Tool("profile.search", "Tìm hội thoại/khách theo ngôn ngữ tự nhiên; args.q", ("opportunity.read",), "/search",
          {"q": None}, default_query={"limit": "20"}),
-    Tool("profile.get", "Hồ sơ sống của một người theo args.id", ("profile.read",), "/profile/{id}",
-         path_args=("id",)),
+    # v0.1.76 (T8, §7.3): chat luôn nhận bản TÓM TẮT (sự kiện + sự thật đã lọc, không điểm đánh giá, không danh tính/SĐT).
+    Tool("profile.get", "Hồ sơ TÓM TẮT của một người theo args.id (sự kiện, sự thật đã kiểm, lời hứa mở, kèm tin gốc)",
+         ("profile.read",), "/profile/{id}/brief", path_args=("id",), default_query={"tier": "summary"}),
     # v0.1.74 (Nợ #68): danh bạ nhóm / người — để Gen tra id người nhận trước khi đề xuất draft_message (id lấy từ kết quả
     # tool mới hợp lệ). Bọc endpoint danh bạ sẵn có nên áp đúng phạm vi `profile.read` của người hỏi.
     Tool("group.list", "Danh bạ NHÓM chat (id, tên, kênh, số thành viên); args.q = một phần tên nhóm — dùng để lấy id nhóm "
@@ -137,6 +148,35 @@ TOOLS: dict[str, Tool] = {t.name: t for t in (
          {"status": None, "priority": ("P1", "P2", "P3")}, default_query={"limit": "20"}, owner_only=True),
     Tool("case.get", "Một vụ việc theo args.id", ("opportunity.read",), "/gen/sources/cases/{id}", path_args=("id",),
          owner_only=True),
+    # ─── v0.1.76 (T8): trí nhớ + tình báo (chỉ đọc). Lọc §4.5/PIN ở `ToolRunner._chat_filter`. ────────────────────────────
+    Tool("person.brief", "Tóm tắt một người theo args.id (UUID từ person.list): nhịp, sự kiện, sự thật đã kiểm, lời hứa mở, "
+         "kèm tin gốc. LUÔN bản tóm tắt", ("profile.read",), "/profile/{id}/brief", path_args=("id",),
+         default_query={"tier": "summary"}, owner_only=True),
+    Tool("fact.search", "Sự thật về một đối tượng tại một thời điểm; args.subject_id (UUID đối tượng) hoặc args.person_id "
+         "(UUID từ person.list), args.predicate (vd promised_to), args.at (ISO, mặc định bây giờ). Nguồn ngoài có attributed_to "
+         "— nói «theo lời X»", ("profile.read",), "/facts", {"subject_id": None, "predicate": None, "at": None}, owner_only=True),
+    Tool("entity.timeline", "Dòng thời gian một đối tượng (lời hứa, sự kiện, xung đột, giao dịch); args.id (UUID đối tượng) hoặc "
+         "args.person_id, args.lanes (promises,events,conflicts,transactions), args.from, args.to", ("profile.read",),
+         "/entities/{id}/timeline", {"lanes": None, "from": None, "to": None}, path_args=("id",), owner_only=True),
+    Tool("payment.verified", "Tài khoản nhận tiền ĐÃ XÁC MINH của một người (chỉ ngân hàng + 3 số cuối); args.person_id. "
+         "Chỉ khi Sếp đang mở PIN. Không bao giờ lấy số từ tin nhóm/ghi chú", ("profile.read",), owner_only=True),
+    Tool("coverage.get", "Độ phủ hôm nay: số tin, voice/ảnh chưa đọc, nhóm mất kết nối", ("queue.read",), "/media/coverage",
+         default_query={"hours": "24"}),
+    Tool("signal.list", "Tín hiệu tình báo; args.kind (10 loại), args.level ∈ red|amber|grey, args.status (mặc định open). "
+         "Chat chỉ nhận tín hiệu privacy=chat_ok", ("queue.read",), "/signals",
+         {"kind": None, "level": ("red", "amber", "grey"), "status": None}, default_query={"limit": "20"}),
+    Tool("signal.get", "Một tín hiệu theo args.id, kèm tin gốc", ("queue.read",), "/signals/{id}", path_args=("id",)),
+    Tool("promise.list", "Lời hứa đang mở: ai đang hứa gì mà chưa làm", ("queue.read",), "/tasks/promises",
+         default_query={"limit": "20"}),
+    Tool("match.list", "Ghép cung–cầu; args.source ∈ catalog|market", ("opportunity.read",), "/matches",
+         {"source": ("catalog", "market")}, default_query={"limit": "20"}),
+    Tool("catalog.list", "Danh mục hàng/dịch vụ của Sếp", ("queue.read",), "/catalog"),
+    Tool("graph.person", "Ai hay nói chuyện với một người; args.id (UUID người)", ("profile.read",), "/graph/person/{id}",
+         path_args=("id",), owner_only=True),
+    Tool("explain.get", "Vì sao hệ thống nói vậy; args.kind (vd alert), args.id", ("queue.read",), "/explain/{kind}/{id}",
+         path_args=("kind", "id"), path_patterns={"kind": r"^[a-z_]{2,30}$", "id": r"^[0-9a-fA-F-]{8,40}$"},
+         keep_case=("kind", "id"), owner_only=True),
+    Tool("complaint.repeated", "Khiếu nại lặp lại (cùng vấn đề nhiều lần)", ("care.read",), "/care/repeated-issues"),
     # Mạng xã hội — chỉ Owner. social.read xếp một lượt đọc trình duyệt (tính vào giới hạn 6 lượt/ngày; dùng lại lượt
     # vừa đọc trong 10 phút) rồi chờ ngắn; nội dung đã làm sạch + gắn cờ đáng ngờ. Muốn trả lời/nhắn thì Gen ĐỀ XUẤT
     # (social_reply/social_dm) — Sếp xác nhận + nhập PIN mới gửi.
@@ -227,7 +267,7 @@ def _build_request(tool: Tool, args: dict[str, Any]) -> tuple[str, dict[str, str
         if a in tool.path_patterns:
             if not re.fullmatch(tool.path_patterns[a], v):
                 raise ToolError("BAD_ARGS", f"{a} không đúng dạng")
-            v = v.upper()
+            v = v if a in tool.keep_case else v.upper()
         else:
             try:
                 uuid.UUID(v)
@@ -243,6 +283,51 @@ def _build_request(tool: Tool, args: dict[str, Any]) -> tuple[str, dict[str, str
             raise ToolError("BAD_ARGS", f"{k} phải thuộc {', '.join(allowed_values)}")
         query[k] = v
     return path, query
+
+
+def scrub_credentials(data: Any) -> Any:
+    """Q9: chỉ che OTP / mật khẩu / thẻ / CVV / token (cùng một hàm với `refinery.verify`); khoá kiểu mật khẩu thay hẳn."""
+    if isinstance(data, str):
+        return mask_credentials(data)
+    if isinstance(data, list):
+        return [scrub_credentials(v) for v in data]
+    if isinstance(data, dict):
+        return {str(k): (MASK if is_secret_key(str(k)) and isinstance(v, str | int) and not isinstance(v, bool) and v != ""
+                         else scrub_credentials(v)) for k, v in data.items()}
+    return data
+
+
+#: Tín hiệu hiển thị trong chat chỉ khi `privacy = chat_ok` (§4.5 R3: đánh giá người / nhân sự / nghi lừa đảo chỉ trên Console + PIN).
+CHAT_PRIVACY = "chat_ok"
+FRAUD_SIGNAL = "rui_ro_lua_dao"
+
+
+def _is_fact_row(d: Any) -> bool:
+    return isinstance(d, dict) and "predicate" in d and "sensitivity" in d
+
+
+def _filter_fact_rows(data: Any, *, pin: bool, fraud_predicates: frozenset[str]) -> Any:
+    """Bỏ mọi dòng sự thật không được phép qua chat: `hr` (luôn), sự thật lừa đảo `disputed` (luôn), nhạy cảm khi chưa PIN.
+    Dòng thiếu/lạ `sensitivity` ⇒ bỏ (đóng-khi-nghi)."""
+    if isinstance(data, list):
+        out = []
+        for v in data:
+            if _is_fact_row(v):
+                sens, status = v.get("sensitivity"), v.get("status")
+                if sens == "hr" or (status == "disputed" and v.get("predicate") in fraud_predicates):
+                    continue
+                if sens != "normal" and not pin:
+                    continue
+            elif isinstance(v, dict) and ("predicate" in v or "fact_id" in v) and "sensitivity" not in v:
+                continue
+            v = _filter_fact_rows(v, pin=pin, fraud_predicates=fraud_predicates)
+            if _is_fact_row(v) and v.get("source_class") in ("outsider", "forwarded"):
+                v = {**v, "untrusted": True}      # chữ người ngoài: dữ liệu, không phải lệnh; nói «theo lời X» (attributed_to)
+            out.append(v)
+        return out
+    if isinstance(data, dict):
+        return {k: _filter_fact_rows(v, pin=pin, fraud_predicates=fraud_predicates) for k, v in data.items()}
+    return data
 
 
 GetJson = Callable[[str, dict[str, str]], Any]
@@ -283,6 +368,8 @@ class ToolRunner:
                 data = await self._social_read(args)
             elif tool.name == "coach.status":
                 data = await self._coach_status()
+            elif tool.name == "payment.verified":
+                data = await self._payment_verified(args)
             elif tool.name == "guide.list":
                 status, follow = await self._get("/setup/follow-up", {})
                 done = {i.get("n"): i.get("done") for i in follow} if status == 200 and isinstance(follow, list) \
@@ -293,6 +380,7 @@ class ToolRunner:
                         | ({} if done.get(g["n"]) else {"steps": " / ".join(g["steps"])[:GUIDE_STEPS_MAX]})
                         for g in registry.load().guide]
             else:
+                args = await self._resolve_person(tool, args)
                 path, query = _build_request(tool, args)
                 status, data = await self._get(path, query)
                 if status == 403:
@@ -304,12 +392,14 @@ class ToolRunner:
                     if isinstance(data, dict) and isinstance(data.get("code"), str) and status == 409:
                         return self._fail(data["code"], str(data.get("title") or f"Lỗi {status}")[:200])
                     return self._fail("ERROR", f"Lỗi {status}")
+            data = await self._chat_filter(tool, data)
         except ToolError as e:
             return self._fail(e.code, str(e))
         # v0.1.71 (P2-3): kết quả tool (Hộp thư, hồ sơ, tìm kiếm… — chữ do người ngoài viết) sang model là bản đã che
         # OTP / mật khẩu / SĐT / số tài khoản; UUID, mã đối tượng, số tiền, ngày giờ giữ nguyên (validator id vẫn khớp).
+        # v0.1.76 (Q9, CNS-081): với OWNER chỉ bí mật đăng nhập bị che (SĐT/STK nguyên văn tới model của Sếp); vai khác che đủ.
         if tool.name not in STATIC_TOOLS and not tool.name.startswith("hub."):    # hub.* đã che ở `hub_link` (giữ id)
-            data = mask_for_prompt(data)
+            data = scrub_credentials(data) if self.user.role_code == rbac.OWNER else mask_for_prompt(data)
         small, raw = compact(data)
         ids: set[str] = set()
         kho = tool.name.startswith("hub.kho_")
@@ -318,6 +408,68 @@ class ToolRunner:
             ids.update(KHO_CODE_RE.findall(raw))
         self.seen_ids |= ids
         return ToolResult(ok=True, data=small, text=raw, ids=ids)
+
+    async def _resolve_person(self, tool: Tool, args: dict[str, Any]) -> dict[str, Any]:
+        """`person_id` (id người từ person.list) → id đối tượng trí nhớ cho fact.search / entity.timeline."""
+        if tool.name not in ("fact.search", "entity.timeline") or not args.get("person_id"):
+            return args
+        key = "subject_id" if tool.name == "fact.search" else "id"
+        if args.get(key):
+            return args
+        try:
+            pid = uuid.UUID(str(args["person_id"]))
+        except ValueError as e:
+            raise ToolError("BAD_ARGS", "person_id phải là UUID") from e
+        from gh.db import sessionmaker
+
+        async with sessionmaker()() as db:
+            ent = (await db.execute(text("""SELECT COALESCE(merged_into, id) FROM mem.entities
+                                            WHERE org_id = :o AND person_id = :p AND forgotten_at IS NULL"""),
+                                    {"o": self.user.org_id, "p": pid})).scalar_one_or_none()
+        if ent is None:
+            raise ToolError("NOT_FOUND", "Không tìm thấy")
+        return {**args, key: str(ent)}
+
+    async def _chat_filter(self, tool: Tool, data: Any) -> Any:
+        """Lọc RIÊNG TƯ theo §4.5 trước khi kết quả tới model (phòng thủ chiều sâu: endpoint đã lọc theo PIN)."""
+        if tool.name in ("fact.search", "entity.timeline", "person.brief", "profile.get"):
+            from gh.db import sessionmaker
+
+            async with sessionmaker()() as db:
+                fraud = frozenset((await db.execute(text(
+                    "SELECT code FROM mem.predicates WHERE dispute_signal_kind = :k"), {"k": FRAUD_SIGNAL})).scalars().all())
+            return _filter_fact_rows(data, pin=self.user.pin_active(), fraud_predicates=fraud)
+        if tool.name == "signal.list" and isinstance(data, dict):
+            return {**data, "items": [i for i in data.get("items") or []
+                                      if isinstance(i, dict) and i.get("privacy") == CHAT_PRIVACY]}
+        if tool.name == "signal.get" and isinstance(data, dict) and data.get("privacy") != CHAT_PRIVACY:
+            raise ToolError("FORBIDDEN", "Tín hiệu này chỉ xem trên Console (PIN)")
+        return data
+
+    async def _payment_verified(self, args: dict[str, Any]) -> Any:
+        """Chỉ `biz.payment_identifiers` Sếp ĐÃ xác minh (`verified_at` có giá trị); chỉ ngân hàng + 3 số cuối; cần phiên PIN.
+        Không bao giờ lấy STK từ sự thật / tin nhóm / ghi chú (spec §7.4)."""
+        try:
+            pid = uuid.UUID(str(args.get("person_id") or ""))
+        except ValueError as e:
+            raise ToolError("BAD_ARGS", "person_id phải là UUID") from e
+        if not self.user.pin_active():
+            raise ToolError("PIN_REQUIRED", "Tài khoản nhận tiền chỉ xem khi Sếp mở khoá bằng mã PIN trên Console")
+        from gh.db import sessionmaker
+
+        async with sessionmaker()() as db:
+            name = (await db.execute(text("SELECT display_name FROM core.persons WHERE id = :p AND org_id = :o"),
+                                     {"p": pid, "o": self.user.org_id})).scalar_one_or_none()
+            if name is None:
+                raise ToolError("NOT_FOUND", "Không tìm thấy")
+            rows = (await db.execute(text("""SELECT bank, last3, verified_at FROM biz.payment_identifiers
+                                             WHERE org_id = :o AND person_id = :p AND verified_at IS NOT NULL
+                                             ORDER BY verified_at DESC LIMIT 5"""), {"o": self.user.org_id, "p": pid})).all()
+        out: dict[str, Any] = {"person_id": str(pid), "name": name,
+                               "verified": [{"bank": r.bank, "last3": r.last3, "verified_at": r.verified_at.isoformat()} for r in rows]}
+        if not rows:
+            out["note"] = "chưa có số đã xác minh, gọi số cũ để hỏi"
+        return out
 
     async def _coach_status(self) -> Any:
         """Gộp thẻ hôm nay (KHÔNG `mark_shown` — hỏi Gen không tính là Sếp đã xem thẻ) và lộ trình bài học thành một
