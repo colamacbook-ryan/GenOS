@@ -22,6 +22,7 @@ Không ghi nội dung tin vào log (chỉ mã đơn vị + tên lỗi).
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -41,6 +42,9 @@ log = logging.getLogger("gh.intel.units")
 DETECTOR, VERSION = "units", "1"
 WINDOW_DAYS = 14
 MAX_D2_PER_RUN = 5
+MAX_FAILS = 3                         # đơn vị lỗi ≥ 3 lượt ⇒ dấu "đã xử lý" (như fraud), không lấy lại mãi
+RUN_BUDGET_S = 30.0                   # trần thời gian một lượt chiếu một tổ chức
+FAIL_ACTION = "intel.units.fail"
 
 #: Chủ sở hữu của từng `kind` dạng đơn vị. "units" = module này chiếu. Thêm loại vào `levels.KINDS` mà không khai ở đây ⇒ test đỏ.
 OWNERS: dict[str, str] = {
@@ -66,7 +70,7 @@ def _when(v: Any) -> datetime | None:
     if not isinstance(v, str) or not v:
         return None
     try:
-        return datetime.fromisoformat(v)
+        return levels._aware(datetime.fromisoformat(v))           # dữ liệu cũ/lỗi thiếu múi giờ ⇒ coi là UTC (không làm hỏng phép so)
     except ValueError:
         return None
 
@@ -356,60 +360,84 @@ def hard_side(w: g.Who, sets: g.OrgSets) -> bool:
     return g.hard_owner_side(w, sets)
 
 
+async def failed(db: AsyncSession, org_id: uuid.UUID, uid: uuid.UUID, err: Exception, *, done_action: str) -> None:
+    """Một đơn vị lỗi (ngoài `SignalError`): ghi một lần lỗi (mã đơn vị + tên lỗi, không nội dung); đủ `MAX_FAILS` lần ⇒ dấu "đã xử lý" để
+    không lấy lại mãi. Đơn vị khác trong lô vẫn chạy (một đơn vị hỏng không chặn lừa đảo của đơn vị khác)."""
+    log.warning("units: đơn vị %s lỗi: %s", uid, type(err).__name__)
+    await mark(db, org_id, uid, type(err).__name__, action=FAIL_ACTION)
+    n = (await db.execute(text("SELECT count(*) FROM ops.action_log WHERE org_id = :o AND action = :a AND target_id = :t"),
+                          {"o": org_id, "a": FAIL_ACTION, "t": str(uid)})).scalar_one()
+    if int(n) >= MAX_FAILS:
+        await mark(db, org_id, uid, "max_fails", action=done_action)
+
+
 async def project(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, call: Any = None, limit: int = 200,
-                  max_d2: int = MAX_D2_PER_RUN) -> list[signals.Signal]:
+                  max_d2: int = MAX_D2_PER_RUN, budget_s: float = RUN_BUDGET_S) -> list[signals.Signal]:
+    """Chiếu các đơn vị loại `UNIT_KINDS` của một tổ chức. Một lượt mỗi tổ chức (`pg_try_advisory_xact_lock`), trần thời gian `budget_s`
+    (phần còn lại để lượt sau — mới nhất trước). Bên gọi commit."""
+    got = (await db.execute(text("SELECT pg_try_advisory_xact_lock(hashtext('intel_units:' || :o))"), {"o": str(org_id)})).scalar_one()
+    if not got:
+        return []                                           # lượt khác đang chạy cho tổ chức này
     rows = (await db.execute(text(pending_sql("intel.units.done")),
                              {"o": org_id, "k": list(UNIT_KINDS), "since": now - timedelta(days=WINDOW_DAYS), "n": limit})).all()
     if not rows:
         return []
+    started = time.monotonic()
     sets = await g.org_sets(db, org_id)
     out: list[signals.Signal] = []
-    d2_left = max_d2 if call is not None else 0
-    for u in rows:
+    d2_left = [max_d2 if call is not None else 0]
+    for k, u in enumerate(rows):
+        if time.monotonic() - started > budget_s:
+            log.warning("units: hết trần thời gian lượt chiếu, còn %d đơn vị để lượt sau", len(rows) - k)
+            break
         ev = await evidence_of(db, u)
         if not ev:
             continue
         try:
             async with db.begin_nested():
-                if u.kind_hint == "su_kien_dip" and (await db.execute(text("""
-                        SELECT 1 FROM mem.fact_evidence fe JOIN mem.facts f ON f.id = fe.fact_id
-                        WHERE fe.meaning_unit_id = :u AND f.org_id = :o AND f.predicate = 'scheduled_event' LIMIT 1"""),
-                        {"u": u.id, "o": org_id})).first() is not None:
-                    await mark(db, org_id, u.id, "scheduled_event_fact")          # sự thật dịp/sự kiện là chủ (generic.project_events)
-                    continue
-                p = await people(db, org_id, u, sets, [e.raw_event_id for e in ev])
-                if u.kind_hint in ("xung_dot_khieu_nai", "quan_he_nong_nguoi"):
-                    routed = await _route_conflict(db, org_id, u, p, sets, ev, now)
-                    if routed is not None:
-                        out.extend(routed)
-                        await mark(db, org_id, u.id, "conflicts")
-                        continue
-                cust = (u.kind_hint in ("xung_dot_khieu_nai", "quan_he_nong_nguoi") and p.sender is not None and g.hard_customer(p.sender, sets))
-                by = verified(u).get("status_by_person_id")
-                by_w = await g.who_person(db, org_id, _uuid(by))
-                li = signal_input(u.kind_hint, u, p, sets, customer_of_owner=cust, status_by_owner_side=g.hard_owner_side(by_w, sets))
-                tk = f"g:{u.group_id}" if u.group_id else ""
-                fx: dict[str, Any] = {"unit_id": str(u.id)}
-                up = signals.UpsertIn(
-                    kind=u.kind_hint, title=TITLES.get(u.kind_hint, "Tín hiệu"), summary=g.safe(u.conclusion, 300) or None,
-                    detector=DETECTOR, detector_version=VERSION, level_input=li, evidence=unit_evidence(u, ev),
-                    case_key=_case_key(u.kind_hint, u, p, li, ev[0].raw_event_id), thread_key=tk or None, group_id=u.group_id,
-                    subject_type="group" if u.group_id else None, subject_id=u.group_id,
-                    person_ids=[x.person_id for x in [p.sender, *p.victim_who, *p.impersonated_who] if x is not None and x.person_id][:8],
-                    due_at=li.deadline_at, facts=fx)
-                if not (d2_left > 0 and u.kind_hint == levels.FR):
-                    out.append(await signals.upsert(db, org_id, up, now))
-                    continue
-                first = await signals.upsert(db, org_id, up, now) if li.hard_rule_hit else None   # luật cứng: đẩy NGAY, (d2) sau chỉ thêm cờ
-                li2, res = await _d2(db, org_id, u, li, tk, now, call)                         # không luật cứng: (d2) TRƯỚC khi ghi
-                if res is not None:
-                    d2_left -= 1
-                    up = up.model_copy(update={"level_input": li2, "facts": {**fx, "d2": res}})
-                out.append(await signals.upsert(db, org_id, up, now) if (first is None or res is not None) else first)
+                out.extend(await _project_one(db, org_id, u, ev, sets, now, call, d2_left))
         except signals.SignalError as e:
             log.warning("units: bỏ qua đơn vị %s: %s", u.id, type(e).__name__)
             await mark(db, org_id, u.id, type(e).__name__)
+        except Exception as e:  # noqa: BLE001 — một đơn vị hỏng không chặn cả lô (savepoint đã hoàn tác phần của nó)
+            await failed(db, org_id, u.id, e, done_action="intel.units.done")
     return out
+
+
+async def _project_one(db: AsyncSession, org_id: uuid.UUID, u: Any, ev: list[Any], sets: g.OrgSets, now: datetime, call: Any,
+                       d2_left: list[int]) -> list[signals.Signal]:
+    if u.kind_hint == "su_kien_dip" and (await db.execute(text("""
+            SELECT 1 FROM mem.fact_evidence fe JOIN mem.facts f ON f.id = fe.fact_id
+            WHERE fe.meaning_unit_id = :u AND f.org_id = :o AND f.predicate = 'scheduled_event' LIMIT 1"""),
+            {"u": u.id, "o": org_id})).first() is not None:
+        await mark(db, org_id, u.id, "scheduled_event_fact")          # sự thật dịp/sự kiện là chủ (generic.project_events)
+        return []
+    p = await people(db, org_id, u, sets, [e.raw_event_id for e in ev])
+    if u.kind_hint in ("xung_dot_khieu_nai", "quan_he_nong_nguoi"):
+        routed = await _route_conflict(db, org_id, u, p, sets, ev, now)
+        if routed is not None:
+            await mark(db, org_id, u.id, "conflicts")
+            return routed
+    cust = (u.kind_hint in ("xung_dot_khieu_nai", "quan_he_nong_nguoi") and p.sender is not None and g.hard_customer(p.sender, sets))
+    by_w = await g.who_person(db, org_id, _uuid(verified(u).get("status_by_person_id")))
+    li = signal_input(u.kind_hint, u, p, sets, customer_of_owner=cust, status_by_owner_side=g.hard_owner_side(by_w, sets))
+    tk = f"g:{u.group_id}" if u.group_id else ""
+    fx: dict[str, Any] = {"unit_id": str(u.id)}
+    up = signals.UpsertIn(
+        kind=u.kind_hint, title=TITLES.get(u.kind_hint, "Tín hiệu"), summary=g.safe(u.conclusion, 300) or None,
+        detector=DETECTOR, detector_version=VERSION, level_input=li, evidence=unit_evidence(u, ev),
+        case_key=_case_key(u.kind_hint, u, p, li, ev[0].raw_event_id), thread_key=tk or None, group_id=u.group_id,
+        subject_type="group" if u.group_id else None, subject_id=u.group_id,
+        person_ids=[x.person_id for x in [p.sender, *p.victim_who, *p.impersonated_who] if x is not None and x.person_id][:8],
+        due_at=li.deadline_at, facts=fx)
+    if not (d2_left[0] > 0 and u.kind_hint == levels.FR):
+        return [await signals.upsert(db, org_id, up, now)]
+    first = await signals.upsert(db, org_id, up, now) if li.hard_rule_hit else None   # luật cứng: đẩy NGAY, (d2) sau chỉ thêm cờ
+    li2, res = await _d2(db, org_id, u, li, tk, now, call)                         # không luật cứng: (d2) TRƯỚC khi ghi
+    if res is not None:
+        d2_left[0] -= 1
+        up = up.model_copy(update={"level_input": li2, "facts": {**fx, "d2": res}})
+    return [await signals.upsert(db, org_id, up, now) if (first is None or res is not None) else first]
 
 
 async def intel_units(ctx: dict[str, Any]) -> dict[str, int]:

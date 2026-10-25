@@ -133,3 +133,19 @@ async def test_case3_new_complaint_and_leave_share_one_key_and_close_together(db
         "SELECT case_key, kind, level_input ->> 'closure' AS cl FROM biz.alerts WHERE org_id = :o"), {"o": w.org})).all()}
     assert li[(old_key + "|#2", "xung_dot_khieu_nai")] == "owner" and li[(old_key + "|#2", "quan_he_nong_nguoi")] == "owner"
     assert li[(old_key, "xung_dot_khieu_nai")] == "none"
+
+
+async def test_fraud_effective_case_reuses_fast_path_key_only_inside_window(db: AsyncSession) -> None:
+    """M6: vụ của đường nhanh (khoá `raw|`) gắn `facts.fraud_case` = khoá mạnh; tin sau TRONG cửa sổ ⇒ dùng lại khoá raw|; NGOÀI cửa sổ ⇒ khoá
+    mạnh (vụ mới) — bỏ kiểm cửa sổ thì test này đỏ."""
+    w = await world(db)
+    raw = (await db.execute(text("""INSERT INTO raw.events (org_id, occurred_at, channel_id, external_msg_id, kind, body_text, payload, content_hash)
+                                    VALUES (:o, :t, (SELECT id FROM core.channels WHERE org_id = :o LIMIT 1), gen_random_uuid()::text, 'text', 'x', '{}', '\\x01')
+                                    RETURNING id"""), {"o": w.org, "t": A})).scalar_one()
+    strong = L.case_key(L.FR, at=A, impersonated_entity_id="ent-x")
+    weak = L.case_key(L.FR, at=A, raw_event_id=str(raw))
+    ev = signals.EvidenceIn(type="raw_event", id=raw, source_field="body", span_start=0, span_end=1)
+    await signals.upsert(db, w.org, signals.UpsertIn(kind=L.FR, title="t", detector="raw_tail", level_input=_li(A), evidence=[ev], case_key=weak,
+                                                     facts={"fraud_case": strong}), A)
+    assert await fraud._effective_case(db, w.org, strong, A + timedelta(hours=2)) == weak
+    assert await fraud._effective_case(db, w.org, strong, A + timedelta(hours=30)) == strong
