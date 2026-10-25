@@ -68,6 +68,7 @@ H_STK = "stk_khac_lich_su+money_request"
 H_IMP = "mao_danh_xin_tien"
 H_STRANGER = "nguoi_la_xin_tien"
 H_GOODS = "don_lon_khong_coc"
+H_STK_CLAIM = "doi_stk_xin_tien"
 
 
 class FraudError(ValueError):
@@ -200,8 +201,9 @@ def _accounts(fold: str, idx: list[int], n: int) -> list[Account]:
         labelled = _ACCT_LABEL.search(before) is not None or re.match(rf"\s*[-(]?\s*{_BANKS}\b", after) is not None
         if not labelled:
             continue
-        if _PHONE.match(digits) and not re.search(r"\b(?:stk|so tai khoan|so tk|tai khoan|tk)\b", before[-20:]):
-            continue                                   # trông như SĐT mà không có nhãn STK sát bên ⇒ SĐT
+        bank_near = re.search(rf"\b{_BANKS}\b", before[-20:]) is not None or re.match(rf"\s*[-(]?\s*{_BANKS}\b", after) is not None
+        if _PHONE.match(digits) and not (bank_near or re.search(r"\b(?:stk|so tai khoan|so tk|tai khoan|tk)\b", before[-20:])):
+            continue                                   # trông như SĐT mà không có nhãn STK / ngân hàng / ví sát bên ⇒ SĐT
         bank = re.search(_BANKS, before[-40:] + " " + after)
         out.append(Account(_digest(digits), digits[-3:], bank.group(0).upper()[:16] if bank else None, _orig_span(idx, n, m.start(1), m.end(1))))
     seen: set[str] = set()
@@ -375,7 +377,9 @@ def decide(sc: Scan, ctx: Ctx) -> Decision | None:
             spans.append(payee.span if payee else (0, 0))
             payee = new_accts[0]
         elif stk_ask and sc.change:
-            rules.append("stk_change_unverified")                   # "đổi STK" mà chưa có lịch sử để so: vẫn là yêu cầu tiền
+            # "đổi STK" + yêu cầu chuyển vào số mới mà chưa có lịch sử để so: chính lời "đổi" khẳng định số cũ khác ⇒ luật cứng (fail-high)
+            rules.append("stk_change_unverified")
+            hard.append(H_STK_CLAIM)
             flags["money_request"] = True
             txn = "pending"
             spans.append(sc.change)
