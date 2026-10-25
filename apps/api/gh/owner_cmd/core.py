@@ -797,12 +797,20 @@ def profile_defensive(section: str, content: str) -> bool:
 _ALLOWED_PUNCT = frozenset(".,!?:;'\"()-/%«»…–—“”‘’+&")
 
 
+_ASCII_LETTERS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+#: Dấu kết hợp tiếng Việt: huyền, sắc, ngã, hỏi, nặng, mũ, trăng, móc.
+_VI_MARKS = frozenset("\u0300\u0301\u0303\u0309\u0323\u0302\u0306\u031b")
+
+
 def _allowed_char(ch: str) -> bool:
+    """Allowlist CHÍNH XÁC (review bảo mật T2): chữ ASCII; chữ tiếng Việt dựng sẵn (NFD = MỘT chữ ASCII + dấu kết hợp tiếng Việt);
+    đ/Đ; số ASCII; dấu cách thường; dấu câu cơ bản. Mọi ký tự khác (ɑ, ı, ʟ, ꞵ, small-cap, Cyrillic, Hy Lạp, chữ lấp…) ⇒ False."""
     import unicodedata
 
-    if ch == " " or ch in "0123456789" or ch in _ALLOWED_PUNCT:
+    if ch == " " or ch in "0123456789" or ch in _ALLOWED_PUNCT or ch in _ASCII_LETTERS or ch in "đĐ":
         return True
-    return ch.isalpha() and unicodedata.name(ch, "").startswith("LATIN")
+    d = unicodedata.normalize("NFD", ch)
+    return len(d) >= 2 and d[0] in _ASCII_LETTERS and all(m in _VI_MARKS for m in d[1:])
 
 
 def _compact_keywords() -> tuple[str, ...]:
