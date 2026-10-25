@@ -53,14 +53,15 @@ async def test_seed_produces_evidence_that_traces_back_to_raw_message(app, db, r
     assert raw_text == ev.quote
     assert "3 cont" in raw_text and "1.2 tỷ" in raw_text
 
-    # Cảnh báo bất mãn thật (R-03 tất định trên 3 tin liên tiếp không ai trả lời) — chứng cứ trỏ về raw + đơn
-    # vị ý nghĩa, khớp meaningItems ALR-0233 thiết kế.
+    # Cảnh báo bất mãn thật (R-03 tất định trên 3 tin liên tiếp không ai trả lời) — chứng cứ trỏ về raw, khớp
+    # meaningItems ALR-0233 thiết kế. v0.1.76 (T5): đường nhanh R-03 đi qua cổng khiếu nại `conflicts.from_rule`
+    # ⇒ tín hiệu `xung_dot_khieu_nai` (mức do `levels` quyết), không còn `repeated_complaint` P1 cũ.
     alert = (await db.execute(text("""
-        SELECT a.title, a.priority, a.evidence, p.display_name FROM biz.alerts a
+        SELECT a.title, a.priority, a.evidence, a.detector, p.display_name FROM biz.alerts a
         JOIN core.persons p ON p.id = a.subject_id
-        WHERE a.org_id = :o AND a.alert_type = 'repeated_complaint'"""), {"o": org})).one()
-    assert alert.priority == "P1" and alert.display_name == "Đặng Văn Mẫu Bảy"
-    raw_ref = next(e for e in alert.evidence if e["type"] == "raw")
+        WHERE a.org_id = :o AND a.kind = 'xung_dot_khieu_nai'"""), {"o": org})).one()
+    assert alert.detector == "conflicts" and alert.display_name == "Đặng Văn Mẫu Bảy"
+    raw_ref = next(e for e in alert.evidence if e["type"] == "raw_event")
     raw_text2 = (await db.execute(text("SELECT body_text FROM raw.events WHERE id = :i"), {"i": raw_ref["id"]})
                 ).scalar_one()
     assert "không ai trả lời" in raw_text2
