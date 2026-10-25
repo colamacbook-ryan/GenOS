@@ -37,10 +37,21 @@ async def intel_reeval(ctx: dict[str, Any]) -> dict[str, int]:
     now = clock.now()
     sm = sessionmaker()
     out = {"changed": 0, "raw_tail": 0, "asks_expired": 0, "errors": 0}
+    # Ba bước độc lập: lỗi ở bước tính lại không chặn đường nhanh `raw_tail` (lừa đảo/an toàn) và ngược lại (F5).
+    try:
+        async with sm() as db:
+            out["changed"] = len(await signals.reevaluate_due(db, now))   # tự commit theo từng dòng
+    except Exception as e:                                      # noqa: BLE001
+        log.error("intel_reeval: bước tính lại lỗi: %s", type(e).__name__)
+        out["errors"] += 1
+    try:
+        async with sm() as db:
+            out["asks_expired"] = await asks.expire(db)
+            await db.commit()
+    except Exception as e:                                      # noqa: BLE001
+        log.error("intel_reeval: bước hết hạn ask lỗi: %s", type(e).__name__)
+        out["errors"] += 1
     async with sm() as db:
-        out["changed"] = len(await signals.reevaluate_due(db, now))
-        out["asks_expired"] = await asks.expire(db)
-        await db.commit()
         orgs = (await db.execute(text("SELECT id FROM core.organizations"))).scalars().all()
     for org in orgs:
         try:
