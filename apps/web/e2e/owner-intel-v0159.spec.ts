@@ -94,7 +94,8 @@ test.describe('v0.1.59 · Tình báo', () => {
       await expect(page.getByTestId(id)).toBeVisible();
       await expect(page.getByTestId(id)).toContainText(/\d/);
     }
-    await expect(page.getByTestId('intel-tile-promises')).toHaveCount(0); // v0.1.71: chưa có bộ ghi lời hứa ⇒ ẩn ô
+    await expect(page.getByTestId('intel-tile-promises')).toBeVisible(); // v0.1.76: đã có bộ ghi lời hứa ⇒ ô hiện, có số
+    await expect(page.getByTestId('intel-tile-promises')).toContainText(/\d/);
     await expect(page.getByTestId('intel-tile-messages')).toBeVisible();
     await expect(page.locator('[data-testid=first-run-card]')).toHaveCount(0);
   });
@@ -125,7 +126,7 @@ test.describe('v0.1.59 · Tình báo', () => {
     expect(keyRow!.height).toBeGreaterThanOrEqual(44);
   });
 
-  test('dải nguồn AI không hiện khi nguồn AI đã chạy; tin quan trọng → ?tin=; không có ô lời hứa (chưa theo dõi); không có Chi phí trợ lý Gen', async ({ page }) => {
+  test('dải nguồn AI không hiện khi nguồn AI đã chạy; tin quan trọng → ?tin=; ô lời hứa quá hạn hiện (đã theo dõi); không có Chi phí trợ lý Gen', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto('/owner');
     await expect(page.getByTestId('intel-decide-count')).toBeVisible();
@@ -135,6 +136,7 @@ test.describe('v0.1.59 · Tình báo', () => {
     await expect(first).toBeVisible();
     const href = await first.getByRole('link').getAttribute('href');
     expect(href).toMatch(/^\/owner\/thong-tin\?tin=/);
-    await expect(page.getByTestId('intel-tile-promises')).toHaveCount(0);
+    await expect(page.getByTestId('intel-tile-promises')).toBeVisible();
+    await expect(page.getByTestId('intel-tile-promises')).toContainText('Lời hứa quá hạn');
   });
 });

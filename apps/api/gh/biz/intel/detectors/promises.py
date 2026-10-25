@@ -203,8 +203,12 @@ async def _write_row(db: AsyncSession, org_id: uuid.UUID, f: Any, c: PromiseCtx,
 async def _signal_for(db: AsyncSession, org_id: uuid.UUID, f: Any, c: PromiseCtx, key: uuid.UUID | None, now: datetime,
                       *, person_ids: list[uuid.UUID]) -> signals.Signal | None:
     ck = _case_key(c, f, key)
-    old = (await db.execute(text("""SELECT id, status, level_input FROM biz.alerts WHERE org_id = :o AND kind = :k AND case_key = :c
-                                    ORDER BY created_at DESC LIMIT 1"""), {"o": org_id, "k": c.kind, "c": ck})).one_or_none()
+    old = (await db.execute(text("""SELECT id, status, level_input, facts ? 'unit_id' AS from_unit FROM biz.alerts
+                                    WHERE org_id = :o AND kind = :k AND (case_key = :c OR facts ->> 'fact_id' = :f)
+                                    ORDER BY (case_key = :c) DESC, created_at DESC LIMIT 1"""),
+                            {"o": org_id, "k": c.kind, "c": ck, "f": str(f.id)})).one_or_none()
+    if old is not None and old.from_unit:
+        return None                                                       # đường đơn vị (T12) đã làm chủ lời hứa này: không đẻ thẻ thứ hai
     li = level_input(c, now)
     if old is not None and (old.status not in signals.OPEN or old.level_input == li.model_dump(mode="json")):
         return None                                                       # đã đóng (không sống lại) hoặc không đổi
@@ -300,6 +304,122 @@ async def _project_one(db: AsyncSession, org_id: uuid.UUID, f: Any, sets: g.OrgS
     return sig
 
 
+# ─── đơn vị (T12): lời hứa / việc có hạn model trích mà chưa có (hoặc chưa đủ) sự thật ─────────────────────────
+
+async def _fact_of_unit(db: AsyncSession, org_id: uuid.UUID, uid: uuid.UUID) -> Any:
+    return (await db.execute(text(f"""SELECT {_FACT_COLS} FROM mem.fact_evidence fe JOIN mem.facts f ON f.id = fe.fact_id
+                                       WHERE fe.meaning_unit_id = :u AND f.org_id = :o AND f.predicate = ANY(:p)
+                                       ORDER BY f.recorded_at LIMIT 1"""), {"u": uid, "o": org_id, "p": list(PREDICATES)})).first()  # noqa: S608
+
+
+def parties_of_unit(p: Any, sets: g.OrgSets, *, outbound: bool, biz_group: bool) -> tuple[g.Who | None, g.Who | None, bool, bool]:
+    """(người hứa, bên nhận, phía Sếp?, bên nhận là khách?) — hàm thuần trên tra cứu đã đọc.
+
+    Người hứa = `people[role=nguoi_hua]` (vai nối CHẮC thực thể), không có ⇒ người gửi; bên nhận = `nguoi_duoc_hua`. "Phía Sếp" theo dữ liệu:
+    Sếp, `staff_of`, `person_type = staff`, hoặc tin ĐI từ tài khoản của Sếp mà người hứa là người gửi. Khách theo dữ liệu: `customer_of` /
+    `person_type = customer`. KHỞI ĐỘNG LẠNH (bảo thủ, T12 tự chọn vì spec chưa nói): chỉ trong nhóm Sếp đã xác nhận `kinh_doanh`, và chỉ
+    suy MỘT phía khi phía kia đã chắc theo dữ liệu — người hứa chắc là phía Sếp ⇒ bên nhận (không phải người của Sếp) là khách khi Hồ sơ chưa
+    có fact `customer_of` nào; bên nhận chắc là khách ⇒ người hứa (không phải khách) là phía Sếp khi chưa có fact `staff_of` nào. Hai phía
+    cùng mù ⇒ không suy (khách hứa "mai em chuyển khoản" không bao giờ bị đọc thành lời hứa của Sếp)."""
+    promiser = (p.roles.get("nguoi_hua") or [p.sender])[0]
+    to = (p.roles.get("nguoi_duoc_hua") or [None])[0]
+    if promiser is not None and to is not None and promiser.entity_id == to.entity_id:
+        to = None
+    side_hard = g.hard_owner_side(promiser, sets) or (outbound and promiser is not None and p.sender is not None
+                                                      and promiser.entity_id == p.sender.entity_id)
+    cust_hard = g.hard_customer(to, sets)
+    side = side_hard or (cust_hard and biz_group and not sets.staff and promiser is not None and not g.hard_customer(promiser, sets))
+    cust = cust_hard or (side_hard and g.cold_customer(to, sets, biz_group=biz_group))
+    return promiser, to, side, cust
+
+
+async def project_units(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, limit: int = 200) -> list[signals.Signal]:
+    """Đơn vị `nghia_vu_loi_hua` / `viec_han` (đường brain-out/1) ⇒ tín hiệu + sổ, khi đường sự thật CHƯA làm chủ (đơn vị không có sự thật
+    `promised_to/owes/deadline`, hoặc sự thật đó chưa thành tín hiệu vì người hứa chưa có `staff_of` — cài mới). Ai tới trước làm chủ: tín hiệu
+    đơn vị mang `facts.fact_id` (nếu có) để `_signal_for` của đường sự thật không đẻ thẻ thứ hai và `sync_kept` đóng được. Chiều lời hứa như
+    đường sự thật (CNS-087b): chỉ phía Sếp → ai đó mới có tín hiệu. Hạn = `deadline_at` đã kiểm (`vi_time.parse`, lưu ở `entities.v`)."""
+    from gh.biz.intel.detectors import units as U
+
+    rows = (await db.execute(text(U.pending_sql("intel.promises.unit_done")),
+                             {"o": org_id, "k": ["nghia_vu_loi_hua", "viec_han"], "since": now - timedelta(days=U.WINDOW_DAYS), "n": limit})).all()
+    if not rows:
+        return []
+    sets = await g.org_sets(db, org_id)
+    out: list[signals.Signal] = []
+    for u in rows:
+        ev = await U.evidence_of(db, u)
+        if not ev:
+            continue
+        try:
+            async with db.begin_nested():
+                sig = await _project_unit(db, org_id, u, ev, sets, now)
+            if sig is not None:
+                out.append(sig)
+        except signals.SignalError as e:
+            log.warning("promises: bỏ qua đơn vị %s: %s", u.id, type(e).__name__)
+            await U.mark(db, org_id, u.id, type(e).__name__, action="intel.promises.unit_done")
+    return out
+
+
+async def _project_unit(db: AsyncSession, org_id: uuid.UUID, u: Any, ev: list[Any], sets: g.OrgSets, now: datetime) -> signals.Signal | None:
+    from gh.biz.intel.detectors import units as U
+
+    f = await _fact_of_unit(db, org_id, u.id)
+    if f is not None and (await db.execute(text("""SELECT 1 FROM biz.alerts WHERE org_id = :o AND facts ->> 'fact_id' = :f LIMIT 1"""),
+                                           {"o": org_id, "f": str(f.id)})).first() is not None:
+        await U.mark(db, org_id, u.id, "fact_path", action="intel.promises.unit_done")      # đường sự thật đã làm chủ
+        return None
+    p = await U.people(db, org_id, u, sets, [e.raw_event_id for e in ev])
+    biz = await g.business_group(db, org_id, p.group_id)
+    promiser, to, side, cust = parties_of_unit(p, sets, outbound=p.outbound, biz_group=biz)
+    v = U.verified(u)
+    fl = dict(u.flags or {})
+    kind = str(u.kind_hint)
+    conditional = fl.get("conditional") is True
+    c = PromiseCtx(
+        kind=kind, text=str(u.conclusion or ""), valid_from=U._when(v.get("msg_at")) or u.observed_at, due_at=U._when(v.get("deadline_at")),
+        to_customer=kind == "nghia_vu_loi_hua" and cust, owner_work=(side or fl.get("blocks_work") is True) and not (kind == "nghia_vu_loi_hua" and cust),
+        completed=str(v.get("status_hint") or "") in U.STATUS_CLOSED,
+        condition_met=("yes" if v.get("condition_met") == "yes" else "no") if conditional else None,
+        source_class="insider" if (promiser is not None and p.sender is not None and promiser.entity_id == p.sender.entity_id) else "member",
+        confidence_exist=float(u.confidence or 0.8), nudged=fl.get("nudged") is True, blocks_work=fl.get("blocks_work") is True,
+        explicit_urgent=fl.get("explicit_urgent") is True,
+        subject_entity_id=(to.entity_id if to else None) if kind == "nghia_vu_loi_hua" else (promiser.entity_id if promiser else None),
+        thread=g.thread_of(p.group_id, p.size))
+    if (kind == "nghia_vu_loi_hua" and not side) or (kind == "viec_han" and not c.owner_work) or c.completed:
+        await U.mark(db, org_id, u.id, "not_owner_side" if not c.completed else "completed", action="intel.promises.unit_done")
+        return None                                                        # người khác → Sếp / giữa người ngoài: chỉ theo dõi (CNS-087b)
+    key: uuid.UUID | None = None
+    if kind == "nghia_vu_loi_hua" and promiser is not None and promiser.person_id is not None and c.due_at is not None:
+        key = (await db.execute(text("""SELECT id FROM biz.promises WHERE org_id = :o AND (meaning_unit_id = :u OR fact_id = :f)
+                                        ORDER BY (meaning_unit_id = :u) DESC LIMIT 1"""),
+                                {"o": org_id, "u": u.id, "f": f.id if f is not None else None})).scalar_one_or_none()
+        if key is None:
+            cond = None if c.condition_met is None else orjson.dumps({"met": c.condition_met, "nominal_due": c.due_at.isoformat()}).decode()
+            key = (await db.execute(text("""
+                INSERT INTO biz.promises (org_id, promiser_person_id, to_person_id, text, due_at, state, conditions, fact_id, to_customer, meaning_unit_id)
+                VALUES (:o, :p, :t, :x, :d, :s, CAST(:c AS jsonb), :f, :tc, :mu) RETURNING id"""),
+                {"o": org_id, "p": promiser.person_id, "t": to.person_id if to else None, "x": g.safe(c.text, 300) or "(không rõ nội dung)",
+                 "d": c.due_at, "s": "conditional" if c.condition_met == "no" else "open", "c": cond, "f": f.id if f is not None else None,
+                 "tc": c.to_customer, "mu": u.id})).scalar_one()
+    li = level_input(c, now)
+    ck = (levels.case_key(kind, at=c.valid_from, promise_id=str(key or f"unit:{u.id}")) if kind == "nghia_vu_loi_hua"
+          else levels.case_key(kind, at=c.valid_from, raw_event_id=str(ev[0].raw_event_id)))
+    due = c.due_at if c.due_at and c.condition_met in (None, "yes") else None
+    fx: dict[str, Any] = {"unit_id": str(u.id), **({"fact_id": str(f.id)} if f is not None else {}), "cold_start": bool(side and cust) and not (
+        g.hard_owner_side(promiser, sets) and g.hard_customer(to, sets))}
+    up = signals.UpsertIn(
+        kind=kind, title="Lời hứa với khách sắp tới hạn" if c.to_customer else ("Nghĩa vụ cần theo dõi" if kind == "nghia_vu_loi_hua" else "Việc có hạn"),
+        summary=g.safe(c.text, 300) or None, detector="promises", detector_version="1", level_input=li, evidence=U.unit_evidence(u, ev),
+        case_key=ck, fact_ids=[f.id] if f is not None else [], due_at=due, expires_at=max(now + timedelta(days=7), (due or now) + timedelta(days=3)),
+        person_ids=[x.person_id for x in (promiser, to) if x is not None and x.person_id], thread_key=f"g:{p.group_id}" if p.group_id else None,
+        group_id=p.group_id, facts=fx)
+    sig = await signals.upsert(db, org_id, up, now)
+    if key is not None:
+        await db.execute(text("UPDATE biz.promises SET signal_id = :s WHERE id = :i"), {"s": sig.id, "i": key})
+    return sig
+
+
 async def sync_kept(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> int:
     """Đóng nghĩa vụ + tín hiệu của lời hứa/việc đã xong. Hai chiều (không chỉ theo `biz.promises`):
     1) SỔ: fact đã bị `facts.close_kept` đóng (`valid_to` có, vẫn `asserted`) hoặc Sếp bấm "đã giữ" (`kept_at`) ⇒ `kept`; fact `retracted` ⇒ `cancelled`.
@@ -358,6 +478,7 @@ async def intel_promises(ctx: dict[str, Any]) -> dict[str, int]:
                 now = clock.now()
                 k += await sync_kept(db, org, now)                       # đóng trước, để lời hứa đã giữ không bị chiếu lại
                 n += len(await project(db, org, now))
+                n += len(await project_units(db, org, now))             # T12: đơn vị chưa có sự thật / cài mới chưa có staff_of
                 await db.commit()
         except Exception:                                                # noqa: BLE001 — một tổ chức lỗi không dừng tổ chức khác
             log.exception("intel_promises lỗi ở một tổ chức")

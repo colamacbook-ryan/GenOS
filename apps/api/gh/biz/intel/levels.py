@@ -680,10 +680,40 @@ def _day(t: datetime) -> str:
     return _aware(t).astimezone(VN).date().isoformat()
 
 
-def _bucket(t: datetime, hours: int) -> str:
-    """Cửa sổ cố định `hours` giờ tính theo giờ VN (khoá ổn định cho mọi tin trong cùng cửa sổ)."""
-    epoch = int(_aware(t).timestamp()) // (hours * 3600)
-    return f"{hours}h:{epoch}"
+#: Cửa sổ TRƯỢT của vụ theo loại khoá (T12, gỡ Nợ #83): khoá vụ KHÔNG gắn ngày/bucket cố định (hai tin của cùng kẻ lừa vắt qua nửa đêm
+#: hoặc qua biên bucket không còn bị cắt đôi). `signals.upsert` kiểm cửa sổ bằng mốc tin mới nhất của vụ đang mở; quá cửa sổ ⇒ vụ mới
+#: với hậu tố tuần tự `|#n`. None = không giới hạn thời gian (một tin gốc, một lời hứa, một nhu cầu, một chuỗi trả lời…).
+CASE_WINDOWS_H = {"stk": 7 * 24, "imp": 24, "domain": 24, "actor": 24, "simhash": 7 * 24, "sk": 24, "case3": 72, "quan_he": 14 * 24}
+_SEQ_SUFFIX = "|#"
+
+
+def base_case_key(ck: str) -> str:
+    """Bỏ hậu tố tuần tự `|#n` (vụ thứ n của cùng khoá)."""
+    head, sep, tail = ck.rpartition(_SEQ_SUFFIX)
+    return head if sep and tail.isdigit() else ck
+
+
+def case_window(ck: str | None) -> timedelta | None:
+    """Cửa sổ trượt của một khoá vụ (từ cấu trúc khoá do `case_key` sinh — một nơi)."""
+    if not ck or ":" not in ck:
+        return None
+    kind, part = base_case_key(ck).split(":", 1)
+    tok = part.split("|")
+    if kind == "case3":
+        h = CASE_WINDOWS_H["case3"] if len(tok) == 1 else None          # có chuỗi trả lời ⇒ vụ theo chuỗi, không theo thời gian
+    elif kind == FR and tok[0] in ("stk", "imp", "domain"):
+        h = CASE_WINDOWS_H[tok[0]]
+    elif kind == FR and tok[0] == "raw" and len(tok) > 1 and tok[1].startswith("actor:"):
+        h = CASE_WINDOWS_H["actor"]
+    elif kind == "thi_truong_thong_tin" and tok[0] == "simhash":
+        h = CASE_WINDOWS_H["simhash"]
+    elif kind == SK and len(tok) == 1 and tok[0] not in ("raw", "anon"):
+        h = CASE_WINDOWS_H["sk"]
+    elif kind == "quan_he_nong_nguoi" and len(tok) == 1 and tok[0] not in ("raw", "anon"):
+        h = CASE_WINDOWS_H["quan_he"]
+    else:
+        h = None
+    return timedelta(hours=h) if h else None
 
 
 def case_key(kind: str, *, at: datetime, thread_key: str | None = None, raw_event_id: str | None = None,
@@ -693,7 +723,8 @@ def case_key(kind: str, *, at: datetime, thread_key: str | None = None, raw_even
              payee_digest: str | None = None, group_id: str | None = None, impersonated_entity_id: str | None = None,
              domain: str | None = None, simhash: str | None = None) -> str:
     """Khoá vụ — NƠI DUY NHẤT (khoá chống trùng `(case_key, kind)`, "một vụ một 🔴"). `event_ref` của model chỉ là gợi ý; code quyết.
-    Trả chuỗi `<kind>:<phần khoá>`; không đủ dữ kiện ⇒ rơi về `raw_event_id` gốc (một sự việc, một tín hiệu)."""
+    Trả chuỗi `<kind>:<phần khoá>`; không đủ dữ kiện ⇒ rơi về `raw_event_id` gốc (một sự việc, một tín hiệu). Khoá KHÔNG chứa thời gian
+    (trừ ngày của chính sự việc: hạn việc, ngày dịp); cửa sổ vụ là cửa sổ TRƯỢT — `case_window`, kiểm ở `signals.upsert`."""
     def k(*parts: object) -> str:
         return kind + ":" + "|".join(str(p) for p in parts)
 
@@ -707,24 +738,24 @@ def case_key(kind: str, *, at: datetime, thread_key: str | None = None, raw_even
     if kind == "su_kien_dip" and entity_id and event_date:
         return k(entity_id, event_date)
     if kind == SK and entity_id:
-        return k(entity_id, _bucket(at, 24))
+        return k(entity_id)
     if kind in ("xung_dot_khieu_nai", "quan_he_nong_nguoi") and customer_entity_id:
-        # Vụ cổng 3 (CNS-122): (khách, chuỗi trả lời | cửa sổ 72 giờ). Bản quan_he_nong_nguoi của cùng lời doạ bỏ dùng CHUNG khoá vụ.
-        part = reply_chain_id or _bucket(at, 72)
-        return "case3:" + "|".join((customer_entity_id, part))
+        # Vụ cổng 3 (CNS-122): (khách, chuỗi trả lời | cửa sổ trượt 72 giờ — `case_window`). Bản quan_he_nong_nguoi của cùng lời doạ bỏ
+        # dùng CHUNG khoá vụ.
+        return "case3:" + "|".join((customer_entity_id, *([reply_chain_id] if reply_chain_id else [])))
     if kind == "quan_he_nong_nguoi" and entity_id:
-        return k(entity_id, _bucket(at, 14 * 24))
+        return k(entity_id)
     if kind == "co_hoi_ket_noi" and demand_id:
         return k("demand", demand_id)
     if kind == FR:
         if payee_digest:
-            return k("stk", payee_digest, group_id or "-", _bucket(at, 7 * 24))
+            return k("stk", payee_digest, group_id or "-")
         if impersonated_entity_id:
-            return k("imp", impersonated_entity_id, _bucket(at, 24))
+            return k("imp", impersonated_entity_id)
         if domain:
-            return k("domain", domain.lower(), _bucket(at, 24))
+            return k("domain", domain.lower())
     if kind == "thi_truong_thong_tin" and simhash:
-        return k("simhash", simhash, _bucket(at, 7 * 24))
+        return k("simhash", simhash)
     if raw_event_id:
         return k("raw", raw_event_id)
     # Không có dữ kiện nào: băm theo thời điểm + luồng (không bao giờ gộp hai sự việc khác luồng).

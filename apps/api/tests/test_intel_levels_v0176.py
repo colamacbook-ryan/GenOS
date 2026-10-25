@@ -335,7 +335,7 @@ def test_case_key_ten_kinds_stable_within_window() -> None:
     assert L.case_key("suc_khoe_an_toan", at=a, entity_id="me") == L.case_key("suc_khoe_an_toan", at=a + timedelta(minutes=5), entity_id="me")
     k3 = L.case_key("xung_dot_khieu_nai", at=a, customer_entity_id="c1", reply_chain_id="chain9")
     assert k3 == L.case_key("quan_he_nong_nguoi", at=b, customer_entity_id="c1", reply_chain_id="chain9")   # dùng chung khoá vụ
-    assert L.case_key("quan_he_nong_nguoi", at=a, entity_id="p").startswith("quan_he_nong_nguoi:p|")
+    assert L.case_key("quan_he_nong_nguoi", at=a, entity_id="p") == "quan_he_nong_nguoi:p"      # T12: không bucket, cửa sổ trượt
     assert L.case_key("co_hoi_ket_noi", at=a, demand_id="d1") == "co_hoi_ket_noi:demand|d1"
     assert L.case_key("rui_ro_lua_dao", at=a, payee_digest="h", group_id="g") == L.case_key("rui_ro_lua_dao", at=b, payee_digest="h", group_id="g")
     assert L.case_key("rui_ro_lua_dao", at=a, domain="EVIL.top") == L.case_key("rui_ro_lua_dao", at=a, domain="evil.top")
