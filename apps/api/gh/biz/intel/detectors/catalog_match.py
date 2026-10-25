@@ -95,7 +95,11 @@ class Ctx:
 
 
 async def load_ctx(db: AsyncSession, org_id: uuid.UUID) -> Ctx:
-    items = await catalog.list_items(db, org_id, state="active")            # một tập duy nhất ⇒ mọi hàng đều có trong supply_ids
+    # Tập active KHÔNG cắt (catalog.list_items giới hạn 500 cho màn hình; ở đây cắt sẽ bỏ sót hàng một cách âm thầm). Một tập duy nhất ⇒ mọi
+    # hàng đều có trong supply_ids.
+    rows = (await db.execute(text(f"SELECT {catalog._COLS} FROM biz.catalog_items WHERE org_id = :o AND state = 'active' ORDER BY created_at DESC"),  # noqa: S608
+                             {"o": org_id})).all()
+    items = [catalog._row(r) for r in rows]
     supply_ids = await sync_supply(db, org_id, items)
     prof = await profile_read.snapshot(db, org_id)
     return Ctx(items, supply_ids, prof, parse_value_limits([i.text for i in prof.items if i.predicate == "owner_value_limit"]))
@@ -195,9 +199,13 @@ async def process_demand(db: AsyncSession, org_id: uuid.UUID, demand_id: uuid.UU
         opportunity=levels.Opportunity(catalog_score=best[0] if best else None, resource_owner_confirmed=resource_ok, touches_value_limit=below),
         money_vnd=int(value) if value else None, money_basis="estimated" if value else None,
         impact_base=levels.impact_base(KIND, important=True), subject_entity_id=ent)
-    if (await db.execute(text("""SELECT 1 FROM biz.alerts WHERE org_id = :o AND kind = :k AND case_key = :ck
-                                 AND status IN ('resolved', 'broken', 'expired', 'dismissed') LIMIT 1"""),
-                         {"o": org_id, "k": KIND, "ck": case_key})).first() is not None:
+    # thẻ đã kết thúc: cùng case_key, HOẶC cùng khoá gộp (khách + nhu cầu, như `_merge_key`) trong cửa sổ cầu gần đây — cầu đã gộp vào thẻ
+    # `demand|D1` rồi bị bỏ qua thì cầu D2 cùng khách/cùng hàng cũng không mở lại thẻ mới
+    if (await db.execute(text("""SELECT 1 FROM biz.alerts WHERE org_id = :o AND kind = :k AND status IN ('resolved', 'broken', 'expired', 'dismissed')
+                                 AND (case_key = :ck OR (created_at > :t AND facts ->> 'match_key' = :mk AND facts -> 'person_ids' ? CAST(:p AS text)))
+                                 LIMIT 1"""),
+                         {"o": org_id, "k": KIND, "ck": case_key, "t": now - timedelta(days=RECENT_DEMAND_DAYS), "mk": key,
+                          "p": str(d.person_id)})).first() is not None:
         return []                                                                   # thẻ đã kết thúc (Sếp bỏ qua/đã xử lý/hết hạn) ⇒ không báo lại
     first = ev[0]
     evidence = [signals.EvidenceIn(type="meaning_unit", id=d.meaning_unit_id, quote_status="verified" if verified else "unverifiable",
