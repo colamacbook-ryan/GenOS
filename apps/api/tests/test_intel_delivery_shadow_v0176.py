@@ -45,8 +45,10 @@ async def seeded(db: Any) -> uuid.UUID:
     await db.execute(text("UPDATE biz.alerts SET would_push_at = now(), title = 'RIÊNG TƯ nhân sự' WHERE id = :i"), {"i": priv.id})
     await units(db, org, 10, hint="viec_han", level="grey")
     await units(db, org, 6, hint=None, level="grey")
+    await db.execute(text("UPDATE clean.meaning_units SET conclusion = 'BÍ-MẬT đánh giá nhân sự Hùng' WHERE org_id = :o AND level_hint = 'grey' AND kind_hint IS NULL"), {"o": org})
+    await db.execute(text("UPDATE clean.meaning_units SET conclusion = 'BÍ-MẬT bằng chứng của alert console_pin' WHERE org_id = :o AND kind_hint IS NOT NULL"), {"o": org})
     for i in range(5):
-        await _raw(db, org, body=f"tin ngẫu nhiên số {i} đủ dài", at=datetime.now(UTC))
+        await _raw(db, org, body=f"tin ngẫu nhiên số {i} đủ dài BÍ-MẬT nhóm ẩn", at=datetime.now(UTC))
     await bot_world(db, org)
     return org
 
@@ -67,6 +69,7 @@ async def test_pack_tiers_probabilities_privacy_and_masking(db: Any) -> None:
         assert await shadow.deliver_pack(s, org, now) == "already_sent"                  # một tin mỗi ngày
     row = (await db.execute(text("SELECT text, refs, kind FROM ops.owner_outbox"))).one()
     assert row.kind == "ask" and "RIÊNG TƯ" not in row.text and "0123456789012" not in row.text
+    assert "BÍ-MẬT" not in row.text and "nhân sự" not in row.text and "tin ngẫu nhiên" not in row.text and "đơn vị" not in row.text   # mẫu: KHÔNG có chữ
     by = {}
     for r in row.refs:
         by.setdefault(r["tier"], []).append(r)
@@ -83,7 +86,7 @@ async def test_pack_is_stable_within_a_day(db: Any) -> None:
     async with SM()() as s:
         a = await shadow.build_pack(s, org, now)
         b = await shadow.build_pack(s, org, now + timedelta(hours=1))
-    assert [x["text"] for x in a] == [x["text"] for x in b]
+    assert [(x["tier"], x["raw_event_id"]) for x in a] == [(x["tier"], x["raw_event_id"]) for x in b]
 
 
 async def test_pack_locked_sends_nothing(db: Any) -> None:

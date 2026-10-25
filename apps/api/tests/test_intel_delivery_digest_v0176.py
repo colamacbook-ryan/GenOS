@@ -229,10 +229,32 @@ async def test_question_ask_summary_is_shown_in_zalo_digest(db: Any) -> None:
 def test_display_mask_defaults_to_masking_and_only_exempts_clear_money_context() -> None:
     """TẤN CÔNG: STK/SĐT viết tách nhóm không được lọt qua vì "trông giống tiền"."""
     m = delivery.display_mask
-    for leak in ("STK 1 234 567 890", "STK 123 456 789", "STK 1.234.567.890", "0901 234 567", "+84 901 234 567", "84 901 234 567", "số 0123456789012"):
+    for leak in ("STK 1 234 567 890", "STK 123 456 789", "STK 1.234.567.890", "0901 234 567", "+84 901 234 567", "84 901 234 567", "số 0123456789012", "tiền: 0123456789", "STK 0123456789 k", "chuyển 1234567890123 tr",
+                 "STK 25.000.000 đ", "tài khoản: 1.234.567.890 vnd", "thẻ 12.345.678.901 đ"):
         out = m(leak)
         assert "…" in out and not any(c in out for c in ("234 567", "234.567", "0123456789")), (leak, out)
     assert m("1 234 567 890") == "1234…890"
-    for keep in ("1.500.000đ", "2 triệu", "giá 25.000.000", "25.000.000 VND", "chuyển 12.000.000đ nhé", "ngày 2026-10-23"):
+    for keep in ("1.500.000đ", "2 triệu", "giá 25.000.000", "25.000.000 VND", "50k", "2,5 triệu", "chuyển 12.000.000đ nhé", "ngày 2026-10-23"):
         assert m(keep) == keep, keep
     assert m("0901234567đ") != "0901234567đ"                       # số bắt đầu bằng 0 không bao giờ được miễn
+
+
+async def test_coverage_line_counts_voice_and_unread_images(db: Any) -> None:
+    """Tin media không đọc được luôn được đếm (M12): 2 voice (1 đã chép), 2 ảnh (1 chưa đọc)."""
+    org = await mk_org(db)
+    ch = (await db.execute(text("INSERT INTO core.channels (org_id, type, name) VALUES (:o, 'zalo', 'z') RETURNING id"), {"o": org})).scalar_one()
+    for kind, status in (("voice", "ok"), ("voice", None), ("image", "ok"), ("image", "failed")):
+        r = (await db.execute(text("""INSERT INTO raw.events (org_id, occurred_at, channel_id, external_msg_id, kind, body_text, payload, content_hash)
+                                      VALUES (:o, :at, :c, :x, :k, NULL, '{}', '\\x01') RETURNING id, received_at"""),
+                              {"o": org, "at": NOW - timedelta(hours=1), "c": ch, "x": uuid.uuid4().hex, "k": kind})).one()
+        if status is None:
+            continue
+        att = (await db.execute(text("""INSERT INTO raw.attachments (event_id, event_received_at, storage_key, mime, bytes, sha256)
+                                        VALUES (:e, :r, 'k', 'x/y', 1, '\\x01') RETURNING id"""), {"e": r.id, "r": r.received_at})).scalar_one()
+        await db.execute(text("""INSERT INTO clean.media_texts (org_id, raw_event_id, raw_received_at, attachment_id, kind, text, engine, engine_version, status)
+                                 VALUES (:o, :e, :r, :a, :k, 'chữ', 'e', '1', :s)"""),
+                         {"o": org, "e": r.id, "r": r.received_at, "a": att, "k": "transcript" if kind == "voice" else "ocr", "s": status})
+    await db.commit()
+    async with SM()() as s:
+        line = await coverage.line(s, org, NOW)
+    assert "1 voice đã chép, 1 voice chưa nghe" in line and "1 ảnh chưa đọc" in line

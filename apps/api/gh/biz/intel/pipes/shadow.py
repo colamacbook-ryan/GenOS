@@ -3,7 +3,8 @@
 
 Mỗi ngày ~20 mục gửi Sếp qua Zalo (một tin `kind='ask'`, `refs` mang tầng + xác suất chọn) để đo M1 / M11 trên chat thật:
 - tầng `shadow`: mọi 🔴 bóng trong 24 giờ (`would_push_at`), Sếp trả lời «N đúng» / «N sai» (đếm M1 theo cổng); xác suất 1;
-- tầng giàu tín hiệu cho phần máy KHÔNG báo: (t2) đơn vị có `kind_hint` nhưng không lên tín hiệu, (t3) đơn vị mức thấp, (t4) tin ngẫu nhiên nhỏ.
+- tầng giàu tín hiệu cho phần máy KHÔNG báo (BẢO MẬT: tin gửi qua chat CHỈ mang số thứ tự + tầng, KHÔNG có chữ của đơn vị / tin thô — chúng chưa qua cổng
+  riêng tư (console_pin, nhân sự, nhóm ẩn); nội dung mẫu xem và gán nhãn trên Console sau PIN): (t2) đơn vị có `kind_hint` nhưng không lên tín hiệu, (t3) đơn vị mức thấp, (t4) tin ngẫu nhiên nhỏ.
   Mỗi tầng chọn ngẫu nhiên có hạt giống cố định theo (tổ chức, ngày) với xác suất `p = chỉ tiêu / số ứng viên`; Sếp trả lời «N sót» nếu đáng lẽ phải báo.
   Số sót ước tính = Σ (sót trong mẫu tầng / p) — T9 tính; ở đây chỉ ghi `tier` và `p` vào `refs` và vào ghi chú phản hồi.
 Chỉ ứng viên `chat_ok`; chữ hiển thị đã che dạng "0123…789". Đang khoá trợ lý ⇒ không gửi gì.
@@ -54,20 +55,20 @@ async def build_pack(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> list
                            {"o": org_id, "s": since, "n": QUOTA["shadow"]})).all()
     out += [{"tier": "shadow", "p": 1.0, "text": r.title, "signal_id": str(r.id), "raw_event_id": None} for r in sh]
     t2 = (await db.execute(text("""
-        SELECT u.id, u.conclusion FROM clean.meaning_units u WHERE u.org_id = :o AND u.observed_at > :s AND u.superseded_by IS NULL
+        SELECT u.id FROM clean.meaning_units u WHERE u.org_id = :o AND u.observed_at > :s AND u.superseded_by IS NULL
           AND u.kind_hint IS NOT NULL AND NOT EXISTS (SELECT 1 FROM biz.alerts a WHERE a.org_id = u.org_id AND a.evidence::text LIKE '%' || u.id::text || '%')
         ORDER BY u.id"""), {"o": org_id, "s": since})).all()
     picked, p = _pick(t2, QUOTA["t2"], rnd)
-    out += [{"tier": "t2", "p": round(p, 4), "text": r.conclusion, "signal_id": None, "raw_event_id": None} for r in picked]
-    t3 = (await db.execute(text("""SELECT u.id, u.conclusion FROM clean.meaning_units u WHERE u.org_id = :o AND u.observed_at > :s
+    out += [{"tier": "t2", "p": round(p, 4), "text": None, "signal_id": None, "raw_event_id": None} for r in picked]
+    t3 = (await db.execute(text("""SELECT u.id FROM clean.meaning_units u WHERE u.org_id = :o AND u.observed_at > :s
                                    AND u.superseded_by IS NULL AND u.level_hint = 'grey' AND u.kind_hint IS NULL ORDER BY u.id"""),
                            {"o": org_id, "s": since})).all()
     picked, p = _pick(t3, QUOTA["t3"], rnd)
-    out += [{"tier": "t3", "p": round(p, 4), "text": r.conclusion, "signal_id": None, "raw_event_id": None} for r in picked]
-    t4 = (await db.execute(text("""SELECT id, body_text FROM raw.events WHERE org_id = :o AND occurred_at > :s AND direction = 'inbound'
+    out += [{"tier": "t3", "p": round(p, 4), "text": None, "signal_id": None, "raw_event_id": None} for r in picked]
+    t4 = (await db.execute(text("""SELECT id FROM raw.events WHERE org_id = :o AND occurred_at > :s AND direction = 'inbound'
                                    AND kind = 'text' AND length(coalesce(body_text, '')) >= 12 ORDER BY id"""), {"o": org_id, "s": since})).all()
     picked, p = _pick(t4, QUOTA["t4"], rnd)
-    out += [{"tier": "t4", "p": round(p, 4), "text": r.body_text, "signal_id": None, "raw_event_id": str(r.id)} for r in picked]
+    out += [{"tier": "t4", "p": round(p, 4), "text": None, "signal_id": None, "raw_event_id": str(r.id)} for r in picked]
     return out
 
 
@@ -80,9 +81,11 @@ def delivery_tz() -> Any:
 def render(items: list[dict[str, Any]], label: str) -> str:
     lines = [f"Gói gán nhãn chạy thử {label} ({len(items)} mục)"]
     for i, it in enumerate(items, 1):
-        mark = "🔴" if it["tier"] == "shadow" else "•"
-        lines.append(delivery.display_mask(f"{i}. {mark} {delivery._one_line(str(it['text'] or ''), LINE_MAX)}"))
-    lines.append("Trả lời: «N đúng» / «N sai» cho mục 🔴; «N sót» nếu mục • đáng lẽ em phải báo.")
+        if it["tier"] == "shadow":
+            lines.append(delivery.display_mask(f"{i}. 🔴 {delivery._one_line(str(it['text'] or ''), LINE_MAX)}"))
+        else:
+            lines.append(f"{i}. • mẫu kiểm tra ({it['tier']}) — nội dung xem trên Console")
+    lines.append("Trả lời: «N đúng» / «N sai» cho mục 🔴. Mục • xem và gán nhãn trên Console › Hệ thống › Tình báo (mã PIN).")
     return "\n".join(lines)
 
 

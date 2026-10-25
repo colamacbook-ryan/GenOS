@@ -41,25 +41,30 @@ URGENT_HEAD = "Điểm gấp trong ngày"
 MARK = {"red": "🔴", "amber": "🟠", "grey": "⚪"}
 _LONGNUM = re.compile(r"(?<!\d)(\d[\d .-]{6,22}\d)(?!\d)")
 _WS = re.compile(r"\s+")
+_MONEY_SHAPE = re.compile(r"[1-9]\d{0,2}(?:[., ]\d{3})+")           # nhóm hàng nghìn: 25.000.000
 _MONEY_AFTER = re.compile(r"\s{0,2}(?:đ|₫|vnd|vnđ|k|tr|triệu|tỷ|ty|nghìn|nghin|ngàn|ngan)(?![\w])", re.I)
-_MONEY_BEFORE = re.compile(r"(?:vnd|vnđ|₫|đ|tiền|số tiền|giá)\s{0,2}[:=]?\s{0,2}$", re.I)
+_MONEY_BEFORE = re.compile(r"(?:vnd|vnđ|₫|số tiền|giá)\s{0,2}[:=]?\s{0,2}$", re.I)
+_ACCOUNT_KW = re.compile(r"(?:stk|tk\b|tài khoản|tai khoan|số tk|so tk|thẻ|the\b|card|ngân hàng|ngan hang)", re.I)
+MONEY_MAX_DIGITS = 12
 _DATE = re.compile(r"\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[.-]\d{1,2}[.-]\d{4}")
 
 
 def display_mask(s: str) -> str:
     """Số dài (≥ 8 chữ số: STK, SĐT, thẻ) hiển thị dạng "0123…789" — phòng thủ khi tài khoản Zalo của Sếp bị chiếm (§8.1).
-    MẶC ĐỊNH CHE. Chỉ miễn khi có ngữ cảnh TIỀN rõ ràng sát bên (đ/VND/k/tr/triệu/tỷ sau số, hoặc «giá/tiền/VND» trước số) VÀ số không bắt đầu
-    bằng 0 / mã quốc gia 84; hoặc là ngày tháng. Cách nhóm chữ số một mình KHÔNG đủ (STK «1 234 567 890» vẫn bị che)."""
+    MẶC ĐỊNH CHE. Miễn che CHỈ khi đủ cả hai: (1) hình dạng số tiền (nhóm hàng nghìn «25.000.000», ≤ 12 chữ số, không bắt đầu bằng 0 / 84 /
+    +84) và (2) ngữ cảnh tiền sát bên (đ/VND/k/tr/triệu/tỷ sau số, hoặc «giá / số tiền / VND» trước số) mà trong 30 ký tự phía trước KHÔNG có
+    từ khoá tài khoản (STK, tài khoản, thẻ, card…). Hoặc là ngày tháng."""
     def sub(m: re.Match[str]) -> str:
         raw = m.group(1)
         d = re.sub(r"\D", "", raw)
         if len(d) < 8 or _DATE.fullmatch(raw.strip()):
             return raw
-        phone_like = d.startswith("0") or d.startswith("84") or s[max(0, m.start(1) - 1):m.start(1)] == "+"
-        money_ctx = bool(_MONEY_AFTER.match(s, m.end(1))) or bool(_MONEY_BEFORE.search(s[max(0, m.start(1) - 20):m.start(1)]))
-        if money_ctx and not phone_like:
-            return raw
-        return f"{d[:4]}…{d[-3:]}"
+        before = s[max(0, m.start(1) - 30):m.start(1)]
+        phone_like = d.startswith("0") or d.startswith("84") or before.endswith("+")
+        money = (_MONEY_SHAPE.fullmatch(raw) is not None and len(d) <= MONEY_MAX_DIGITS and not phone_like
+                 and (_MONEY_AFTER.match(s, m.end(1)) is not None or _MONEY_BEFORE.search(before) is not None)
+                 and _ACCOUNT_KW.search(before) is None)
+        return raw if money else f"{d[:4]}…{d[-3:]}"
 
     return _LONGNUM.sub(sub, s)
 
