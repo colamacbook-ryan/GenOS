@@ -188,8 +188,9 @@ async def process_demand(db: AsyncSession, org_id: uuid.UUID, demand_id: uuid.UU
     ent = (await entities.ensure_person(db, org_id, d.person_id)).id
     msg_at = d.observed_at
     case_key = await _merge_key(db, org_id, d.person_id, key, now) or levels.case_key(KIND, at=msg_at, demand_id=str(d.id))
-    members = int((await db.execute(text("SELECT member_count FROM core.groups WHERE id = :g AND org_id = :o"), {"g": d.group_id, "o": org_id})).scalar_one_or_none() or 0) if d.group_id else 0
-    thread = levels.Thread(type="group" if d.group_id else "dm_owner", size=members, owner_in_thread=True, agent_in_thread=True)
+    mc = (await db.execute(text("SELECT member_count FROM core.groups WHERE id = :g AND org_id = :o"), {"g": d.group_id, "o": org_id})).scalar_one_or_none() if d.group_id else 0
+    thread = levels.Thread(type="group" if d.group_id else "dm_owner", size=int(mc or 0), size_known=mc is not None, owner_in_thread=True,
+                           agent_in_thread=True)
     resource_ok = bool(res_items)
     li = levels.SignalIn(
         kind=KIND, msg_at=msg_at, event_at=msg_at, deadline_at=_deadline(d.needed_by),

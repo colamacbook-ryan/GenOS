@@ -379,11 +379,21 @@ _EMERG_LC: tuple[tuple[str, re.Pattern[str]], ...] = (
     # gõ không dấu: chỉ nhận khi kèm danh từ rõ ("chay nha"); "chay xe" là CHẠY xe, không phải cháy xe
     ("fire_ascii", re.compile(r"(?<![a-zà-ỹ])(?:chay (?:nha|xuong|kho|tang|bep|rung)|dam chay|vu chay)(?![a-zà-ỹ])")),
 )
+#: Đồ điện / nguồn điện — ngữ cảnh để "tê tay", "bị giật" mới tính là điện giật ("điện thoại" không tính).
+_ELEC_CTX = (r"\b(?:dien(?! thoai)|o cam|o dien|cong tac|binh nong lanh|may nong lanh|may giat|tu lanh|may bom|cau dao|aptomat|"
+             r"bep tu|bep dien|am dien|noi com dien|day dien|cuc sac|sac dien thoai|cam sac)\b")
 _EMERG_FOLD: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("fire_hoa_hoan", re.compile(r"\b(?:hoa hoan|chap dien|bao chay)\b")),
     ("cap_cuu", re.compile(r"\b(?:cap cuu|xe cap cuu|(?:goi|bao|alo|call|quay|bam|tong dai)\s+(?:so\s+|ngay\s+)?115|115\s+(?:di|gap|nhanh|giup|den|toi|cap cuu))\b")),
     ("accident", re.compile(r"\b(?:tai nan|nhap vien|dot quy|ngung tho|ngung tim|ngo doc|dien giat|duoi nuoc|bat tinh|nguy kich|hon me|"
                             r"bi thuong nang|chay mau nhieu|dong dat|sap nha|ngat xiu|co giat|tu vong|qua doi|phau thuat gap)\b")),
+    # Rò điện / điện giật / rò gas dạng thoại (G-KB Đợt 2 P2) — ứng viên MỀM (model xác nhận), không luật cứng. "tê tay"/"bị giật" mơ hồ
+    # ("tê tay vì lạnh", "bị giật mình", "bị giật điện thoại") ⇒ chỉ nhận khi CÙNG CÂU có đồ điện/điện (trừ "điện thoại").
+    ("leak", re.compile(r"\b(?:ro dien(?! thoai)|ro ri dien|giat dien(?! thoai)|ro gas|xi gas|ro khi gas|mui gas|"
+                        r"(?:day dien|o cam|o dien|cong tac|binh nong lanh|cau dao)\s+(?:\w+\s+){0,3}?bi ro)\b")),
+    ("shock_ctx", re.compile(
+        rf"(?:{_ELEC_CTX})[^.!?;\n]{{0,60}}?\b(?:te (?:te )?tay|bi giat(?! (?:minh|do|tui|day|vi|xe|dien thoai|mat)\b))\b"
+        rf"|\b(?:te (?:te )?tay|bi giat(?! (?:minh|do|tui|day|vi|xe|dien thoai|mat)\b))\b[^.!?;\n]{{0,60}}?(?:{_ELEC_CTX})")),
 )
 _HARD_EMERG = frozenset({"fire", "fire2", "fire_ascii", "fire_hoa_hoan", "cap_cuu"})
 

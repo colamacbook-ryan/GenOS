@@ -219,17 +219,19 @@ async def from_rule(db: AsyncSession, org_id: uuid.UUID, *, event_ids: list[uuid
         return None
     # câu doạ bỏ có thể nằm ở BẤT KỲ tin nào của khách trong lô (không chỉ tin đầu): ưu tiên tin có marker, không có thì tin đầu
     r = next((x for x in rows if says_leave(str(x.body_text))), rows[0])
-    members = 0
+    members, known = 0, True
     if group_id is not None:
-        members = int((await db.execute(text("SELECT member_count FROM core.groups WHERE id = :g AND org_id = :o"),
-                                        {"g": group_id, "o": org_id})).scalar_one_or_none() or 0)
+        mc = (await db.execute(text("SELECT member_count FROM core.groups WHERE id = :g AND org_id = :o"),
+                               {"g": group_id, "o": org_id})).scalar_one_or_none()
+        members, known = int(mc or 0), mc is not None
     body = str(r.body_text)
     marker = next((m for m in LEAVE_MARKERS if m in body.lower()), None)
     start = body.lower().find(marker) if marker else 0
     end = start + len(marker) if marker else min(len(body), 80)
     c = ComplaintIn(sent_at=r.occurred_at, raw_event_id=r.id, customer_person_id=person_id, span_start=start, span_end=max(end, start + 1),
                     quote=body[start:end], public=group_id is not None and members > 2, said_will_leave=marker is not None,
-                    thread=levels.Thread(type="group" if group_id else "dm_owner", size=members, owner_in_thread=True, agent_in_thread=True),
+                    thread=levels.Thread(type="group" if group_id else "dm_owner", size=members, size_known=known, owner_in_thread=True,
+                                         agent_in_thread=True),
                     thread_key=f"g:{group_id}" if group_id else None, group_id=group_id)
     out = await emit(db, org_id, c, now)
     return out or None
