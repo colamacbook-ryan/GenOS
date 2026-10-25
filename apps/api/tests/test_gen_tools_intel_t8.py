@@ -254,3 +254,35 @@ async def test_non_owner_tool_results_stay_fully_masked(owner_api: Api, db: Any,
     r = await _run(api, app, "queue.list", {})
     assert r.ok
     assert "0123456789012" not in r.text and "0912 345 678" not in r.text and "482913" not in r.text
+
+
+# ─── TẤN CÔNG explain.get: review / score / alert console_pin không qua chat ──────────────────────────────────
+
+async def _alert(db: Any, org: uuid.UUID, privacy: str) -> uuid.UUID:
+    aid = (await db.execute(text("""INSERT INTO biz.alerts (org_id, code, alert_type, title, privacy)
+                                    VALUES (:o, core.next_code('ALT'), 'x', 'Đánh giá nhân viên A kém', :p) RETURNING id"""),
+                            {"o": org, "p": privacy})).scalar_one()
+    await db.commit()
+    return aid  # type: ignore[no-any-return]
+
+
+async def test_explain_get_refuses_review_and_score_even_with_pin(owner_api: Api, db: Any, app: Any) -> None:
+    await _world(db)
+    await verify_pin(owner_api)
+    for kind in ("review", "score", "people", "REVIEW"):
+        r = await _run(owner_api, app, "explain.get", {"kind": kind, "id": str(uuid.uuid4())})
+        assert not r.ok and r.error == "BAD_ARGS", (kind, r.text)
+
+
+async def test_explain_get_alert_console_pin_refused_chat_ok_allowed(owner_api: Api, db: Any, app: Any) -> None:
+    w = await _world(db)
+    private, plain = await _alert(db, w.org, "console_pin"), await _alert(db, w.org, "chat_ok")
+    for pin in (False, True):
+        if pin:
+            await verify_pin(owner_api)
+        r = await _run(owner_api, app, "explain.get", {"kind": "alert", "id": str(private)})
+        assert not r.ok and r.error == "FORBIDDEN" and "Đánh giá nhân viên" not in r.text, (pin, r.text)
+    r = await _run(owner_api, app, "explain.get", {"kind": "alert", "id": str(plain)})
+    assert r.error not in ("FORBIDDEN", "BAD_ARGS", "UNKNOWN_TOOL"), r.text
+    r = await _run(owner_api, app, "explain.get", {"kind": "alert", "id": str(uuid.uuid4())})
+    assert r.error == "NOT_FOUND"

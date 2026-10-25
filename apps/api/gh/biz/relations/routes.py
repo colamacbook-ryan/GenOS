@@ -422,7 +422,7 @@ async def _profile_payload(person_id: uuid.UUID, user: service.CurrentUser, db: 
 
     scores = (await db.execute(text("""
         SELECT dimension, value, trend, updated_at FROM clean.current_scores
-        WHERE subject_type = 'person' AND subject_id = :p ORDER BY dimension"""), {"p": person_id})).all()
+        WHERE subject_type = 'person' AND subject_id = :p AND dimension <> 'reliability' ORDER BY dimension"""), {"p": person_id})).all()
 
     dm_sql, dm_params = direct_visible_sql(user, "mu.group_id", "mu.person_id")   # tin 1-1: chỉ Owner/người được giao
     timeline = (await db.execute(text(f"""
@@ -563,7 +563,7 @@ async def get_profile_brief(person_id: uuid.UUID, tier: Literal["summary", "full
         scores = [] if fam else (await db.execute(text("""
             SELECT dimension, value, trend FROM clean.current_scores WHERE subject_type = 'person' AND subject_id = :p
             ORDER BY dimension"""), {"p": person_id})).all()
-        out["scores"] = [{"dimension": s.dimension, "label": explain.DIMENSION_LABELS.get(s.dimension, s.dimension),
+        out["scores"] = [{"dimension": s.dimension, "label": {**explain.DIMENSION_LABELS, "reliability": "độ tin cậy lời hứa"}.get(s.dimension, s.dimension),
                           "value": float(s.value), "trend": s.trend} for s in scores]
         out["scores_withheld"] = "gia_dinh_ban_be" if fam else None
     return out

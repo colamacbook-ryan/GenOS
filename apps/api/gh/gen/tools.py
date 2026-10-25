@@ -62,6 +62,10 @@ class Tool:
     keep_case: tuple[str, ...] = ()
 
 
+#: `explain.get` qua chat CHỈ nhận các loại này. `review` (đánh giá nhân viên) và `score` (điểm về người) KHÔNG BAO GIỜ qua chat
+#: (§4.5 R3: chỉ xem trên Console + PIN); `alert` còn phải qua kiểm `privacy = chat_ok` ở `ToolRunner._guard_explain`.
+EXPLAIN_CHAT_KINDS = r"^(meaning_unit|task|opportunity|draft|alert)$"
+
 TOOLS: dict[str, Tool] = {t.name: t for t in (
     Tool("overview.summary", "Số liệu Hôm nay + hàng đợi cần xử lý (cơ hội, cảnh báo, chờ duyệt, đến hạn)",
          ("overview.read",), "/overview"),
@@ -174,7 +178,7 @@ TOOLS: dict[str, Tool] = {t.name: t for t in (
     Tool("graph.person", "Ai hay nói chuyện với một người; args.id (UUID người)", ("profile.read",), "/graph/person/{id}",
          path_args=("id",), owner_only=True),
     Tool("explain.get", "Vì sao hệ thống nói vậy; args.kind (vd alert), args.id", ("queue.read",), "/explain/{kind}/{id}",
-         path_args=("kind", "id"), path_patterns={"kind": r"^[a-z_]{2,30}$", "id": r"^[0-9a-fA-F-]{8,40}$"},
+         path_args=("kind", "id"), path_patterns={"kind": EXPLAIN_CHAT_KINDS, "id": r"^[0-9a-fA-F-]{8,40}$"},
          keep_case=("kind", "id"), owner_only=True),
     Tool("complaint.repeated", "Khiếu nại lặp lại (cùng vấn đề nhiều lần)", ("care.read",), "/care/repeated-issues"),
     # Mạng xã hội — chỉ Owner. social.read xếp một lượt đọc trình duyệt (tính vào giới hạn 6 lượt/ngày; dùng lại lượt
@@ -380,6 +384,7 @@ class ToolRunner:
                         | ({} if done.get(g["n"]) else {"steps": " / ".join(g["steps"])[:GUIDE_STEPS_MAX]})
                         for g in registry.load().guide]
             else:
+                await self._guard_explain(tool, args)
                 args = await self._resolve_person(tool, args)
                 path, query = _build_request(tool, args)
                 status, data = await self._get(path, query)
@@ -429,6 +434,24 @@ class ToolRunner:
         if ent is None:
             raise ToolError("NOT_FOUND", "Không tìm thấy")
         return {**args, key: str(ent)}
+
+    async def _guard_explain(self, tool: Tool, args: dict[str, Any]) -> None:
+        """`explain.get kind=alert`: chỉ khi tín hiệu gốc có `privacy = chat_ok` (console_pin ⇒ từ chối, kể cả khi Sếp có PIN)."""
+        if tool.name != "explain.get" or str(args.get("kind")) != "alert":
+            return
+        try:
+            aid = uuid.UUID(str(args.get("id") or ""))
+        except ValueError as e:
+            raise ToolError("BAD_ARGS", "id phải là UUID") from e
+        from gh.db import sessionmaker
+
+        async with sessionmaker()() as db:
+            privacy = (await db.execute(text("SELECT COALESCE(privacy, 'console_pin') FROM biz.alerts WHERE id = :i AND org_id = :o"),
+                                        {"i": aid, "o": self.user.org_id})).scalar_one_or_none()
+        if privacy is None:
+            raise ToolError("NOT_FOUND", "Không tìm thấy")
+        if privacy != CHAT_PRIVACY:
+            raise ToolError("FORBIDDEN", "Tín hiệu này chỉ xem trên Console (PIN)")
 
     async def _chat_filter(self, tool: Tool, data: Any) -> Any:
         """Lọc RIÊNG TƯ theo §4.5 trước khi kết quả tới model (phòng thủ chiều sâu: endpoint đã lọc theo PIN)."""
