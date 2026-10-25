@@ -220,6 +220,19 @@ def score_match(demand: dict[str, Any], supply: dict[str, Any]) -> tuple[float, 
     return round(min(score, 100.0), 2), reasons
 
 
+def catalog_as_supply(item: Any, demand: dict[str, Any]) -> dict[str, Any]:
+    """Hàng của Sếp (`biz.catalog_items`) dưới dạng "nguồn cung" cho `score_match` (spec W4; không đổi `score_match`).
+    Catalog không có tồn kho nên số lượng cung = số lượng cầu (Sếp bán được theo yêu cầu); giá trị = đơn giá × số lượng
+    CHỈ khi có giá và cùng đơn vị với cầu — không có thì để trống, không bịa. Không có khu vực."""
+    dq = num_or_none(demand.get("quantity"))
+    qty = dq if dq and dq > 0 else None
+    same_unit = bool(item.unit) and bool(demand.get("unit")) and (
+        str(item.unit).strip().casefold() == str(demand["unit"]).strip().casefold())
+    value = float(item.price_vnd) * qty if item.price_vnd and qty and same_unit else None
+    return {"item": item.name, "category": None, "quantity": qty, "unit": demand.get("unit") if qty else item.unit,
+            "value_vnd": value, "location": None}
+
+
 def when(value: Any) -> datetime | None:
     if value is None or isinstance(value, datetime):
         return value
