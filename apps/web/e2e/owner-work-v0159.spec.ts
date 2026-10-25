@@ -104,12 +104,13 @@ test.describe('v0.1.59 · Việc', () => {
     expect(t.status).toBe('todo');
   });
 
-  test('chưa có bộ ghi lời hứa (v0.1.71): Việc hôm nay không có dòng lời hứa', async ({ page }) => {
+  test('đã có bộ ghi lời hứa (v0.1.76): Việc hôm nay có dòng lời hứa quá hạn', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto('/owner/viec');
     await expect(page.getByTestId('work-today')).toBeVisible();
-    await expect(page.getByTestId('work-today').locator('[data-kind="promise"]')).toHaveCount(0);
-    await expect(page.getByTestId('work-today').getByText('Gọi lại xác nhận giá cho An Khang trong hôm nay')).toHaveCount(0);
+    const row = page.getByTestId('work-today').locator('[data-kind="promise"]');
+    await expect(row).toHaveCount(1);
+    await expect(row.getByText('Gọi lại xác nhận giá cho An Khang trong hôm nay')).toBeVisible();
   });
 
   test('Gen đề xuất: "Tạo nhắc" chỉ tạo việc khi Sếp bấm', async ({ page }) => {
