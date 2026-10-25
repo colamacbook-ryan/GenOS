@@ -209,17 +209,26 @@ async def require(db: Any, org_id: uuid.UUID, action: str, *, via: str = "chat",
         await backup.notify(db, org_id, f"Kênh quản trị vừa {LABEL[action]}. Nếu không phải Sếp: «khoá trợ lý» ngay.",
                             kind="security", dedupe_key=f"sc.notify:{uuid.uuid4().hex}")
         return Allowed(action, "chat")
-    until = await outbound_locked_until(db, org_id, t)
-    if until is not None:
-        return _locked(action, until)
-    if quiet:
-        await _record(db, org_id, "strong_confirm.chat_command", result="blocked", target=action, quiet=True)
-        return _locked(action, await lock_outbound(db, org_id, reason="quiet_hours", now=t))
+    blocked = await _outbound_gate(db, org_id, t, quiet=quiet, step="require")
+    if blocked is not None:
+        return blocked
     if await unlocked_today(db, org_id, t):
         return Allowed(action, "unlock_today")
     if await _backup_paired(db, org_id):
         return NeedCode(action)
     return NeedConsole(action, UNLOCK_REASON)
+
+
+async def _outbound_gate(db: AsyncSession, org_id: uuid.UUID, t: datetime, *, quiet: bool, step: str) -> NeedConsole | None:
+    """MỘT cổng chung cho MỌI đường mở `outbound` từ chat (`require` và `check_code` — bài học L-90: đường anh em phải cùng cổng).
+    Bên gọi đã kiểm "khoá trợ lý" và đã `_serialize`. Đang khoá ⇒ chặn; trong giờ yên lặng ⇒ ghi lần thử, khoá 1 giờ, báo kênh phụ, chặn."""
+    until = await outbound_locked_until(db, org_id, t)
+    if until is not None:
+        return _locked(OUTBOUND, until)
+    if quiet:
+        await _record(db, org_id, "strong_confirm.chat_command", result="blocked", target=OUTBOUND, quiet=True, step=step)
+        return _locked(OUTBOUND, await lock_outbound(db, org_id, reason="quiet_hours", now=t))
+    return None
 
 
 async def _backup_paired(db: AsyncSession, org_id: uuid.UUID) -> bool:
@@ -271,9 +280,9 @@ async def check_code(db: AsyncSession, redis: Any, org_id: uuid.UUID, ref: str, 
     if await backup.is_locked(db, org_id):
         return NeedConsole(OUTBOUND, ASSISTANT_LOCKED_REASON)
     await _serialize(db, org_id)
-    until = await outbound_locked_until(db, org_id, t)
-    if until is not None:
-        return _locked(OUTBOUND, until)
+    blocked = await _outbound_gate(db, org_id, t, quiet=await _quiet(db, org_id, t), step="check_code")
+    if blocked is not None:
+        return blocked
     raw = await redis.get(code_key(org_id, ref))
     if raw is None:
         return NeedCode(OUTBOUND)

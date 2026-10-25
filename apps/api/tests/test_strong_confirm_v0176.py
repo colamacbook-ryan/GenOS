@@ -255,3 +255,19 @@ async def test_three_defensive_commands_in_ten_minutes_lock_outbound(db: Any) ->
     assert await sc.outbound_locked_until(db, org) is not None
     assert isinstance(await sc.require(db, org, "outbound"), sc.NeedConsole)
     assert any("hạ phòng thủ" in r.text for r in await security_rows(db, org))
+
+
+async def test_check_code_in_quiet_hours_locks_even_with_right_code(db: Any, redis: Any) -> None:
+    """Tấn công (review bảo mật): mã kép xin NGOÀI giờ yên lặng, nhập TRONG giờ yên lặng ⇒ phải bị khoá như `require()`."""
+    org = await org_with(db, telegram=True)
+    await sc.issue_code(db, redis, org, "p1")
+    await db.commit()
+    code = await last_code(db, org)
+    await set_quiet(db, org, now_quiet=True)
+    out = await sc.check_code(db, redis, org, "p1", code)
+    await db.commit()
+    assert isinstance(out, sc.NeedConsole) and "tạm khoá" in out.reason
+    assert await sc.outbound_locked_until(db, org) is not None
+    assert any("giờ yên lặng" in r.text for r in await security_rows(db, org))
+    await set_quiet(db, org, now_quiet=False)
+    assert isinstance(await sc.check_code(db, redis, org, "p1", code), sc.NeedConsole)   # khoá 1 giờ vẫn giữ sau giờ yên lặng
