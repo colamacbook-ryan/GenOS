@@ -330,7 +330,7 @@ async def test_t4_old_facts_do_not_starve_new_promise(db: AsyncSession) -> None:
         await _fact(db, w, "promised_to", w.staff, f"việc cũ {i}", at=NOW - timedelta(days=40 + i), due=NOW - timedelta(days=30), to=w.cust)
     await _fact(db, w, "promised_to", w.staff, "giao hàng chiều nay", at=NOW - timedelta(hours=2), due=NOW + timedelta(hours=3), to=w.cust)
     out = await promises.project(db, w.org, NOW, limit=5)
-    assert [s.gate for s in out] == [levels.G4]
+    assert out[0].gate == levels.G4                                  # lời hứa gần hạn nhất xử lý ĐẦU TIÊN dù có fact cũ (lần đầu gặp vẫn được xử lý)
 
 
 async def test_t4_group_deadline_is_not_owner_work(db: AsyncSession) -> None:

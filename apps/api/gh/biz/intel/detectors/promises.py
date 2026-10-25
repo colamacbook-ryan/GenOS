@@ -220,8 +220,10 @@ async def _signal_for(db: AsyncSession, org_id: uuid.UUID, f: Any, c: PromiseCtx
     return await signals.upsert(db, org_id, up, now)
 
 
+# `pg_input_is_valid` (PG16): ngày sai như 2026-02-30 ⇒ NULL (coi như không có hạn) thay vì làm CAST lỗi chết cả lượt quét của tổ chức.
 _DUE_TS = r"""CASE WHEN jsonb_typeof(f.object_value) = 'object'
       AND f.object_value ->> 'due_at' ~ '^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}(:?\d{2})?)?)?$'
+      AND pg_input_is_valid(f.object_value ->> 'due_at', 'timestamptz')
       THEN CAST(f.object_value ->> 'due_at' AS timestamptz) END"""
 
 
@@ -239,13 +241,15 @@ async def project(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, limit: 
         LEFT JOIN LATERAL (SELECT COALESCE(te.merged_into, te.id) AS to_c FROM mem.entities te
                            WHERE te.id::text = f.object_value ->> 'to_entity_id' AND te.org_id = :o LIMIT 1) t ON jsonb_typeof(f.object_value) = 'object'
         WHERE f.org_id = :o AND f.predicate = ANY(:p) AND f.status IN ('asserted', 'owner_confirmed') AND f.valid_from >= :since
-          AND d.due_ts >= :dmin
+          AND (d.due_ts IS NULL OR d.due_ts >= :dmin
+               OR NOT (EXISTS (SELECT 1 FROM biz.promises p WHERE p.fact_id = f.id)
+                       OR EXISTS (SELECT 1 FROM biz.alerts a WHERE a.org_id = :o AND a.facts ->> 'fact_id' = f.id::text)))
           AND NOT EXISTS (SELECT 1 FROM ops.action_log al WHERE al.org_id = :o AND al.action = 'intel.promises.skip' AND al.target_id = f.id::text)
-          AND ((f.predicate = 'deadline' AND f.valid_to IS NULL)
+          AND ((f.predicate = 'deadline' AND f.valid_to IS NULL AND d.due_ts >= :dmin)
                OR (f.predicate <> 'deadline'
                    AND (COALESCE(se.merged_into, se.id) = ANY(CAST(:side AS uuid[])) OR t.to_c = ANY(CAST(:tos AS uuid[])))
-                   AND (f.valid_to IS NULL OR NOT EXISTS (SELECT 1 FROM biz.promises p WHERE p.fact_id = f.id))))
-        ORDER BY abs(extract(epoch FROM (d.due_ts - :now))) LIMIT :n"""),  # noqa: S608
+                   AND (f.valid_to IS NULL OR (d.due_ts IS NOT NULL AND NOT EXISTS (SELECT 1 FROM biz.promises p WHERE p.fact_id = f.id)))))
+        ORDER BY abs(extract(epoch FROM (COALESCE(d.due_ts, f.valid_from + interval '1 day') - :now))) LIMIT :n"""),  # noqa: S608
         {"o": org_id, "p": list(PREDICATES), "since": now - timedelta(days=WINDOW_DAYS), "dmin": now - timedelta(days=3), "now": now,
          "side": side, "tos": tos, "n": limit})).all()
     out: list[signals.Signal] = []
