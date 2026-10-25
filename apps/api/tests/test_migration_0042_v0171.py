@@ -217,6 +217,7 @@ async def test_new_tables_have_contract_columns(fresh_db: str) -> None:
             "attempts",
             "sent_at",
             "failed_code",
+            "refs",  # v0.1.76 (T1, 0044): "1 ok / sai 2" trỏ đúng mục bản tin
         },
         "owner_questions": {
             "id",

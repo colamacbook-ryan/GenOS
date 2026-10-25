@@ -285,17 +285,18 @@ async def verify_action_log(ctx: dict[str, Any]) -> dict[str, Any]:
                     WHERE org_id = :o AND alert_type = 'data_conflict' AND subject_type = 'action_log'
                       AND status IN ('open', 'acknowledged') AND evidence -> 0 ->> 'id' = CAST(:b AS text))"""),
                                                 {"o": org, "b": report.broken_at})).scalar_one():
-                code = (await db.execute(text("SELECT core.next_code('ALR')"))).scalar_one()
-                await db.execute(text("""
-                    INSERT INTO biz.alerts (org_id, code, alert_type, priority, recipient_user_id, subject_type,
-                                            title, summary, evidence)
-                    SELECT :o, :c, 'data_conflict', 'P1', u.id, 'action_log',
-                           'Nhật ký hành động bị sửa ngoài hệ thống',
-                           'Chuỗi băm đứt tại dòng ' || :b || '. Cần kiểm tra quyền truy cập CSDL.',
-                           jsonb_build_array(jsonb_build_object('type', 'action_log', 'id', :b))
-                    FROM core.users u JOIN core.user_roles ur ON ur.user_id = u.id
-                    JOIN core.roles r ON r.id = ur.role_id AND r.code = 'owner'
-                    WHERE u.org_id = :o LIMIT 1"""), {"o": org, "c": code, "b": report.broken_at})
+                # v0.1.76 (T1): một nơi ghi mức/ngăn là gh.biz.intel.signals (loại `system`, không lên kênh tình báo).
+                from gh.biz.intel import signals
+                from gh.providers.router import owner_user_id
+
+                owner = await owner_user_id(db, org)
+                if owner is not None:
+                    await signals.record_legacy(
+                        db, org, alert_type="data_conflict", priority="P1",
+                        title="Nhật ký hành động bị sửa ngoài hệ thống",
+                        summary=f"Chuỗi băm đứt tại dòng {report.broken_at}. Cần kiểm tra quyền truy cập CSDL.",
+                        subject_type="action_log", evidence=[{"type": "action_log", "id": str(report.broken_at)}],
+                        recipient_user_id=owner)
         await db.commit()
     return out
 

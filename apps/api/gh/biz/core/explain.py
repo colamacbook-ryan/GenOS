@@ -269,6 +269,10 @@ async def _alert(db: AsyncSession, user: service.CurrentUser, sc: Scope, id: str
         raise not_found("Cảnh báo")
     if await _evidence_in_hidden_group(db, sc, r.evidence):
         raise not_found("Cảnh báo")
+    # v0.1.76 (T1): cùng cổng privacy/nhóm ẩn với `/signals/{id}` (L-90).
+    from gh.biz.intel import access
+
+    await access.require_alert(db, user, aid)
     owner = user.role_code == rbac.OWNER
     return payload("alert", id, f"{r.code} · {mask_text(r.title, owner)}", f"Ưu tiên {r.priority}",
                    method="rule", units=await units_payload(db, await evidence_unit_ids(db, user.org_id, r.evidence),

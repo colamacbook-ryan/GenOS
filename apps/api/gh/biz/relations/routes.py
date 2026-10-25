@@ -186,7 +186,7 @@ WITH rows AS (
   LEFT JOIN LATERAL (SELECT sum(o.value_vnd) AS value_vnd FROM biz.opportunities o
                       WHERE o.person_id = p.id AND o.closed_at IS NULL) ov ON true
   LEFT JOIN LATERAL (SELECT min(CASE i.priority WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END) AS pri_rank
-                      FROM biz.inbox_items i WHERE i.person_id = p.id) pr ON true
+                      FROM biz.inbox_items i WHERE i.person_id = p.id AND i.privacy = 'chat_ok') pr ON true
   LEFT JOIN LATERAL (SELECT array_agg(DISTINCT ch2.type) AS channels FROM core.person_identities pi2
                       JOIN core.channels ch2 ON ch2.id = pi2.channel_id WHERE pi2.person_id = p.id) ch ON true
   LEFT JOIN agent.identities ag ON (p.attrs->>'agent_id') IS NOT NULL AND ag.id = (p.attrs->>'agent_id')::uuid

@@ -381,18 +381,14 @@ async def raise_alert(db: AsyncSession, org_id: uuid.UUID, *, alert_type: str, p
     """Ghi `biz.alerts`. Cảnh báo P1 (phàn nàn nặng, cơ hội nóng chưa ai nhận, hết chuỗi model…) còn rung CHUÔNG của mọi
     Owner (v0.1.71): trước đây P1 chỉ nằm trong Hộp thư nên Sếp không ở màn đó sẽ không biết. Chuông chỉ mang tiêu đề
     và việc cần làm, không mang nội dung tin của khách; `redis` có thì đẩy WebSocket ngay sau khi commit."""
-    import orjson
-
     from gh import notifications
 
-    code = (await db.execute(text("SELECT core.next_code('ALR')"))).scalar_one()
-    await db.execute(text("""
-        INSERT INTO biz.alerts (org_id, code, alert_type, priority, recipient_user_id, subject_type, subject_id,
-                                title, summary, suggested_action, evidence, personnel_related)
-        VALUES (:o, :c, :t, :p, :u, :st, :si, :ti, :su, :sa, CAST(:ev AS jsonb), :pr)"""),
-        {"o": org_id, "c": code, "t": alert_type, "p": priority, "u": await owner_user_id(db, org_id),
-         "st": subject_type, "si": subject_id, "ti": title, "su": summary, "sa": suggested,
-         "ev": orjson.dumps(evidence or []).decode(), "pr": personnel_related})
+    # v0.1.76 (T1): uỷ quyền cho cụm tín hiệu — loại/mức/ngăn theo bảng alert_type §4B.2 (một nơi ghi mức là gh.biz.intel.signals).
+    from gh.biz.intel import signals
+
+    await signals.record_legacy(db, org_id, alert_type=alert_type, priority=priority, title=title, summary=summary,
+                                suggested=suggested, subject_type=subject_type, subject_id=subject_id, evidence=evidence,
+                                personnel_related=personnel_related, recipient_user_id=await owner_user_id(db, org_id))
     if priority == "P1":
         await notifications.notify(db, org_id, await notifications.owner_ids(db, org_id), kind="alert.p1",
                                    title=f"Cảnh báo khẩn: {title}",
