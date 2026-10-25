@@ -102,6 +102,13 @@ async def is_customer(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID,
                        AND status IN ('asserted', 'owner_confirmed'))"""), {"p": person_id, "o": org_id, "e": entity_id})).scalar_one() is True
 
 
+async def sent_by(db: AsyncSession, org_id: uuid.UUID, raw_event_id: uuid.UUID, person_id: uuid.UUID) -> bool:
+    """Tin gốc là tin ĐẾN do chính `person_id` gửi (định danh thuộc người đó) — tin của người khác không bao giờ thành lời chê của khách."""
+    return (await db.execute(text("""SELECT 1 FROM raw.events e JOIN core.person_identities pi ON pi.id = e.sender_identity_id
+                                     WHERE e.id = :i AND e.org_id = :o AND e.direction = 'inbound' AND pi.person_id = :p LIMIT 1"""),
+                             {"i": raw_event_id, "o": org_id, "p": person_id})).first() is not None
+
+
 async def _ordered_after(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID, since: datetime) -> bool:
     return (await db.execute(text("""SELECT 1 FROM biz.deals WHERE org_id = :o AND person_id = :p AND won_at > :t LIMIT 1"""),
                              {"o": org_id, "p": person_id, "t": since})).first() is not None
@@ -128,7 +135,7 @@ async def _history(db: AsyncSession, org_id: uuid.UUID, case_key: str, new: leve
 async def emit(db: AsyncSession, org_id: uuid.UUID, c: ComplaintIn, now: datetime) -> list[signals.Signal]:
     """Ghi tín hiệu của một lời chê. Trả [xung_dot] (+ [quan_he_nong_nguoi] khi khách doạ bỏ). Không phải khách của Sếp ⇒ []."""
     ent = (await entities.ensure_person(db, org_id, c.customer_person_id)).id
-    if not await is_customer(db, org_id, c.customer_person_id, ent):
+    if not await is_customer(db, org_id, c.customer_person_id, ent) or not await sent_by(db, org_id, c.raw_event_id, c.customer_person_id):
         return []
     case_key = levels.case_key(KIND, at=c.sent_at, customer_entity_id=str(ent), reply_chain_id=c.reply_chain_id)
     ordered = c.ordered_after if c.ordered_after is not None else await _ordered_after(db, org_id, c.customer_person_id, c.sent_at)
@@ -169,13 +176,14 @@ async def close_case(db: AsyncSession, org_id: uuid.UUID, case_key: str, *, by: 
 
 async def from_rule(db: AsyncSession, org_id: uuid.UUID, *, event_ids: list[uuid.UUID], person_id: uuid.UUID | None,
                     group_id: uuid.UUID | None, now: datetime) -> list[signals.Signal] | None:
-    """Đường nhanh khiếu nại cho luật R-03 (`runner`): dựng `ComplaintIn` từ tin gốc rồi `emit`. Trả None khi không dựng được (không có
-    người / không phải khách / không có tin chữ) ⇒ bên gọi quay về `raise_alert` cũ. `public` = nhóm có > 2 thành viên."""
+    """Đường nhanh khiếu nại cho luật R-03 (`runner`): dựng `ComplaintIn` từ tin gốc rồi `emit`. Chỉ lấy tin ĐẾN do chính khách gửi (định danh thuộc `person_id`); marker doạ bỏ cũng chỉ tìm trong tin đó. Trả None khi không dựng được (không có
+    người / không phải khách / không có tin chữ của chính khách) ⇒ bên gọi quay về `raise_alert` cũ. `public` = nhóm có > 2 thành viên."""
     if person_id is None or not event_ids:
         return None
-    r = (await db.execute(text("""SELECT id, occurred_at, body_text FROM raw.events WHERE org_id = :o AND id = ANY(:i)
-                                  AND body_text IS NOT NULL AND body_text <> '' ORDER BY occurred_at LIMIT 1"""),
-                          {"o": org_id, "i": event_ids})).one_or_none()
+    r = (await db.execute(text("""SELECT e.id, e.occurred_at, e.body_text FROM raw.events e JOIN core.person_identities pi ON pi.id = e.sender_identity_id
+                                  WHERE e.org_id = :o AND e.id = ANY(:i) AND e.direction = 'inbound' AND pi.person_id = :p
+                                  AND e.body_text IS NOT NULL AND e.body_text <> '' ORDER BY e.occurred_at LIMIT 1"""),
+                          {"o": org_id, "i": event_ids, "p": person_id})).one_or_none()
     if r is None:
         return None
     members = 0

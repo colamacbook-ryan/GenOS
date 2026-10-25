@@ -83,8 +83,8 @@ async def test_question_clock_job_is_registered_and_kin_question_is_covered(db) 
     assert "intel_questions_clock" in {f.__name__ for f, _ in intel_jobs.JOBS} and "intel_heat_scan" in {f.__name__ for f, _ in intel_jobs.JOBS}
     w = await mk_world(db, await mk_org(db))
     await _install(db, w.org)
-    mother, _ = await mk_person(db, w.org, w.channel, "Mẹ")
-    raw = await mk_raw(db, w.org, w.channel, identity=None, body="Con ơi tối nay về ăn cơm không?", at=NOW - timedelta(hours=1))
+    mother, mother_i = await mk_person(db, w.org, w.channel, "Mẹ")
+    raw = await mk_raw(db, w.org, w.channel, identity=mother_i, body="Con ơi tối nay về ăn cơm không?", at=NOW - timedelta(hours=1))
     q = questions.QuestionIn(asked_at=NOW - timedelta(hours=1), raw_event_id=raw, span_end=10, asker="kin", asker_person_id=mother, needs_owner=True,
                              thread=levels.Thread(type="dm_owner", owner_in_thread=True))
     sig = await questions.emit(db, w.org, q, NOW)
@@ -262,3 +262,39 @@ async def test_heat_scan_key_relation_cooling_from_heat_series(db) -> None:  # t
     row = (await db.execute(text("SELECT kind, level, facts FROM biz.alerts WHERE org_id = :o"), {"o": w.org})).one()
     assert row.kind == "quan_he_nong_nguoi" and row.facts["heat_cooling"] is True and row.facts["key_relation"] is True
     assert row.level != "red"
+
+
+# ─── tấn công: tin của người khác không được gán cho khách ───────────────────
+
+async def test_attack_third_party_leave_threat_is_not_attributed_to_customer(db) -> None:  # type: ignore[no-untyped-def]
+    w, pid, iid, _ = await _customer(db, "Chị Lan")
+    other, other_i = await mk_person(db, w.org, w.channel, "Nhân viên / người lạ")
+    gid = await mk_group(db, w.org, w.channel)
+    await db.execute(text("UPDATE core.groups SET member_count = 30 WHERE id = :g"), {"g": gid})
+    body = "Thôi khỏi, lần sau lấy chỗ khác nhé"
+    third = await mk_raw(db, w.org, w.channel, identity=other_i, body=body, group=gid, at=NOW - timedelta(hours=1))
+    outbound = await mk_raw(db, w.org, w.channel, identity=None, body=body, group=gid, direction="outbound", at=NOW - timedelta(hours=1))
+    # đường nhanh: id tin chỉ có tin của người thứ ba / tin đi ⇒ None, không tín hiệu
+    assert await conflicts.from_rule(db, w.org, event_ids=[third], person_id=pid, group_id=gid, now=NOW) is None
+    assert await conflicts.from_rule(db, w.org, event_ids=[outbound, third], person_id=pid, group_id=gid, now=NOW) is None
+    # có cả tin của khách (không doạ bỏ) lẫn tin người khác (doạ bỏ) ⇒ chọn đúng tin của khách, marker không lấy từ tin người khác
+    own = await mk_raw(db, w.org, w.channel, identity=iid, body="giao hơi trễ", group=gid, at=NOW - timedelta(hours=1, minutes=-5))
+    out = await conflicts.from_rule(db, w.org, event_ids=[third, own], person_id=pid, group_id=gid, now=NOW)
+    assert out and len(out) == 1 and out[0].kind == "xung_dot_khieu_nai"           # không có bản quan_he (không doạ bỏ) — marker của người khác bị bỏ
+    li = (await db.execute(text("SELECT level_input -> 'flags' ->> 'said_will_leave' AS s FROM biz.alerts WHERE id = :i"), {"i": out[0].id})).scalar_one()
+    assert li == "false"
+    # gọi thẳng emit với tin của người khác ⇒ từ chối
+    assert await conflicts.emit(db, w.org, _complaint(third, pid, said_will_leave=True), NOW) == []
+    assert (await db.execute(text("SELECT count(*) FROM biz.alerts WHERE org_id = :o AND kind = 'quan_he_nong_nguoi'"), {"o": w.org})).scalar_one() == 0
+
+
+async def test_attack_question_of_other_person_is_not_labelled_kin_or_customer(db) -> None:  # type: ignore[no-untyped-def]
+    w = await mk_world(db, await mk_org(db))
+    await _install(db, w.org)
+    mother, _mi = await mk_person(db, w.org, w.channel, "Mẹ")
+    _stranger, si = await mk_person(db, w.org, w.channel, "Người lạ")
+    raw = await mk_raw(db, w.org, w.channel, identity=si, body="Cho hỏi giá?", at=NOW - timedelta(hours=1))
+    q = questions.QuestionIn(asked_at=NOW - timedelta(hours=1), raw_event_id=raw, span_end=5, asker="kin", asker_person_id=mother, needs_owner=True)
+    sig = await questions.emit(db, w.org, q, NOW)
+    r = (await db.execute(text("SELECT facts, subject_id FROM biz.alerts WHERE id = :i"), {"i": sig.id})).one()
+    assert r.facts["asker_kind"] == "other" and r.subject_id is None

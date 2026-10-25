@@ -85,10 +85,19 @@ def build_input(q: QuestionIn, now: datetime, *, subject_entity_id: uuid.UUID | 
         harm_what="câu hỏi đang chờ, có thể chặn việc" if q.blocks_work else "")
 
 
+async def _sent_by(db: AsyncSession, org_id: uuid.UUID, raw_event_id: uuid.UUID, person_id: uuid.UUID) -> bool:
+    return (await db.execute(text("""SELECT 1 FROM raw.events e JOIN core.person_identities pi ON pi.id = e.sender_identity_id
+                                     WHERE e.id = :i AND e.org_id = :o AND pi.person_id = :p LIMIT 1"""),
+                             {"i": raw_event_id, "o": org_id, "p": person_id})).first() is not None
+
+
 async def emit(db: AsyncSession, org_id: uuid.UUID, q: QuestionIn, now: datetime) -> signals.Signal:
     """Ghi (hoặc gộp) tín hiệu câu hỏi: một câu hỏi gốc = một tín hiệu (`case_key` theo tin gốc, spec §4.2 bảng case_key)."""
     st = await signals.delivery_state(db, org_id, now)
     ent: uuid.UUID | None = None
+    if q.asker_person_id is not None and not await _sent_by(db, org_id, q.raw_event_id, q.asker_person_id):
+        # Tin gốc không do người này gửi ⇒ không gán câu hỏi cho họ (không để tin người khác mang nhãn khách/người thân).
+        q = q.model_copy(update={"asker_person_id": None, "asker": "other"})
     if q.asker_person_id is not None:
         try:
             ent = (await entities.ensure_person(db, org_id, q.asker_person_id)).id
