@@ -167,7 +167,8 @@ async def test_console_state_defaults(owner_api: Api) -> None:
 # ─── review bảo mật T11: M1 mute phạm vi khác + m1/m4/m7 ─────────────────────
 
 @pytest.mark.parametrize(("scope_type", "scope_value"), [("detector", "fraud"), ("detector", "safety"), ("group", "00000000-0000-0000-0000-000000000001"),
-                                                          ("person", "00000000-0000-0000-0000-000000000002")])
+                                                          ("person", "00000000-0000-0000-0000-000000000002"),
+                                                          ("kind", "viec_han"), ("kind", "quan_he_nong_nguoi")])
 async def test_pin_mute_of_other_scope_is_defensive_and_notifies(owner_api: Api, db: AsyncSession, scope_type: str, scope_value: str) -> None:
     await verify_pin(owner_api)
     r = await owner_api.send("POST", "/intel/mutes", {"scope_type": scope_type, "scope_value": scope_value})

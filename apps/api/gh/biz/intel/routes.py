@@ -166,7 +166,8 @@ async def create_mute(body: MuteIn, user: service.CurrentUser = Depends(require_
     if kind_defensive and not user.pin_active():
         raise pin_required()
     source = "pin" if user.pin_active() else "chat"
-    defensive = kind_defensive or (body.scope_type != "kind" and source == "pin")
+    # mọi mute PIN đều hạ được vụ fail-high (G1/G2 bắt ở mọi kind) ⇒ luôn qua strong_confirm + báo kênh phụ
+    defensive = source == "pin"
     old = await mutes.find_active(db, user.org_id, scope_type=body.scope_type, scope_value=body.scope_value, source=source)  # type: ignore[arg-type]
     if old is not None:
         return {"id": str(old.id), "source": old.source, "already": True}
