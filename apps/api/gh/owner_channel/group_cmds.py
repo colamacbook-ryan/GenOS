@@ -43,6 +43,7 @@ _TAT = ("tat", "tắt", "off")
 
 USAGE_SUPPORT = ("Cách dùng: /ho_tro (xem) · /ho_tro <mã nhóm> bat [số giờ] · /ho_tro <mã nhóm> tat. "
                  "Mã nhóm xem ở /nhom.")
+LOCKED_ANY = "Trợ lý đang bị khoá nên em không làm lệnh này. Sếp mở khoá trên Console (mã PIN) trước."
 LOCKED = "Trợ lý đang bị khoá nên em không bật hỗ trợ nhóm được. Sếp mở khoá trên Console (mã PIN) trước."
 #: Lệnh đi qua cổng "Owner còn hợp lệ" (v0.1.76): TẤT CẢ lệnh nhóm.
 OWNER_CHECKED = KINDS
@@ -247,6 +248,11 @@ async def _owner_gate(db: AsyncSession, org_id: uuid.UUID, oi: OwnerIds) -> Owne
 async def handle(db: AsyncSession, redis: Redis, org_id: uuid.UUID, oi: OwnerIds, kind: str, args: str) -> str:
     """Chạy một lệnh nhóm; trả chữ trả lời. Gọi khi `oi.enabled`; commit do bên gọi."""
     channel = oi.channel
+    parts = args.split()
+    safe = kind == "ho_tro" and len(parts) >= 2 and parts[1].lower() in _TAT      # tắt hỗ trợ = chiều an toàn, vẫn cho
+    # v0.1.76: kiểm LẠI lúc xử lý (tin có thể đã xếp hàng trước khi khoá)
+    if not safe and await oin.assistant_locked(db, org_id):
+        return LOCKED_ANY
     checked = await _owner_gate(db, org_id, oi)
     if checked is None:
         from gh.owner_cmd import core as owner_core

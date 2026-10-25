@@ -331,6 +331,8 @@ async def handle(sm: async_sessionmaker[AsyncSession], redis: Redis, app: Any, o
     via = str(oi.channel)
     if via not in chat_pending.CHAT_VIAS or app is None:
         return NOT_HERE
+    if await owner_core.assistant_locked(sm, org_id):        # v0.1.76: kiểm LẠI lúc xử lý (tin có thể đã xếp hàng trước khi khoá)
+        return owner_core.ASSISTANT_LOCKED
     async with sm() as db:
         await _set_org(db, org_id)
         owner = await owner_core.owner_user(db, org_id, oi.owner_user_id)

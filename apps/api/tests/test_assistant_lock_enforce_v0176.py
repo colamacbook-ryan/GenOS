@@ -120,3 +120,39 @@ async def test_send_auto_refuses_when_assistant_locked_and_logs(app: Any, db: An
     assert (await db.execute(text("SELECT count(*) FROM ops.auto_sends WHERE org_id = :o"), {"o": org})).scalar_one() == 0
     code = (await db.execute(text("SELECT detail->>'code' FROM ops.action_log WHERE org_id = :o AND action = 'autosend.refused'"), {"o": org})).scalar_one()
     assert code == "ASSISTANT_LOCKED"
+
+
+# ─── review bảo mật T2 (minor 5): tin đã xếp hàng TRƯỚC lúc khoá không được làm gì khi xử lý ──────────
+
+async def _set_flag(db: Any, org: uuid.UUID) -> None:
+    await db.execute(text("""UPDATE core.organizations SET settings = settings || jsonb_build_object('intel',
+                               COALESCE(settings->'intel', '{}'::jsonb) || '{"assistant_locked_at": "2026-10-25T00:00:00Z"}'::jsonb)
+                             WHERE id = :o"""), {"o": org})
+    await db.commit()
+
+
+@pytest.mark.parametrize("body", ["OK", "/boi_canh 1 gia đình", "ghi nhớ: anh ưu tiên mở quán thứ 2 trong quý này", "/nhap nhắc tôi gọi anh Nam"])
+async def test_queued_dm_does_nothing_once_locked(app: Any, db: Any, redis: Any, body: str) -> None:
+    import time as _time
+
+    from gh.owner_channel import dm
+    from tests.owner_helpers import FakeBus
+    from tests.test_chat_confirm_v0173 import Chat, reminder
+    from tests.test_telegram_commands_v0164 import Router
+
+    org = await org_id(db)
+    sid = await bot_world(db, org)
+    await listen(db, org, "g1")
+    c = Chat(app, redis, org, sid)
+    await c.say("/nhap nhắc tôi gọi anh Nam", Router(reminder("Gọi anh Nam")))
+    await _set_flag(db, org)                                          # khoá xảy ra SAU khi tin đã vào hàng đợi
+    mid = uuid.uuid4().hex
+    await redis.set(f"gh:owner:dm:zalo:{mid}", str(int(_time.time())), ex=600)
+    p = {"channel": "zalo", "session_id": str(sid), "external_msg_id": mid, "text": body, "occurred_at": ago(seconds=1)}
+    router = Router(reminder("Gọi anh Nam"))
+    await dm.handle_dm(SM(), redis, FakeBus(), router, org, p, app)
+    await db.rollback()
+    assert (await db.execute(text("SELECT count(*) FROM biz.tasks WHERE org_id = :o"), {"o": org})).scalar_one() == 0
+    assert (await db.execute(text("SELECT count(*) FROM mem.group_contexts WHERE org_id = :o"), {"o": org})).scalar_one() == 0
+    assert (await db.execute(text("SELECT count(*) FROM mem.facts WHERE org_id = :o AND predicate LIKE 'owner_%'"), {"o": org})).scalar_one() == 0
+    assert router.calls == []                                        # không chạy cả model

@@ -111,6 +111,7 @@ NOT_UNDERSTOOD = "Em chưa hiểu ý Sếp để soạn đề xuất. Sếp nói
 NEED_TEXT = "Sếp gõ kèm ý cần soạn, ví dụ: /nhap nhắc tôi gọi anh Nam lúc 9h sáng mai"
 FAILED = "Em gặp lỗi khi xử lý tin này. Sếp thử lại, hoặc xem trong Console."
 NOTHING = otext.NOTHING
+ASSISTANT_LOCKED = "Trợ lý đang bị khoá nên em không làm gì. Sếp mở khoá trên Console (mã PIN)."
 
 
 @dataclass(frozen=True)
@@ -861,6 +862,17 @@ async def _log(ctx: Context, cmd: OwnerCommand, action: str, **extra: Any) -> No
         log.warning("%s: không ghi được Action Log %s", cmd.via, action, exc_info=True)
 
 
+async def assistant_locked(sm: Any, org_id: uuid.UUID) -> bool:
+    """Cờ "khoá trợ lý" (T10, một nguồn `gh.telegram.backup.is_locked`) — đọc LÚC XỬ LÝ."""
+    from gh.telegram import backup
+
+    async with sm() as db:
+        await _set_org(db, org_id)
+        locked = await backup.is_locked(db, org_id)
+        await db.rollback()
+    return locked
+
+
 async def handle(cmd: OwnerCommand, ctx: Context, *, overrides: Mapping[str, Handler] | None = None) -> Reply:
     """Trả `Reply`. Link chỉ có khi vừa soạn đề xuất: "Mở Console để Xác nhận". Không ném.
     `overrides` thay một lệnh chỉ đọc ('hom_nay' | 'viec' | 'suc_khoe') bằng hàm của kênh gọi."""
@@ -875,6 +887,8 @@ async def handle(cmd: OwnerCommand, ctx: Context, *, overrides: Mapping[str, Han
             await db.rollback()
         if owner is None:
             return Reply(no_owner_text(cmd.via))
+        if cmd.via in PROFILE_VIAS and await assistant_locked(ctx.sm, ctx.org_id):
+            return Reply(ASSISTANT_LOCKED)      # v0.1.76: kênh quản trị đang khoá ⇒ không đọc, không gọi model, không ghi
         async with ctx.sm() as db:
             await _set_org(db, ctx.org_id)
             ctx.persona = await diplomat.load(db, ctx.org_id)
