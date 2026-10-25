@@ -175,3 +175,47 @@ async def test_fraud_security_second_account_in_flagged_message_never_known(db: 
                      {"o": w.org, "p": p, "d": facts.payment_digest(ACCT_OLD), "ca": w.now - timedelta(days=30)})
     known, _v, _a = await _history(db, w.org, Who(ref="x", person_id=p, entity_id=ent), w.now + timedelta(days=1))
     assert facts.payment_digest(ACCT_OLD) not in known
+
+
+def test_fraud_security_huge_number_no_overflow() -> None:
+    """Tấn công tràn số: 400 chữ số kèm đơn vị không làm `scan` ném lỗi; số tiền có trần."""
+    sc = fraud.scan("9" * 400 + " triệu, chuyển gấp vào STK " + ACCT_NEW + " MB giúp em")
+    assert sc.accounts and sc.pay_ask is not None
+    assert sc.amount_vnd is None or sc.amount_vnd <= fraud.AMOUNT_CAP
+    assert fraud._vnd("9" * 15, "ty") == fraud.AMOUNT_CAP and fraud._vnd("1e999", "ty") is None
+    assert fraud.max_amount("1" + "0" * 400 + " ty") is None
+
+
+async def test_fraud_security_huge_number_batch_continues(db: AsyncSession, caplog: pytest.LogCaptureFixture) -> None:
+    """Lô vẫn chạy hết: tin 400 chữ số + "chuyển gấp vào STK…" vẫn bị phát hiện, các tin khác cùng lô vẫn được quét."""
+    caplog.set_level(logging.WARNING)
+    w = await world(db)
+    await w.group("g", "Nhóm nhỏ", 20)
+    _p, iid = await w.person("Người lạ", group="g", joined_days_ago=1)
+    _q, iid2 = await w.person("Người lạ 2", group="g", joined_days_ago=1)
+    await w.raw("9" * 400 + " triệu, chuyển gấp vào STK " + ACCT_NEW + " MB, bên em đổi tài khoản mới", sender=iid, group="g",
+                at=w.now - timedelta(minutes=3))
+    await w.raw("Cho em mượn 3 triệu, chuyển giúp em gấp", sender=iid2, group="g")
+    out = await fraud.run(db, w.org, w.now)
+    assert len(out) == 2 and all(s.level == "red" for s in out)
+    _no_secret("\n".join(r.getMessage() for r in caplog.records))
+    assert "9" * 50 not in "\n".join(r.getMessage() for r in caplog.records)
+
+
+async def test_fraud_security_one_bad_message_skipped_not_batch(db: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Một tin làm `prepare` ném lỗi bất kỳ ⇒ chỉ bỏ tin đó, tin khác vẫn ra tín hiệu."""
+    w = await world(db)
+    await w.group("g", "Nhóm nhỏ", 20)
+    _p, iid = await w.person("Người lạ", group="g", joined_days_ago=1)
+    bad = await w.raw("TIN_HONG cho em mượn 2 triệu", sender=iid, group="g", at=w.now - timedelta(minutes=3))
+    await w.raw("Cho em mượn 3 triệu, chuyển giúp em gấp", sender=iid, group="g")
+    real = fraud.prepare
+
+    async def flaky(db_: AsyncSession, org: object, row: object, **kw: object) -> object:
+        if row.event_id == bad[0]:  # type: ignore[attr-defined]
+            raise OverflowError("x")
+        return await real(db_, org, row, **kw)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(fraud, "prepare", flaky)
+    out = await fraud.run(db, w.org, w.now)
+    assert len(out) == 1 and out[0].level == "red"

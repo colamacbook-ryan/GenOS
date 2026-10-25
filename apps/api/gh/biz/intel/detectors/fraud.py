@@ -40,6 +40,7 @@ import re
 import uuid
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from types import SimpleNamespace
 from typing import Any
 
@@ -237,21 +238,26 @@ def _accounts(fold: str, idx: list[int], n: int) -> list[Account]:
     return uniq
 
 
-_AMOUNT = re.compile(r"(?<![\d.,])(\d{1,3}(?:[.,]\d{3})+|\d+(?:[.,]\d+)?)\s*(ty|ti|tr|trieu|cu|nghin|ngan|k|d|dong|vnd)\b")
+#: Số tiền: phần số GIỚI HẠN độ dài (≤ 15 chữ số, hoặc nhóm nghìn ≤ 6 nhóm) — chuỗi số cực dài không bao giờ khớp.
+_AMOUNT = re.compile(r"(?<![\d.,])(\d{1,3}(?:[.,]\d{3}){1,5}|\d{1,15}(?:[.,]\d{1,3})?)(?![\d])\s*(ty|ti|tr|trieu|cu|nghin|ngan|k|d|dong|vnd)\b")
 _UNIT = {"ty": 1_000_000_000, "ti": 1_000_000_000, "tr": 1_000_000, "trieu": 1_000_000, "cu": 1_000_000, "nghin": 1_000, "ngan": 1_000, "k": 1_000}
+AMOUNT_CAP = 10**15
+_LONG_RUN = re.compile(r"\d{20,}")
+_GROUPED = re.compile(r"\d{1,3}(?:[.,]\d{3})+")
 
 
 def _vnd(num: str, unit: str) -> int | None:
+    """Đổi sang VND bằng `Decimal` (không float ⇒ không inf/OverflowError); trần `AMOUNT_CAP`. Lỗi ⇒ None (bên gọi vẫn đánh giá tin)."""
+    if not re.fullmatch(r"\d[\d.,]{0,22}", num or ""):
+        return None                                        # chỉ nhận chữ số + dấu nhóm (không "1e999", không chuỗi số cực dài)
     try:
-        if re.fullmatch(r"\d{1,3}(?:[.,]\d{3})+", num) and unit not in ("ty", "ti", "tr", "trieu", "cu"):
-            base = float(re.sub(r"[.,]", "", num))
-        elif re.fullmatch(r"\d{1,3}(?:[.,]\d{3})+", num):
-            base = float(re.sub(r"[.,]", "", num))          # "1.000 triệu" vẫn là nghìn triệu
-        else:
-            base = float(num.replace(",", "."))
-    except ValueError:
+        base = Decimal(re.sub(r"[.,]", "", num)) if _GROUPED.fullmatch(num) else Decimal(num.replace(",", "."))
+        v = base * _UNIT.get(unit, 1)
+        if not v.is_finite() or v < 0:
+            return None
+        return int(v) if v <= AMOUNT_CAP else AMOUNT_CAP
+    except (InvalidOperation, ValueError, OverflowError):
         return None
-    return int(base * _UNIT.get(unit, 1))
 
 
 def max_amount(fold: str) -> int | None:
@@ -329,7 +335,13 @@ def _scan_one(t: str, source_field: str) -> Scan:
 
     fold, idx = _fold_map(t)
     n = len(t)
-    cands = prefilter.scan_text(t, source_field if source_field != "body" else "body")
+    # Luật (a) của L2: dãy số > 19 chữ số được thay bằng '#' CÙNG ĐỘ DÀI (giữ span) — `prefilter._vnd` đổi số qua float nên chuỗi số cực
+    # dài làm nó ném OverflowError (lỗi của L2, đã báo). Vẫn lỗi ⇒ bỏ ứng viên L2, luật W5 của file này vẫn chạy (fail-high).
+    try:
+        cands = prefilter.scan_text(_LONG_RUN.sub(lambda m: "#" * len(m.group(0)), t), source_field)
+    except Exception as e:  # noqa: BLE001
+        log.warning("fraud: luật (a) L2 lỗi trên một đoạn chữ: %s", type(e).__name__)
+        cands = []
     cred_c = next((c for c in cands if c.flag == "credentials_entered"), None)
     take_c = next((c for c in cands if c.flag == "account_takeover"), None)
     cred: tuple[int, int] | None = cred_c.span if cred_c else None
@@ -345,7 +357,11 @@ def _scan_one(t: str, source_field: str) -> Scan:
     pay = _PAY_VERB.search(fold) if accts else None
     ask = _ASK_MONEY.search(fold)
     order, nodep, rush = _ORDER.search(fold), _NO_DEPOSIT.search(fold), _RUSH.search(fold)
-    amount = max_amount(fold)          # số LỚN NHẤT trong chữ (không dùng ứng viên "amount" đầu tiên của L2 — chỉ để hiển thị)
+    try:
+        amount = max_amount(fold)
+    except Exception:  # noqa: BLE001 — fail-high: số tiền hỏng không chặn đánh giá tin (amount = None)
+        amount = None
+          # số LỚN NHẤT trong chữ (không dùng ứng viên "amount" đầu tiên của L2 — chỉ để hiển thị)
     qty = max((int(q.group(1)) for q in _QTY.finditer(fold)), default=0)
     big = (amount or 0) >= BIG_ORDER_VND or qty >= BIG_ORDER_QTY or _BIG_WORDS.search(fold) is not None
     goods = _span(order, idx, n) if (order and nodep and rush and big) else None
@@ -997,7 +1013,7 @@ async def run(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, call: Any =
                     p = await run_d2(db, org_id, p, call)
                 sig = await _write(db, org_id, p, now)
             out.append(sig)
-        except (signals.SignalError, ValueError) as e:
+        except Exception as e:  # noqa: BLE001 — một tin hỏng chỉ bỏ qua tin đó (mã tin + tên lỗi, không nội dung), lô vẫn chạy tiếp
             log.warning("fraud: bỏ qua tin %s: %s", row.event_id, type(e).__name__)
     return out
 
