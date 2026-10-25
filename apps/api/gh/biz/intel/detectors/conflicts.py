@@ -129,13 +129,18 @@ async def _repeat_n(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID, c
     return max(int(n) + 1, claimed)
 
 
-async def _open_case(db: AsyncSession, org_id: uuid.UUID, base_key: str) -> tuple[str, list[levels.CaseEvent]]:
-    """(khoá vụ, lịch sử) của vụ ĐANG MỞ mới nhất ứng với `base_key` (gồm các vụ mở lại `base_key|v<epoch>`). Chưa có vụ mở ⇒ (base_key, [])."""
-    r = (await db.execute(text("""SELECT case_key, facts -> 'case_events' AS ev FROM biz.alerts
+async def _open_case(db: AsyncSession, org_id: uuid.UUID, base_key: str, at: datetime) -> tuple[str, list[levels.CaseEvent]]:
+    """(khoá vụ, lịch sử) của vụ ĐANG MỞ mới nhất ứng với `base_key` (gồm các vụ mở lại `base_key|v<epoch>` / vụ kế tiếp `|#n`). Chưa có vụ
+    mở, hoặc vụ mở đã quá cửa sổ trượt 72 giờ (`levels.case_window`, T12) ⇒ (base_key, []) — `signals.upsert` cấp hậu tố vụ mới."""
+    r = (await db.execute(text("""SELECT case_key, facts -> 'case_events' AS ev, level_input ->> 'msg_at' AS seen FROM biz.alerts
                                   WHERE org_id = :o AND kind = :k AND status IN ('open', 'acknowledged')
-                                    AND (case_key = :ck OR case_key LIKE :ck || '|v%') ORDER BY created_at DESC LIMIT 1"""),
+                                    AND (case_key = :ck OR left(case_key, length(:ck) + 2) IN (:ck || '|v', :ck || '|#'))
+                                  ORDER BY created_at DESC LIMIT 1"""),
                           {"o": org_id, "k": KIND, "ck": base_key})).one_or_none()
     if r is None:
+        return base_key, []
+    win = levels.case_window(base_key)
+    if win is not None and r.seen and abs(levels._aware(at) - levels._aware(datetime.fromisoformat(r.seen))) >= win:
         return base_key, []
     return r.case_key, [levels.CaseEvent.model_validate(e) for e in (r.ev or [])]
 
@@ -154,7 +159,7 @@ async def emit(db: AsyncSession, org_id: uuid.UUID, c: ComplaintIn, now: datetim
     if not (cold_customer or await is_customer(db, org_id, c.customer_person_id, ent)) or not await sent_by(db, org_id, c.raw_event_id, c.customer_person_id):
         return []
     base_key = levels.case_key(KIND, at=c.sent_at, customer_entity_id=str(ent), reply_chain_id=c.reply_chain_id)
-    case_key, old_events = await _open_case(db, org_id, base_key)
+    case_key, old_events = await _open_case(db, org_id, base_key, c.sent_at)
     closed_at = _last_closure(old_events)
     if closed_at is not None and c.sent_at > closed_at:
         # "Khách chê lại sau khi đóng là vụ MỚI" (§4.2.1): khoá mới + mốc vụ mới; vụ cũ (đóng bởi NV, còn mở) giữ nguyên closure của nó.

@@ -986,16 +986,21 @@ async def _thread(db: AsyncSession, org_id: uuid.UUID, group_id: uuid.UUID | Non
     return levels.Thread(type="group", size=int(g.member_count or 0) if g else 0, owner_in_thread=owner_in, agent_in_thread=True), f"nhóm “{name[:60]}”"
 
 
-async def _effective_case(db: AsyncSession, org_id: uuid.UUID, ck: str) -> str:
-    """Vụ đã có tín hiệu mở (kể cả do đường nhanh `raw_tail` tạo với khoá tin gốc) ⇒ dùng lại khoá đó (một vụ một 🔴)."""
-    got = (await db.execute(text("""SELECT case_key FROM biz.alerts WHERE org_id = :o AND kind = 'rui_ro_lua_dao' AND status IN ('open', 'acknowledged')
-                                    AND (case_key = :ck OR facts ->> 'fraud_case' = :ck) ORDER BY (case_key = :ck) DESC, created_at LIMIT 1"""),
-                            {"o": org_id, "ck": ck})).scalar_one_or_none()
-    return got or ck
+async def _effective_case(db: AsyncSession, org_id: uuid.UUID, ck: str, at: datetime) -> str:
+    """Vụ đã có tín hiệu mở (kể cả do đường nhanh `raw_tail` tạo với khoá tin gốc) ⇒ dùng lại khoá đó (một vụ một 🔴). Khoá không gắn
+    ngày (T12): chỉ dùng lại vụ có tin mới nhất trong cửa sổ trượt của khoá (`levels.case_window`); quá cửa sổ ⇒ `signals.upsert` mở vụ mới."""
+    rows = (await db.execute(text("""SELECT case_key, level_input ->> 'msg_at' AS seen FROM biz.alerts
+                                     WHERE org_id = :o AND kind = 'rui_ro_lua_dao' AND status IN ('open', 'acknowledged')
+                                       AND (case_key = :ck OR left(case_key, length(:ck) + 2) = :ck || '|#' OR facts ->> 'fraud_case' = :ck)
+                                     ORDER BY created_at DESC"""), {"o": org_id, "ck": ck})).all()
+    win = levels.case_window(ck)
+    for r in rows:
+        if win is None or not r.seen or abs(levels._aware(at) - levels._aware(datetime.fromisoformat(r.seen))) < win:
+            return str(r.case_key)
+    return ck
 
 
 def _case_key(d: Decision, row: _Row, ctx: Ctx) -> str:
-    vn_day = row.occurred_at.astimezone(levels.VN).date().isoformat()
     if d.payee and d.payee.digest and set(d.rules) & {"stk_change", "stk_change_unverified", "stk_unhashed", "payment_account_dispute", "impersonation", "unc"}:
         return levels.case_key(FR, at=row.occurred_at, payee_digest=d.payee.digest[:32], group_id=str(row.group_id) if row.group_id else None)
     if ctx.impersonated is not None and ctx.impersonated.entity_id is not None:
@@ -1003,7 +1008,7 @@ def _case_key(d: Decision, row: _Row, ctx: Ctx) -> str:
     if d.domain:
         return levels.case_key(FR, at=row.occurred_at, domain=d.domain)
     if ctx.sender.person_id is not None and set(d.rules) & {"stranger_money_request", "stranger_stk_request", "goods_no_deposit_rush", "stk_change_claim"}:
-        return levels.case_key(FR, at=row.occurred_at, raw_event_id=f"actor:{ctx.sender.person_id}:{vn_day}")
+        return levels.case_key(FR, at=row.occurred_at, raw_event_id=f"actor:{ctx.sender.person_id}")   # cửa sổ trượt 24 giờ (levels.case_window), không theo ngày
     return levels.case_key(FR, at=row.occurred_at, raw_event_id=str(row.event_id))
 
 
@@ -1077,7 +1082,7 @@ async def prepare(db: AsyncSession, org_id: uuid.UUID, row: _Row, *, key_rel: fr
     thread, place = await _thread(db, org_id, row.group_id, owner_people)
     title, harm, action = wording(d, place, imp.name if imp else None)
     li = signal_input(d, msg_at=row.occurred_at, thread=thread).model_copy(update={"harm_what": harm, "subject_entity_id": stk_owner.entity_id})
-    ck = await _effective_case(db, org_id, _case_key(d, row, ctx))
+    ck = await _effective_case(db, org_id, _case_key(d, row, ctx), row.occurred_at)
     fx: dict[str, Any] = {"fraud_rules": list(d.rules), "fraud_case": _case_key(d, row, ctx), "fraud_v": VERSION,
                           "fraud_digests": sorted({a.digest for a in sc.accounts if a.digest})}   # MỌI STK của tin (băm) ⇒ không bao giờ thành lịch sử
     prev = (await db.execute(text("""SELECT facts -> 'fraud_digests' FROM biz.alerts WHERE org_id = :o AND kind = 'rui_ro_lua_dao'

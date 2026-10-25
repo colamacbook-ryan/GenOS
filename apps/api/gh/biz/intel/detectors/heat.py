@@ -98,7 +98,7 @@ async def scan(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> dict[str, 
         if last is None:
             continue                                   # không có bằng chứng đã kiểm để trích ⇒ không thành tín hiệu (§8.1)
         legacy = (await db.execute(text("""SELECT 1 FROM biz.alerts WHERE org_id = :o AND kind = :k AND subject_id = :p AND status IN ('open', 'acknowledged')
-                                           AND case_key IS DISTINCT FROM :ck AND created_at > :t LIMIT 1"""),
+                                           AND split_part(COALESCE(case_key, ''), '|#', 1) IS DISTINCT FROM :ck AND created_at > :t LIMIT 1"""),
                                    {"o": org_id, "k": KIND, "p": pid, "ck": case_key, "t": now - timedelta(days=14)})).first()
         if legacy:
             continue                                   # đã có cảnh báo "khách lạnh" cũ cho người này — không nhân đôi

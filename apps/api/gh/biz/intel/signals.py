@@ -392,6 +392,40 @@ async def _update_row(db: AsyncSession, row_id: uuid.UUID, common: dict[str, Any
                              "pv": li.privacy, "i": row_id, "nck": new_ck})
 
 
+async def effective_case_key(db: AsyncSession, org_id: uuid.UUID, kind: str, case_key: str, at: datetime) -> str:
+    """Khoá vụ hiệu lực theo cửa sổ TRƯỢT (T12, gỡ Nợ #83): khoá không gắn ngày/bucket; vụ đang mở cùng khoá gốc (kể cả `|#n`) có tin mới
+    nhất cách `at` < `levels.case_window` ⇒ dùng khoá của vụ đó; không có vụ nào trong cửa sổ ⇒ khoá gốc nếu chưa vụ mở nào giữ nó, ngược lại
+    hậu tố tuần tự kế tiếp (vụ cũ quá cửa sổ VẪN mở — Sếp chưa xử lý — chỉ không nhận tin mới). Bên gọi giữ khoá trần (`cap_lock`)."""
+    base = levels.base_case_key(case_key)
+    win = levels.case_window(base)
+    if win is None:
+        return base
+    rows = (await db.execute(text("""
+        SELECT case_key, COALESCE(level_input ->> 'msg_at', '') AS seen, created_at FROM biz.alerts
+        WHERE org_id = :o AND kind = :k AND status IN ('open', 'acknowledged')
+          AND (case_key = :b OR left(case_key, length(:b) + 2) = :b || '|#')"""), {"o": org_id, "k": kind, "b": base})).all()
+    if not rows:
+        return base
+    at = _aware(at)
+
+    def seen(r: Any) -> datetime:
+        try:
+            return _aware(datetime.fromisoformat(r.seen)) if r.seen else _aware(r.created_at)
+        except ValueError:
+            return _aware(r.created_at)
+
+    live = [r for r in rows if abs(at - seen(r)) < win]
+    if live:
+        return str(max(live, key=seen).case_key)
+    taken = {str(r.case_key) for r in rows}
+    if base not in taken:
+        return base
+    n = 2
+    while f"{base}|#{n}" in taken:
+        n += 1
+    return f"{base}|#{n}"
+
+
 async def upsert(db: AsyncSession, org_id: uuid.UUID, inp: UpsertIn, now: datetime) -> Signal:
     if inp.kind not in INTEL_KINDS + NON_INTEL_KINDS:
         raise SignalError(f"loại tín hiệu không hợp lệ: {inp.kind}")
@@ -405,6 +439,8 @@ async def upsert(db: AsyncSession, org_id: uuid.UUID, inp: UpsertIn, now: dateti
     owner_fact_ids = [f for f in dict.fromkeys(inp.owner_fact_ids) if prof.has(f)]      # sai org / chưa xác nhận ⇒ bỏ (§4C)
     li = inp.level_input.model_copy(update={"kind": inp.kind})
     await cap_lock(db, org_id, now)                        # khoá trần TRƯỚC khoá dòng / next_code (F1)
+    ck = await effective_case_key(db, org_id, inp.kind, inp.case_key, li.msg_at)      # cửa sổ trượt (không bucket cố định)
+    inp = inp.model_copy(update={"case_key": ck})
     row = (await db.execute(text("""
         SELECT id, case_key, evidence, fact_ids, raw_event_ids, privacy, level_input, case_state FROM biz.alerts
         WHERE org_id = :o AND kind = :k AND status IN ('open', 'acknowledged')
