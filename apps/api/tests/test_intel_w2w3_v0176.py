@@ -369,7 +369,7 @@ async def test_scan_units_feeds_questions_from_real_meaning_units_and_dedupes_wi
     rows = (await db.execute(text("SELECT facts ->> 'asker_kind' AS k, subject_id, detector FROM biz.alerts WHERE org_id = :o AND kind = 'cau_hoi_cho_xu_ly'"),
                              {"o": w.org})).all()
     assert len(out) == 2 and sorted((r.k, r.subject_id) for r in rows) == sorted([("customer", cust), ("kin", mom)])    # nhân viên/người lạ/đã trả lời: bỏ
-    assert len(await questions.scan_units(db, w.org, now)) == 2                                                      # chạy lại không nhân đôi
+    assert await questions.scan_units(db, w.org, now) == []                                                          # chạy lại: mỗi người đã có một dòng
     assert (await db.execute(text("SELECT count(*) FROM biz.alerts WHERE org_id = :o AND kind = 'cau_hoi_cho_xu_ly'"), {"o": w.org})).scalar_one() == 2
     n = await queue_jobs._scan_slow_response(db, w.org)                                                              # cảnh báo cũ bỏ tin đã có tín hiệu
     titles = [r.title for r in (await db.execute(text("SELECT title FROM biz.alerts WHERE alert_type = 'slow_response' AND org_id = :o"), {"o": w.org})).all()]
@@ -431,3 +431,39 @@ async def test_leave_threat_pushes_only_one_red_per_case(db) -> None:  # type: i
     rows = (await db.execute(text("SELECT kind, level, delivery FROM biz.alerts WHERE org_id = :o"), {"o": w.org})).all()
     assert [(r.kind, r.delivery == "push_now") for r in sorted(rows, key=lambda r: r.kind)] == [("quan_he_nong_nguoi", False), ("xung_dot_khieu_nai", True)]
     assert all(r.level != "red" for r in rows if r.kind == "quan_he_nong_nguoi")
+
+
+async def _two_questions(db: AsyncSession) -> tuple[Any, datetime]:
+    from datetime import UTC
+
+    from tests.test_p3_queue import _unit
+    now = datetime.now(UTC)
+    w = await mk_world(db, await mk_org(db))
+    cust, ci = await mk_person(db, w.org, w.channel, "Khách A")
+    await db.execute(text("UPDATE core.persons SET person_type = 'customer' WHERE id = :p"), {"p": cust})
+    for body, ev, h in (("giá bao nhiêu?", "AskedPrice", 3), ("bao giờ giao?", "AskedStatus", 2)):
+        raw = await mk_raw(db, w.org, w.channel, identity=ci, body=body, at=now - timedelta(hours=h))
+        await _unit(db, w.org, person_id=cust, event_type=ev, conclusion="hỏi", raw_id=raw)
+    await db.commit()
+    return w, now
+
+
+async def _lines(db: AsyncSession, org: uuid.UUID) -> list[Any]:
+    return list((await db.execute(text("SELECT alert_type, kind FROM biz.alerts WHERE org_id = :o"), {"o": org})).all())
+
+
+async def test_one_line_per_asker_across_legacy_and_questions_both_directions(db) -> None:  # type: ignore[no-untyped-def]
+    from gh.biz.queue import jobs as queue_jobs
+    # chiều 1: slow_response (cũ) có trước ⇒ scan_units không tạo thêm
+    w, now = await _two_questions(db)
+    await queue_jobs._scan_slow_response(db, w.org)
+    await questions.scan_units(db, w.org, now)
+    await db.commit()
+    assert [r.alert_type for r in await _lines(db, w.org)] == ["slow_response"]
+    # chiều 2: tín hiệu `questions` có trước ⇒ slow_response cũ không tạo thêm (dù khách hỏi tới hai câu)
+    w, now = await _two_questions(db)
+    assert len(await questions.scan_units(db, w.org, now)) == 1                       # Q1+Q2 cùng lượt ⇒ MỘT tín hiệu
+    await queue_jobs._scan_slow_response(db, w.org)
+    await db.commit()
+    assert [r.kind for r in await _lines(db, w.org)] == ["cau_hoi_cho_xu_ly"]
+    assert await questions.scan_units(db, w.org, now) == []                           # chạy lại: vẫn một dòng

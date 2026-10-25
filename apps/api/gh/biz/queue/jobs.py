@@ -141,7 +141,9 @@ async def _scan_slow_response(db: AsyncSession, org_id: uuid.UUID, redis: Any = 
             continue
         has_signal = (await db.execute(text(
             "SELECT 1 FROM biz.alerts WHERE org_id = :o AND kind = 'cau_hoi_cho_xu_ly' AND detector = 'questions' "
-            "AND raw_event_ids @> ARRAY[CAST(:r AS uuid)] LIMIT 1"), {"o": org_id, "r": str(r.raw_id)})).first()
+            "AND (raw_event_ids @> ARRAY[CAST(:r AS uuid)] OR (subject_id = :p "
+            "AND status IN ('open', 'acknowledged'))) LIMIT 1"),
+            {"o": org_id, "r": str(r.raw_id), "p": r.person_id})).first()
         if has_signal:
             continue                  # v0.1.76 (T5): detector `questions` đã có tín hiệu cho câu hỏi này
         who = r.person_name or "một khách"

@@ -173,7 +173,8 @@ async def scan_units(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> list
     """Nối detector vào luồng thật: đơn vị ý nghĩa HỎI (`clean.meaning_units`: hỏi giá / hỏi tiến độ / xin mẫu / đề nghị hợp tác) của KHÁCH hoặc
     NGƯỜI THÂN (`owner_key_relation`) mà tin gốc quá `SCAN_SLA_MIN` phút chưa có tin ĐI trả lời đúng người đó ⇒ `emit`. Người gửi do CODE
     xác định qua `core.person_identities` (không do model). Nhân viên bị bỏ (câu nội bộ chặn việc cần cờ `blocks_work` của model).
-    Bỏ qua tin đã có cảnh báo `slow_response` cũ (cùng chứng cứ) — queue/jobs.py cũng bỏ tin đã có tín hiệu: một câu hỏi, một dòng."""
+    Tránh trùng THEO NGƯỜI HỎI với `slow_response` (cũng gom theo người): người đang có `slow_response` hoặc tín hiệu câu hỏi mở thì không
+    tạo thêm; queue/jobs.py cũng bỏ người đã có tín hiệu. Lấy tin MỚI nhất trước; loại người hỏi "other" và tin đã có tín hiệu ngay trong SQL."""
     from gh.biz.mem import profile_read
     from gh.data.common import NO_REPLY_KINDS, outbound_to_sql
 
@@ -189,8 +190,12 @@ async def scan_units(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> list
           JOIN core.person_identities pi ON pi.id = e.sender_identity_id
           JOIN core.persons p ON p.id = pi.person_id
           LEFT JOIN core.groups g ON g.id = e.group_id
+          LEFT JOIN mem.entities pe ON pe.person_id = p.id AND pe.org_id = e.org_id AND pe.merged_into IS NULL
           WHERE e.org_id = :o AND e.direction = 'inbound' AND e.kind <> ALL(CAST(:nokind AS text[]))
             AND e.body_text IS NOT NULL AND e.body_text <> '' AND COALESCE(p.person_type, '') <> 'staff'
+            AND (p.person_type = 'customer' OR pe.id = ANY(:key)            -- người hỏi "other" bị loại ngay trong SQL
+                 OR EXISTS (SELECT 1 FROM mem.facts f WHERE f.org_id = e.org_id AND f.subject_id = pe.id AND f.predicate = 'customer_of'
+                            AND f.valid_to IS NULL AND f.status IN ('asserted', 'owner_confirmed')))
             AND e.occurred_at < CAST(:now AS timestamptz) - make_interval(mins => :sla)
             AND e.occurred_at > CAST(:now AS timestamptz) - make_interval(hours => :win)
             AND EXISTS (SELECT 1 FROM clean.evidence ev JOIN clean.meaning_units mu ON mu.id = ev.meaning_unit_id
@@ -203,13 +208,20 @@ async def scan_units(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> list
             AND CASE WHEN c.group_id IS NOT NULL THEN o2.group_id = c.group_id
                      ELSE o2.group_id IS NULL AND {outbound_to_sql("o2", "c.ids", "c.ext")} END)
           AND NOT EXISTS (SELECT 1 FROM biz.alerts a WHERE a.org_id = :o AND a.alert_type = 'slow_response' AND a.evidence @> jsonb_build_array(jsonb_build_object('type', 'raw', 'id', c.raw_id::text)))
-        ORDER BY c.occurred_at LIMIT :lim"""),  # noqa: S608 — outbound_to_sql là hằng nội bộ
+          AND NOT EXISTS (SELECT 1 FROM biz.alerts a WHERE a.org_id = :o AND a.raw_event_ids @> ARRAY[c.raw_id])   -- tin đã có tín hiệu
+          AND NOT EXISTS (SELECT 1 FROM biz.alerts a WHERE a.org_id = :o AND a.subject_id = c.person_id AND a.status IN ('open', 'acknowledged')
+                          AND (a.alert_type = 'slow_response' OR (a.kind = 'cau_hoi_cho_xu_ly' AND a.detector = 'questions')))   -- một người một dòng
+        ORDER BY c.occurred_at DESC LIMIT :lim"""),  # noqa: S608 — outbound_to_sql là hằng nội bộ
                             {"o": org_id, "now": now, "sla": SCAN_SLA_MIN, "win": SCAN_WINDOW_H, "lim": SCAN_LIMIT * 4,
-                             "nokind": list(NO_REPLY_KINDS), "need": list(NEEDS_REPLY)})).all()
+                             "nokind": list(NO_REPLY_KINDS), "need": list(NEEDS_REPLY), "key": list(key_rel)})).all()
     out: list[signals.Signal] = []
+    seen: set[uuid.UUID] = set()
     for r in rows:
         if len(out) >= SCAN_LIMIT:
             break
+        if r.person_id in seen:
+            continue                                    # cùng lượt: một người một câu hỏi (tin mới nhất)
+        seen.add(r.person_id)
         try:
             ent = (await entities.ensure_person(db, org_id, r.person_id)).id
         except entities.EntityError:
