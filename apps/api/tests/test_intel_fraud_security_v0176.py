@@ -96,3 +96,22 @@ async def test_fraud_security_idor_org_isolation(db: AsyncSession) -> None:
     await fraud.run(db, b.org, b.now)
     rows = (await db.execute(text("SELECT org_id FROM biz.payment_identifiers WHERE digest = :d"), {"d": facts.payment_digest(ACCT_OLD)})).scalars().all()
     assert sorted(map(str, rows)) == sorted([str(a.org), str(b.org)])
+
+
+@pytest.mark.parametrize("unit", [". a", ", ,", ", ,  ;", " ,x", "! b ", " - 1", ";;;;a "])
+def test_fraud_security_redos_long_punctuation_under_100ms(unit: str) -> None:
+    import time
+
+    prefixes = ("", "đổi ", "điền ", "điền rồi ", "ứng ", "stk ", "chuyển vào ")   # "điền " + ", ," từng treo > 60 giây với bộ đệm cũ
+    worst = 0.0
+    for pre in prefixes:
+        body = pre + unit * (10_000 // len(unit))
+        t0 = time.perf_counter()
+        fraud.scan(body)
+        worst = max(worst, time.perf_counter() - t0)
+    assert worst < 0.1, f"quét chậm {worst * 1000:.0f} ms"
+    assert len(body) >= 10_000 > fraud.MAX_SCAN_CHARS
+
+
+def test_fraud_security_filler_is_unambiguous() -> None:
+    assert fraud._W == r"(?:[\s,.:;!?-]+[^\s,.:;!?-]+)"

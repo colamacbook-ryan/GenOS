@@ -26,8 +26,9 @@ async def _ncc_world(db: AsyncSession) -> tuple[object, object, object]:
     w = await world(db)
     await w.group("kh", "Đại lý thép miền Nam", 120)
     ncc, ncc_iid = await w.person("Hùng Thép Hoà Phát", ptype="supplier", group="kh", history_days_ago=40)
-    await db.execute(text("""INSERT INTO biz.payment_identifiers (org_id, person_id, digest, last3, bank, source)
-                             VALUES (:o, :p, :d, '321', 'VCB', 'chat')"""), {"o": w.org, "p": ncc, "d": facts.payment_digest(ACCT_OLD)})
+    await db.execute(text("""INSERT INTO biz.payment_identifiers (org_id, person_id, digest, last3, bank, source, created_at)
+                             VALUES (:o, :p, :d, '321', 'VCB', 'chat', :ca)"""),
+                     {"o": w.org, "p": ncc, "d": facts.payment_digest(ACCT_OLD), "ca": w.now - timedelta(days=40)})
     return w, ncc, ncc_iid
 
 
@@ -183,3 +184,45 @@ async def test_fraud_phishing_bait_at_most_amber(db: AsyncSession) -> None:
     await w.raw("MỪNG 20/10 – NUTRIMILK TẶNG 500.000đ! Nhận quà tại nutrimilk-qua2010.com", sender=iid, group="gd")
     out = await fraud.run(db, w.org, w.now)
     assert len(out) == 1 and out[0].level in ("amber", "grey") and out[0].gate is None
+
+
+async def test_fraud_poisoning_impersonator_repeats_account_still_caught(db: AsyncSession) -> None:
+    """Tấn công "đầu độc lịch sử": kẻ mạo danh gửi STK của nó (lần 1 không đòi tiền) rồi lần 2 đòi chuyển vào đúng số đó ⇒ vẫn bị bắt;
+    STK của kẻ mạo danh KHÔNG BAO GIỜ thành `payment_account` của thực thể bị mạo danh, không thành "đã biết"."""
+    w, ncc, _ = await _ncc_world(db)
+    _scam, scam_iid = await w.person("Hùng Thép Hoà Phát", group="kh", joined_days_ago=1)
+    await w.raw(f"STK bên em {ACCT_NEW} MB nha anh", sender=scam_iid, group="kh", at=w.now - timedelta(minutes=20))
+    await fraud.run(db, w.org, w.now - timedelta(minutes=19))
+    await w.raw(f"Anh chuyển tiền hàng vào STK {ACCT_NEW} MB giúp em nhé", sender=scam_iid, group="kh", at=w.now - timedelta(minutes=10))
+    out = await fraud.run(db, w.org, w.now - timedelta(minutes=9))
+    assert len(out) == 1 and (out[0].level, out[0].gate) == ("red", levels.G1)
+    await w.raw(f"Anh chuyển vào {ACCT_NEW} MB luôn giúp em", sender=scam_iid, group="kh")
+    again = await fraud.run(db, w.org, w.now)
+    assert len(again) == 1 and again[0].id == out[0].id and again[0].level == "red"           # lần nữa: vẫn bắt, cùng vụ
+    new_d = facts.payment_digest(ACCT_NEW)
+    ncc_ent = (await db.execute(text("SELECT id FROM mem.entities WHERE person_id = :p"), {"p": ncc})).scalar_one()
+    poisoned = (await db.execute(text("""SELECT count(*) FROM mem.facts WHERE subject_id = :e AND predicate = 'payment_account'
+                                         AND object_value ->> 'digest' = :d"""), {"e": ncc_ent, "d": new_d})).scalar_one()
+    assert poisoned == 0
+    from gh.biz.intel.detectors.fraud import Who, _history
+
+    known, _v, _a = await _history(db, w.org, Who(ref="x", person_id=ncc, entity_id=ncc_ent), w.now + timedelta(days=30))
+    assert new_d not in known
+    pi = (await db.execute(text("SELECT person_id FROM biz.payment_identifiers WHERE org_id = :o AND digest = :d"), {"o": w.org, "d": new_d})).scalar_one()
+    assert pi != ncc                                                              # gắn người gửi thật
+
+
+async def test_fraud_poisoning_fresh_account_not_known_and_suspicious_never_asserted(db: AsyncSession) -> None:
+    """STK mới thấy (< 7 ngày) chưa xác minh không phải "đã biết"; tin đã kích luật lừa đảo không để STK thành `asserted`."""
+    w = await world(db)
+    await w.group("kh", "Khách", 120)
+    p, iid = await w.person("Đối tác Bình", ptype="partner", group="kh", history_days_ago=60)
+    await w.raw(f"Anh chuyển vào tài khoản mới {ACCT_NEW} MB giúp em, số cũ bị khoá rồi", sender=iid, group="kh", at=w.now - timedelta(hours=2))
+    out = await fraud.run(db, w.org, w.now - timedelta(hours=2) + timedelta(minutes=1))
+    assert len(out) == 1 and out[0].level == "red"
+    ent = (await db.execute(text("SELECT id FROM mem.entities WHERE person_id = :p"), {"p": p})).scalar_one()
+    assert (await db.execute(text("SELECT count(*) FROM mem.facts WHERE subject_id = :e AND predicate = 'payment_account' AND status = 'asserted'"),
+                             {"e": ent})).scalar_one() == 0
+    await w.raw(f"Bên em đổi STK sang {ACCT_OLD} VCB, anh chuyển vào số này", sender=iid, group="kh")
+    out2 = await fraud.run(db, w.org, w.now)
+    assert len(out2) == 1 and out2[0].level == "red"                              # STK lần trước không "đầu độc" thành lịch sử

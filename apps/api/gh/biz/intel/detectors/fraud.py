@@ -8,8 +8,10 @@ Luật tất định (0 token) trên chữ tin (`body`) **và** chữ OCR/transc
 - `stk_change` — STK (8–19 số gần nhãn STK/ngân hàng/chuyển khoản) + yêu cầu trả tiền vào số đó. So với LỊCH SỬ của chủ STK (băm có khoá
   `facts.payment_digest` = `crypto.keyed_digest`; nguồn: `mem.facts payment_account` còn hiệu lực + `biz.payment_identifiers`): khác lịch sử
   ⇒ luật cứng `stk_khac_lich_su+money_request`; trùng STK Sếp đã XÁC MINH (`verified_at`) ⇒ an toàn, không báo; STK lần đầu, không chữ "đổi"
-  ⇒ chỉ ghi lịch sử (⚪, không tín hiệu). Ghi `payment_account` qua `facts.assert_fact` ⇒ L1 mở `mem.disputes` khi khác giá trị; detector
-  nhận tranh chấp đó (gắn `projected_signal_id` = tín hiệu của mình, để T1 `project_disputes` không chiếu lại thành tín hiệu thứ hai yếu hơn).
+  ⇒ chỉ ghi lịch sử (⚪, không tín hiệu). Chống đầu độc lịch sử: STK chỉ "đã biết" khi Sếp xác minh / `owner_confirmed`, hoặc dùng ≥ 7 ngày
+  và chưa dính tín hiệu W5; `payment_account` chỉ ghi cho NGƯỜI GỬI đã biết (không người lạ, không mạo danh — STK kẻ mạo danh không bao giờ vào
+  sự thật của người bị mạo danh), tin đã kích luật chỉ ghi khi ra `disputed`. L1 mở `mem.disputes` khi khác giá trị; detector nhận tranh chấp
+  đó (gắn `projected_signal_id` = tín hiệu của mình, để T1 `project_disputes` không chiếu lại thành tín hiệu thứ hai yếu hơn).
 - `mao_danh_xin_tien` — tên hiển thị người gửi khớp CHÍNH XÁC bí danh (`mem.aliases`) / tên thành viên của một người KHÁC đã biết, ID gửi mới
   (< 7 ngày trong nhóm, hoặc chưa có lịch sử tin ≥ 7 ngày) ⇒ `impersonated`; kèm xin tiền/đổi STK ⇒ `account_takeover` + luật cứng; không kèm ⇒ 🟠.
 - `nguoi_la_xin_tien` — người lạ (vào nhóm < 7 ngày / chưa có lịch sử) nhờ ứng / mượn / chuyển giúp tiền ⇒ `money_request` + luật cứng.
@@ -61,6 +63,7 @@ STRANGER_DAYS = 7.0
 BIG_ORDER_VND = 5_000_000
 BIG_ORDER_QTY = 10
 SOURCE_FIELDS = ("body", "ocr", "transcript")
+MAX_SCAN_CHARS = 4000                     # trần độ dài chữ mỗi lần quét (chặn xả tin dài làm chậm worker)
 
 # Mã luật cứng (đi vào `SignalIn.hard_rule_hit`; `levels` coi mọi mã là luật cứng: exist 1,00, (d2) không hạ).
 H_CRED = "credentials_entered"
@@ -93,7 +96,9 @@ def _orig_span(idx: list[int], n: int, a: int, b: int) -> tuple[int, int]:
     return idx[a], (idx[b - 1] + 1) if 0 < b <= len(idx) else n
 
 
-_W = r"(?:[\s,.:;!?-]+\S+)"          # một từ đệm
+#: Một từ đệm. KHÔNG mơ hồ (chống ReDoS): phần phân cách và phần chữ là hai lớp ký tự rời nhau, nên mỗi vị trí chỉ có một cách khớp.
+_SEPS = r"\s,.:;!?-"
+_W = rf"(?:[{_SEPS}]+[^{_SEPS}]+)"
 
 
 def _g(lo: int, hi: int) -> str:
@@ -246,7 +251,7 @@ def scan(body: str | None, source_field: str = "body") -> Scan:
     """Luật W5 trên MỘT đoạn chữ (tin / OCR / transcript). Hàm thuần."""
     if source_field not in SOURCE_FIELDS:
         raise FraudError("trường nguồn không hợp lệ")
-    t = (body or "")[:20_000]
+    t = (body or "")[:MAX_SCAN_CHARS]
     if not t.strip():
         return Scan(source_field)
     from gh.refinery import prefilter
@@ -621,46 +626,74 @@ async def _addressed(db: AsyncSession, org_id: uuid.UUID, surfaces: tuple[str, .
     return tuple(out)
 
 
-async def _history(db: AsyncSession, org_id: uuid.UUID, owner_of: Who) -> tuple[frozenset[str], frozenset[str], bool]:
-    """(STK đã biết, STK đã xác minh, có STK xác minh) của chủ STK — chỉ băm."""
+async def _history(db: AsyncSession, org_id: uuid.UUID, owner_of: Who, at: datetime) -> tuple[frozenset[str], frozenset[str], bool]:
+    """(STK "đã biết", STK đã xác minh, có STK xác minh) của chủ STK — chỉ băm.
+
+    Chống "đầu độc lịch sử" (kẻ gian gửi STK của nó một lần rồi đổi): một STK chỉ là "đã biết" khi có dấu hiệu tin cậy —
+    Sếp xác minh (`payment_identifiers.verified_at`, fact `owner_confirmed`), hoặc đã dùng lâu hơn cửa sổ người lạ (thấy lần đầu
+    ≥ 7 ngày trước tin này) VÀ chưa từng nằm trong một tín hiệu W5 (tin kích luật lừa đảo không bao giờ thành lịch sử)."""
     known: set[str] = set()
     verified: set[str] = set()
+    old = at - timedelta(days=STRANGER_DAYS)
     if owner_of.entity_id is not None:
         rows = (await db.execute(text("""
             SELECT f.object_value ->> 'digest' FROM mem.facts f JOIN mem.entities e ON e.id = f.subject_id
-            WHERE f.org_id = :o AND f.predicate = 'payment_account' AND f.status IN ('asserted', 'owner_confirmed')
-              AND (e.id = :e OR e.merged_into = :e)"""), {"o": org_id, "e": owner_of.entity_id})).scalars().all()
+            WHERE f.org_id = :o AND f.predicate = 'payment_account' AND (e.id = :e OR e.merged_into = :e)
+              AND (f.status = 'owner_confirmed'
+                   OR (f.status = 'asserted' AND f.valid_from <= :old
+                       AND NOT EXISTS (SELECT 1 FROM biz.alerts a WHERE a.org_id = :o AND a.kind = 'rui_ro_lua_dao'
+                                         AND (a.facts ->> 'payee_digest' = f.object_value ->> 'digest'
+                                              OR (f.source_raw_event_id IS NOT NULL AND a.raw_event_ids @> ARRAY[f.source_raw_event_id])))))"""),
+                                 {"o": org_id, "e": owner_of.entity_id, "old": old})).scalars().all()
         known.update(x for x in rows if x)
     pi = (await db.execute(text("""
-        SELECT digest, verified_at IS NOT NULL AS v FROM biz.payment_identifiers
-        WHERE org_id = :o AND ((CAST(:p AS uuid) IS NOT NULL AND person_id = :p) OR (CAST(:e AS uuid) IS NOT NULL AND entity_id = :e))"""),
-                          {"o": org_id, "p": owner_of.person_id, "e": owner_of.entity_id})).all()
+        SELECT p.digest, p.verified_at IS NOT NULL AS v,
+               (p.created_at <= :old AND NOT EXISTS (SELECT 1 FROM biz.alerts a WHERE a.org_id = :o AND a.kind = 'rui_ro_lua_dao'
+                                                     AND a.facts ->> 'payee_digest' = p.digest)) AS aged
+        FROM biz.payment_identifiers p
+        WHERE p.org_id = :o AND ((CAST(:p AS uuid) IS NOT NULL AND p.person_id = :p) OR (CAST(:e AS uuid) IS NOT NULL AND p.entity_id = :e))"""),
+                          {"o": org_id, "p": owner_of.person_id, "e": owner_of.entity_id, "old": old})).all()
     for r in pi:
         if r.v:
             verified.add(r.digest)
             known.add(r.digest)
-        elif r.digest not in known:
+        elif r.aged:
             known.add(r.digest)
     return frozenset(known), frozenset(verified), bool(verified)
 
 
-async def _record_payment(db: AsyncSession, org_id: uuid.UUID, acct: Account, *, subject: Who, sender: Who, row: _Row) -> uuid.UUID | None:
-    """Ghi lịch sử STK: `biz.payment_identifiers` (băm + 3 số cuối, người GỬI thật) và `mem.facts payment_account` của chủ STK (L1 mở
-    `mem.disputes` khi khác giá trị). Trả `dispute_id` nếu lần ghi này nằm trong tranh chấp."""
-    if not acct.digest:
+async def _record_identifier(db: AsyncSession, org_id: uuid.UUID, acct: Account, *, sender: Who) -> None:
+    """`biz.payment_identifiers` (băm + 3 số cuối) gắn với người GỬI THẬT (không bao giờ gắn với người bị mạo danh). Một dòng chưa xác minh,
+    mới thấy, chỉ là "đã biết" sau cửa sổ người lạ và khi chưa dính tín hiệu W5 (`_history`)."""
+    if acct.digest:
+        await db.execute(text("""INSERT INTO biz.payment_identifiers (org_id, person_id, entity_id, digest, last3, bank, source)
+                                 VALUES (:o, :p, :e, :d, :l, :b, 'chat') ON CONFLICT (org_id, digest) DO NOTHING"""),
+                         {"o": org_id, "p": sender.person_id, "e": sender.entity_id, "d": acct.digest, "l": acct.last3, "b": acct.bank})
+
+
+async def _live_payment_keys(db: AsyncSession, org_id: uuid.UUID, entity_id: uuid.UUID) -> set[str]:
+    rows = (await db.execute(text("""SELECT f.object_value ->> 'digest' FROM mem.facts f JOIN mem.entities e ON e.id = f.subject_id
+                                     WHERE f.org_id = :o AND f.predicate = 'payment_account' AND f.status IN ('asserted', 'owner_confirmed')
+                                       AND f.valid_to IS NULL AND (e.id = :e OR e.merged_into = :e)"""), {"o": org_id, "e": entity_id})).scalars().all()
+    return {x for x in rows if x}
+
+
+async def _record_fact(db: AsyncSession, org_id: uuid.UUID, acct: Account, *, subject: Who, row: _Row, suspicious_msg: bool) -> uuid.UUID | None:
+    """`mem.facts payment_account` của NGƯỜI GỬI (L1 mở `mem.disputes` khi khác giá trị). Tin đã kích luật lừa đảo chỉ được ghi khi chắc
+    chắn ra `disputed` (chủ thể đã có STK khác còn hiệu lực) — không bao giờ để STK đáng ngờ thành `asserted`. Trả `dispute_id` nếu có."""
+    if not acct.digest or subject.entity_id is None:
         return None
-    await db.execute(text("""INSERT INTO biz.payment_identifiers (org_id, person_id, entity_id, digest, last3, bank, source)
-                             VALUES (:o, :p, :e, :d, :l, :b, 'chat') ON CONFLICT (org_id, digest) DO NOTHING"""),
-                     {"o": org_id, "p": sender.person_id, "e": sender.entity_id, "d": acct.digest, "l": acct.last3, "b": acct.bank})
-    if subject.entity_id is None:
-        return None
+    if suspicious_msg:
+        live = await _live_payment_keys(db, org_id, subject.entity_id)
+        if not live or acct.digest in live:
+            return None
     from gh.biz.mem import facts
 
     value: dict[str, Any] = {"digest": acct.digest, "last3": acct.last3}
     if acct.bank:
         value["bank"] = acct.bank
     fin = facts.FactIn(org_id=org_id, subject_id=subject.entity_id, predicate="payment_account", valid_from=row.occurred_at, object_value=value,
-                       source_class="rule", created_by="rule", speaker_entity_id=sender.entity_id, source_raw_event_id=row.event_id,
+                       source_class="rule", created_by="rule", speaker_entity_id=subject.entity_id, source_raw_event_id=row.event_id,
                        source_received_at=row.received_at, confidence_exist=1.0, confidence_content=0.9, extractor_version=f"{DETECTOR}/{VERSION}",
                        evidence=[facts.EvidenceIn("raw_event", row.event_id, row.received_at,
                                                   span={"source_field": row.source_field, "span_start": acct.span[0], "span_end": acct.span[1]})])
@@ -738,15 +771,22 @@ async def prepare(db: AsyncSession, org_id: uuid.UUID, row: _Row, *, key_rel: fr
                     business_contact=True, present_in_thread=True)
     addressed = await _addressed(db, org_id, sc.addressed, row.group_id, sender, key_rel=key_rel, owner_people=owner_people)
     stk_owner = imp if imp is not None else sender
-    known, verified, any_v = await _history(db, org_id, stk_owner)
+    known, verified, any_v = await _history(db, org_id, stk_owner, row.occurred_at)
+    ctx = Ctx(sender=sender, stranger=stranger, impersonated=imp, owner=owner, addressed=addressed, known_digests=known,
+              verified_digests=verified, any_verified=any_v)
+    d = decide(sc, ctx)
+    # Ghi lịch sử SAU khi quyết (chống đầu độc): STK luôn vào `payment_identifiers` gắn người gửi thật; `payment_account` chỉ ghi cho
+    # người gửi đã biết, không phải người lạ, không mạo danh — tin đã kích luật thì chỉ khi ra `disputed`.
     dispute = None
     for a in sc.accounts:
         if a.digest in verified:
             continue
-        dispute = await _record_payment(db, org_id, a, subject=stk_owner, sender=sender, row=row) or dispute
-    ctx = Ctx(sender=sender, stranger=stranger, impersonated=imp, owner=owner, addressed=addressed, known_digests=known,
-              verified_digests=verified, any_verified=any_v, disputed=dispute is not None)
-    d = decide(sc, ctx)
+        await _record_identifier(db, org_id, a, sender=sender)
+        if imp is None and not stranger:
+            dispute = await _record_fact(db, org_id, a, subject=sender, row=row, suspicious_msg=bool(d and d.rules)) or dispute
+    if dispute is not None and (d is None or d.record_only or "stk_change" not in d.rules):
+        ctx = replace(ctx, disputed=True)
+        d = decide(sc, ctx)
     if d is None or d.record_only:
         return None
     thread, place = await _thread(db, org_id, row.group_id, owner_people)
