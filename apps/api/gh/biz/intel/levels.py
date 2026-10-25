@@ -20,7 +20,7 @@ import uuid
 from datetime import UTC, datetime, timedelta, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from gh.biz.mem.contexts import Policy
 from gh.biz.mem.profile_read import ProfileSnapshot
@@ -48,6 +48,14 @@ HARD_RULE_FLAGS: dict[str, tuple[str, ...]] = {
     "emergency_115_chay_cap_cuu": ("emergency",),
     "stk_khac_lich_su+money_request": ("money_request",),
 }
+#: Mã luật cứng mà `prefilter` (L2) phát ⇒ mã chuẩn của spec/bộ vector (một nghĩa, hai cách viết).
+HARD_RULE_ALIASES = {"emergency": "emergency_115_chay_cap_cuu", "stk_changed_money_request": "stk_khac_lich_su+money_request"}
+
+
+def hard_rules(s: SignalIn) -> list[str]:
+    return [HARD_RULE_ALIASES.get(h, h) for h in s.hard_rule_hit]
+
+
 HARM_TEMPLATE = {G1: "có thể mất tiền trong tài khoản (luật cứng: {h})", G2: "nguy hiểm tính mạng/tài sản (luật cứng: {h})"}
 BRANCH_RANK = {"request": 1, "just_done": 2, "credentials_entered": 3, "account_takeover": 4}
 
@@ -222,6 +230,13 @@ class Level(_M):
     capped: bool = False
     demoted: Literal["precision", "cap"] | None = None
     reasons: list[str] = Field(default_factory=list)
+    #: Ngoài hợp đồng (không serialize): nhánh cổng 1 đã thoả (1 yêu cầu · 2 vừa chuyển · 3 lộ OTP · 4 chiếm tài khoản) — `relane`
+    #: lưu vào `case_prior.branch_rank` để biết lần sau có LEO THANG không (§4.2.1 (e)0).
+    _branch_rank: int = PrivateAttr(default=0)
+
+    @property
+    def branch_rank(self) -> int:
+        return self._branch_rank
 
 
 # ─── tiện ích thời gian ───────────────────────────────────────────────────────
@@ -340,7 +355,7 @@ def owner_side(s: SignalIn, policy: Policy) -> OwnerSide:
 def _flags(s: SignalIn) -> Flags:
     """Cờ cuối = model ∪ luật (a) (đã gộp ở bên gọi) ∪ cờ do `hard_rule_hit` ∪ `d2.flags_confirmed` khi (d2) không lỗi."""
     f = s.flags.model_copy()
-    for h in s.hard_rule_hit:
+    for h in hard_rules(s):
         for name in HARD_RULE_FLAGS.get(h, ()):
             setattr(f, name, True)
     if not s.d2.error:
@@ -425,10 +440,14 @@ def compute(signal: SignalIn, profile: ProfileSnapshot, policy: Policy, state: D
 
     def L(level: str, gate: str | None = None, delivery: str | None = None, **kw: Any) -> Level:
         d = delivery or {"red": "push_now", "amber": "digest", "grey": "digest_low", "off": "none"}[level]
-        return Level(level=level, gate=gate, delivery=d, reasons=list(dict.fromkeys(reasons)), **kw)  # type: ignore[arg-type]
+        out = Level(level=level, gate=gate, delivery=d, reasons=list(dict.fromkeys(reasons)), **kw)  # type: ignore[arg-type]
+        out._branch_rank = rank_box[0]
+        return out
+
+    rank_box = [0]
 
     # ---- 0. chuẩn hoá (CNS-110, 111, 135) ----
-    hard = list(s.hard_rule_hit)
+    hard = hard_rules(s)
     f = _flags(s)
     exist = s.confidence_exist
     if hard:
@@ -513,6 +532,7 @@ def compute(signal: SignalIn, profile: ProfileSnapshot, policy: Policy, state: D
         return None, None
 
     m, rank = gates(True)
+    rank_box[0] = rank or 0
     m_nw, _ = gates(False)
     m_wide = gates(True, wide=True)[0] if (not m and (os_.safety_wide or os_.fraud_wide)) else None
     if m_wide not in BYPASS_GATES:

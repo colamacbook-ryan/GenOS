@@ -28,6 +28,7 @@ ALTER TABLE biz.alerts
   ADD COLUMN IF NOT EXISTS case_key           text,
   ADD COLUMN IF NOT EXISTS dedupe_key         text,
   ADD COLUMN IF NOT EXISTS raw_event_id       uuid,
+  ADD COLUMN IF NOT EXISTS raw_event_ids      uuid[] NOT NULL DEFAULT '{}',   -- mọi tin gốc của vụ: gộp đường nhanh (raw_tail) với đường model
   ADD COLUMN IF NOT EXISTS thread_key         text,
   ADD COLUMN IF NOT EXISTS group_id           uuid,
   ADD COLUMN IF NOT EXISTS detector           text,
@@ -42,6 +43,8 @@ ALTER TABLE biz.alerts
   ADD COLUMN IF NOT EXISTS level_input        jsonb,          -- SignalIn đã kiểm (đầu vào levels.compute) — tính lại theo đồng hồ
   ADD COLUMN IF NOT EXISTS level_at           timestamptz,    -- lần tính mức gần nhất
   ADD COLUMN IF NOT EXISTS next_eval_at       timestamptz,    -- levels.next_change_at: mốc đồng hồ kế tiếp mức có thể đổi
+  ADD COLUMN IF NOT EXISTS case_state         jsonb,          -- case_prior của vụ: {red_pushed, gate, branch_rank, victim_refs, payee_refs, emergency, said_will_leave}
+  ADD COLUMN IF NOT EXISTS cap_day            date,           -- ngày-trần của 🔴 cổng thường đã push_now/digest_morning (đếm reds_pushed_today)
   ADD COLUMN IF NOT EXISTS due_at             timestamptz,
   ADD COLUMN IF NOT EXISTS expires_at         timestamptz,
   ADD COLUMN IF NOT EXISTS ask_id             uuid,
@@ -145,7 +148,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS alerts_case_open_uq ON biz.alerts (org_id, cas
 CREATE INDEX IF NOT EXISTS alerts_next_eval_idx ON biz.alerts (next_eval_at)
   WHERE next_eval_at IS NOT NULL AND status IN ('open', 'acknowledged');
 CREATE INDEX IF NOT EXISTS alerts_level_idx ON biz.alerts (org_id, status, level, created_at DESC);
+CREATE INDEX IF NOT EXISTS alerts_cap_day_idx ON biz.alerts (org_id, cap_day) WHERE cap_day IS NOT NULL;
 CREATE INDEX IF NOT EXISTS alerts_owner_fact_ids_idx ON biz.alerts USING gin (owner_fact_ids);
+CREATE INDEX IF NOT EXISTS alerts_raw_event_ids_idx ON biz.alerts USING gin (raw_event_ids);
 
 CREATE OR REPLACE VIEW biz.signals WITH (security_invoker = true) AS
   SELECT * FROM biz.alerts WHERE kind NOT IN ('system', 'legacy');
