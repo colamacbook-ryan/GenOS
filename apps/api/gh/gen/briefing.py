@@ -570,7 +570,8 @@ async def _one_org(sm: async_sessionmaker[AsyncSession], redis: Any, router: Mod
     # Không truyền `notes` khi trống: hàm thay thế `_summarize` trong test cũ có chữ ký (router, org, sections).
     token = _SECRETS.set(secrets)       # bí mật hệ thống cho `_summarize` (không đổi chữ ký hàm: test cũ thay thế nó)
     try:
-        summary = None if needs_api_key else await _summarize(router, org, sections, **({"notes": notes} if notes else {}))
+        extra: dict[str, Any] = {"notes": notes} if notes else {}
+        summary = None if needs_api_key else await _summarize(router, org, sections, **extra)
     finally:
         _SECRETS.reset(token)
     content = build_content(slot, sections, summary=summary, summary_source="model" if summary else "none",

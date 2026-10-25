@@ -76,7 +76,7 @@ def _is_date(x: str) -> bool:
 
 def _is_time(x: str) -> bool:
     m = _T_HMS.fullmatch(x)
-    return bool(m) and int(m[1]) < 24 and int(m[2]) < 60 and int(m[3] or 0) < 60
+    return m is not None and int(m[1]) < 24 and int(m[2]) < 60 and int(m[3] or 0) < 60
 
 
 def _is_datetime(raw: str) -> bool:
@@ -85,7 +85,7 @@ def _is_datetime(raw: str) -> bool:
     if _is_date(x):
         return True
     m = re.fullmatch(r"(.+?)[ T,]{1,2}(\d{1,2}:\d{2}(?::\d{2})?)", x)
-    return bool(m) and _is_date(m[1]) and _is_time(m[2])
+    return m is not None and _is_date(m[1]) and _is_time(m[2])
 
 
 def display_mask(s: str) -> str:

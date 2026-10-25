@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import random
 import uuid
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -38,7 +39,7 @@ async def is_shadow(db: AsyncSession, org_id: uuid.UUID) -> bool:
     return (await db.execute(text("SELECT settings->'intel'->>'mode' FROM core.organizations WHERE id = :o"), {"o": org_id})).scalar_one_or_none() == "shadow"
 
 
-def _pick(rows: list[Any], quota: int, rnd: random.Random) -> tuple[list[Any], float]:
+def _pick(rows: Sequence[Any], quota: int, rnd: random.Random) -> tuple[list[Any], float]:
     if not rows:
         return [], 1.0
     k = min(quota, len(rows))
