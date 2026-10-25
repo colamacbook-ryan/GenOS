@@ -80,3 +80,18 @@ async def test_unlocked_paths_still_work(app: Any, db: Any, redis: Any) -> None:
     async with SM()() as s:
         assert await pairing.try_pair(s, redis, org, pair_payload(sid, code)) == (True, None)
     assert group_cmds.KINDS
+
+
+# ─── cổng "Owner còn hợp lệ" cho MỌI lệnh nhóm (Gen quyết, lỗ hổng có từ trước) ────────────────
+
+@pytest.mark.parametrize("kind,args", [("nhom", ""), ("nghe", "ABCD"), ("bo", "ABCD"), ("ho_tro", ""), ("ho_tro", "1 bat"),
+                                       ("ho_tro", "1 tat"), ("xac_nhan", "ABCD"), ("boi_canh", "1 gia đình")])
+async def test_every_group_command_needs_a_still_valid_owner(app: Any, db: Any, redis: Any, kind: str, args: str) -> None:
+    org = await org_id(db)
+    await bot_world(db, org)
+    uid = (await db.execute(text("SELECT owner_user_id FROM ops.owner_channels WHERE org_id = :o"), {"o": org})).scalar_one()
+    assert uid is not None                                              # fixture ghép Owner THẬT
+    await db.execute(text("UPDATE core.users SET is_active = false WHERE id = :u"), {"u": uid})
+    await db.commit()
+    assert "ghép lại" in await cmd(redis, org, kind, args)
+    assert kind in group_cmds.OWNER_CHECKED

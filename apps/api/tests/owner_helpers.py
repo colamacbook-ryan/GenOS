@@ -38,10 +38,30 @@ async def make_session(db: AsyncSession, org: uuid.UUID, channel: str = "zalo", 
     return sid  # type: ignore[no-any-return]
 
 
+async def owner_user_id(db: AsyncSession, org: uuid.UUID) -> uuid.UUID:
+    """Owner Console THẬT của tổ chức (đang hoạt động, vai `owner`); chưa có thì tạo — kênh quản trị chỉ ghép với Owner hợp lệ
+    (v0.1.76: mọi lệnh nhóm qua cổng `owner_cmd.core.owner_user`)."""
+    uid = (await db.execute(text("""SELECT u.id FROM core.users u JOIN core.user_roles ur ON ur.user_id = u.id
+                                    JOIN core.roles r ON r.id = ur.role_id
+                                    WHERE u.org_id = :o AND r.code = 'owner' AND u.is_active AND u.deleted_at IS NULL
+                                    ORDER BY u.created_at LIMIT 1"""), {"o": org})).scalar_one_or_none()
+    if uid is not None:
+        return uid  # type: ignore[no-any-return]
+    uid = (await db.execute(text("""INSERT INTO core.users (org_id, email, display_name, password_hash)
+                                    VALUES (:o, :e, 'Sếp thử', 'x') RETURNING id"""),
+                            {"o": org, "e": f"owner-{uuid.uuid4().hex[:8]}@example.vn"})).scalar_one()
+    rid = (await db.execute(text("SELECT id FROM core.roles WHERE org_id = :o AND code = 'owner'"), {"o": org})).scalar_one_or_none()
+    if rid is None:
+        rid = (await db.execute(text("""INSERT INTO core.roles (org_id, code, name, is_system) VALUES (:o, 'owner', 'Chủ', true)
+                                        RETURNING id"""), {"o": org})).scalar_one()
+    await db.execute(text("INSERT INTO core.user_roles (user_id, role_id) VALUES (:u, :r)"), {"u": uid, "r": rid})
+    return uid  # type: ignore[no-any-return]
+
+
 async def pair_owner(db: AsyncSession, org: uuid.UUID, sid: uuid.UUID, channel: str = "zalo", *,
                      ext: str | None = None, alt: str | None = None, enabled: bool = True) -> None:
     ext = ext or (OWNER_ZALO if channel == "zalo" else OWNER_WA)
-    uid = (await db.execute(text("SELECT id FROM core.users WHERE org_id = :o LIMIT 1"), {"o": org})).scalar_one_or_none()
+    uid = await owner_user_id(db, org)
     await db.execute(text("""
         INSERT INTO ops.owner_channels (org_id, channel_type, session_id, owner_user_id, owner_external_id,
                                         owner_external_alt, owner_thread_id, paired_at, enabled)
