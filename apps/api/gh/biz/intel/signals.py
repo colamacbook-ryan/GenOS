@@ -392,6 +392,9 @@ async def _update_row(db: AsyncSession, row_id: uuid.UUID, common: dict[str, Any
                              "pv": li.privacy, "i": row_id, "nck": new_ck})
 
 
+CASE3_KINDS = ("xung_dot_khieu_nai", "quan_he_nong_nguoi")
+
+
 async def effective_case_key(db: AsyncSession, org_id: uuid.UUID, kind: str, case_key: str, at: datetime) -> str:
     """Khoá vụ hiệu lực theo cửa sổ TRƯỢT (T12, gỡ Nợ #83): khoá không gắn ngày/bucket; vụ đang mở cùng khoá gốc (kể cả `|#n`) có tin mới
     nhất cách `at` < `levels.case_window` ⇒ dùng khoá của vụ đó; không có vụ nào trong cửa sổ ⇒ khoá gốc nếu chưa vụ mở nào giữ nó, ngược lại
@@ -400,10 +403,13 @@ async def effective_case_key(db: AsyncSession, org_id: uuid.UUID, kind: str, cas
     win = levels.case_window(base)
     if win is None:
         return base
+    # Khoá vụ cổng 3 (`case3:`) dùng CHUNG cho xung_dot_khieu_nai và quan_he_nong_nguoi của cùng lời doạ bỏ ⇒ tính trên cả hai loại, để hai
+    # bản cùng ra một khoá (`close_case` đóng đúng cả hai), không bản nào rơi vào vụ cũ đã quá cửa sổ.
+    kinds = list(CASE3_KINDS) if base.startswith("case3:") else [kind]
     rows = (await db.execute(text("""
         SELECT case_key, COALESCE(level_input ->> 'msg_at', '') AS seen, created_at FROM biz.alerts
-        WHERE org_id = :o AND kind = :k AND status IN ('open', 'acknowledged')
-          AND (case_key = :b OR left(case_key, length(:b) + 2) = :b || '|#')"""), {"o": org_id, "k": kind, "b": base})).all()
+        WHERE org_id = :o AND kind = ANY(:k) AND status IN ('open', 'acknowledged')
+          AND (case_key = :b OR left(case_key, length(:b) + 2) = :b || '|#')"""), {"o": org_id, "k": kinds, "b": base})).all()
     if not rows:
         return base
     at = _aware(at)

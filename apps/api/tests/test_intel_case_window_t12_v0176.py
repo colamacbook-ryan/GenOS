@@ -101,3 +101,51 @@ async def test_fraud_actor_case_survives_midnight_at_any_clock(db: AsyncSession,
     assert len(first) == 1 and len(second) == 1 and first[0].id == second[0].id
     n = (await db.execute(text("SELECT count(*) FROM biz.alerts WHERE org_id = :o"), {"o": w.org})).scalar_one()
     assert n == 1
+
+
+async def test_case3_new_complaint_and_leave_share_one_key_and_close_together(db: AsyncSession) -> None:
+    """Review T12 MAJOR 2: chê NOW−5 ngày (chưa doạ) còn mở; NOW khách chê + doạ bỏ ⇒ bản xung_dot và bản quan_he của lời doạ bỏ
+    CÙNG khoá vụ mới (`case3:X|#2`), không bản nào rơi vào vụ cũ; đóng vụ mới đóng cả hai, vụ cũ không bị đóng nhầm."""
+    from gh.biz.intel.detectors import conflicts
+    from tests.test_intel_units_t12_v0176 import NOW, _person, _unit, _world
+    from tests.test_intel_units_t12_v0176 import U as units
+    from tests.test_owner_profile_support import mk_raw
+
+    w = await _world(db)
+    cpid, ciid, _ = await _person(db, w, "Anh Bình", ptype="customer")
+    t0 = NOW - timedelta(days=5)
+    raw0 = await mk_raw(db, w.org, w.channel, identity=ciid, body="giao trễ quá", group=w.group, at=t0)
+    await _unit(db, w, raw0, "xung_dot_khieu_nai", person=cpid, flags={"public": True}, at=t0)
+    await units.project(db, w.org, t0 + timedelta(minutes=5))
+    await db.commit()
+    raw1 = await mk_raw(db, w.org, w.channel, identity=ciid, body="lần sau lấy chỗ khác", group=w.group, at=NOW - timedelta(hours=1))
+    await _unit(db, w, raw1, "xung_dot_khieu_nai", person=cpid, flags={"public": True, "said_will_leave": True}, at=NOW - timedelta(hours=1))
+    await units.project(db, w.org, NOW)
+    await db.commit()
+    rows = (await db.execute(text("SELECT kind, case_key, status, created_at FROM biz.alerts WHERE org_id = :o ORDER BY created_at"), {"o": w.org})).all()
+    old_key = rows[0].case_key
+    new = [r for r in rows if r.created_at > rows[0].created_at]
+    assert {r.kind for r in new} == {"xung_dot_khieu_nai", "quan_he_nong_nguoi"}
+    assert len({r.case_key for r in new}) == 1 and new[0].case_key == old_key + "|#2"
+    await conflicts.close_case(db, w.org, new[0].case_key, by="owner", now=NOW)
+    await db.commit()
+    li = {(r.case_key, r.kind): r.cl for r in (await db.execute(text(
+        "SELECT case_key, kind, level_input ->> 'closure' AS cl FROM biz.alerts WHERE org_id = :o"), {"o": w.org})).all()}
+    assert li[(old_key + "|#2", "xung_dot_khieu_nai")] == "owner" and li[(old_key + "|#2", "quan_he_nong_nguoi")] == "owner"
+    assert li[(old_key, "xung_dot_khieu_nai")] == "none"
+
+
+async def test_fraud_effective_case_reuses_fast_path_key_only_inside_window(db: AsyncSession) -> None:
+    """M6: vụ của đường nhanh (khoá `raw|`) gắn `facts.fraud_case` = khoá mạnh; tin sau TRONG cửa sổ ⇒ dùng lại khoá raw|; NGOÀI cửa sổ ⇒ khoá
+    mạnh (vụ mới) — bỏ kiểm cửa sổ thì test này đỏ."""
+    w = await world(db)
+    raw = (await db.execute(text("""INSERT INTO raw.events (org_id, occurred_at, channel_id, external_msg_id, kind, body_text, payload, content_hash)
+                                    VALUES (:o, :t, (SELECT id FROM core.channels WHERE org_id = :o LIMIT 1), gen_random_uuid()::text, 'text', 'x', '{}', '\\x01')
+                                    RETURNING id"""), {"o": w.org, "t": A})).scalar_one()
+    strong = L.case_key(L.FR, at=A, impersonated_entity_id="ent-x")
+    weak = L.case_key(L.FR, at=A, raw_event_id=str(raw))
+    ev = signals.EvidenceIn(type="raw_event", id=raw, source_field="body", span_start=0, span_end=1)
+    await signals.upsert(db, w.org, signals.UpsertIn(kind=L.FR, title="t", detector="raw_tail", level_input=_li(A), evidence=[ev], case_key=weak,
+                                                     facts={"fraud_case": strong}), A)
+    assert await fraud._effective_case(db, w.org, strong, A + timedelta(hours=2)) == weak
+    assert await fraud._effective_case(db, w.org, strong, A + timedelta(hours=30)) == strong

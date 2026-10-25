@@ -326,6 +326,40 @@ _CRED: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("charged_vanish2", re.compile(r"\btien\b(?:\s+\w+){0,3}\s+(?:bay mat|bay het|bay sach)\b")),
 )
 
+#: T12 (review BLOCKER 1 + security review): "nhập/điền xong … mã/mật khẩu" trong ngữ cảnh app/thiết bị/hệ thống của CHÍNH MÌNH mà không có
+#: dấu hiệu lừa (đăng nhập app ngân hàng, máy in, phần mềm kế toán…) KHÔNG là luật cứng — vẫn là ứng viên (cờ cho model + (d2)), không mở đường
+#: nhanh `raw_tail`. Ngữ cảnh chỉ xét trong CÂU chứa khớp (chèn "app ngân hàng" ở câu khác không hạ được); từ chung chung (app, zalo, ngân
+#: hàng…) chỉ tính khi đứng sát động từ đăng nhập. Một nguồn cho `prefilter` và `fraud`. "mã xác minh" là tên mã, không phải dấu hiệu.
+CRED_LURE = re.compile(r"\b(?:nhan qua|qua tang|tang qua|trung thuong|trung giai|khuyen mai|uu dai|tri an|hoan tien|(?<!ma )xac minh|"
+                       r"cap nhat thong tin|mo khoa|bi khoa|link|duong dan|trang (?:do|web|la|gia|kia|nay)|http|www|ben do|ben kia|"
+                       r"nguoi la|so la|nick la|tong dai|nhan vien ngan hang|goi toi|goi den|goi dien|hoi la|la lam|lua dao|nghi lua|"
+                       r"bi lua|tru tien|mat tien|bay mat|no bao|cho no)\b")
+_CRED_OWN_SPECIFIC = re.compile(r"\b(?:he thong|phan mem|may tinh|may in|may pos|wifi|ke toan|chu ky so|file|excel|quay|"
+                                r"email cong ty|tai khoan cong ty)\b")
+_CRED_OWN_LOGIN = re.compile(r"\b(?:dang nhap|login)\b(?:\W+\w+){0,4}?\W+(?:app|ung dung|zalo|facebook|messenger|email|gmail|"
+                             r"internet banking|ngan hang)\b")
+#: Luật L2 được phép hạ mềm: CHỈ "nhập/điền xong … (rồi bị hỏi) mã" — bí mật CHƯA chắc đã đưa. Không bao giờ hạ `cred_enter`,
+#: `cred_secret_gave`, `cred_secret_sent`, `cred_enter_done`, `cred_enter_luon` (bí mật đã thực sự nhập/đưa), cũng không hạ luật bị trừ tiền / link lạ.
+CRED_SOFTENABLE = frozenset({"cred_enter_done2"})
+
+
+def sentence(fold: str, a: int, b: int) -> str:
+    """Câu chứa khớp [a, b) (ranh giới . ! ? ; xuống dòng)."""
+    lo = max((m.end() for m in re.finditer(r"[.!?;\n]", fold[:a])), default=0)
+    m = re.search(r"[.!?;\n]", fold[b:])
+    return fold[lo:b + m.start() if m else len(fold)]
+
+
+def cred_own(fold: str, a: int, b: int) -> bool:
+    s = sentence(fold, a, b)
+    return _CRED_OWN_SPECIFIC.search(s) is not None or _CRED_OWN_LOGIN.search(s) is not None
+
+
+def cred_soft(fold: str, code: str, a: int, b: int) -> bool:
+    """Luật "nhập xong … mã" trong ngữ cảnh app/thiết bị của chính mình (cùng câu), không dấu hiệu lừa ⇒ ứng viên MỀM (không luật cứng)."""
+    return code in CRED_SOFTENABLE and cred_own(fold, a, b) and CRED_LURE.search(fold) is None
+
+
 _TAKEOVER_ASSET = r"(?:tai khoan|zalo|facebook|fb|nick|messenger|telegram|whatsapp|momo|zalopay|email|gmail|sim|vi)"
 _TAKEOVER: tuple[re.Pattern[str], ...] = (
     re.compile(rf"\b{_TAKEOVER_ASSET}\b{_gap(0, 4)}{_SEP}(?:bi|vua bi|da bi|dang bi)\s+(?:hack|hacker|chiem|danh cap|chiem doat|cuop|khoa)\b"),
@@ -483,7 +517,8 @@ def scan_text(text: str, source_field: str = "body") -> list[Candidate]:
     hits = _cred_hits(fold)
     if hits:
         code, a, b = min(hits, key=lambda h: h[1])
-        add("credentials_entered", a, b, hard="credentials_entered", first_person=_first_person(fold, a, b), rule=code)
+        add("credentials_entered", a, b, hard=None if cred_soft(fold, code, a, b) else "credentials_entered", first_person=_first_person(fold, a, b),
+            rule=code)
     # 2. tài khoản bị chiếm
     for rx in _TAKEOVER:
         m = rx.search(fold)

@@ -7,7 +7,9 @@ chỉ ghi lịch sử, mồi phishing tối đa 🟠."""
 from __future__ import annotations
 
 from datetime import timedelta
+from typing import Any
 
+import orjson
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -433,3 +435,72 @@ async def test_fraud_poison_message_dropped_after_max_fails(db: AsyncSession, mo
     for k in range(fraud.MAX_FAILS + 2):
         await fraud.run_and_commit(db, w.org, w.now + timedelta(minutes=k), seen=seen)
     assert len(tries) == fraud.MAX_FAILS
+
+
+# ─── T12 review BLOCKER 1: câu thường không đẩy 🔴 luật cứng; ứng viên mềm chỉ ghi khi (d2) xác nhận ─────────────────────
+
+FP_STAFF = ["anh đăng nhập app ngân hàng rồi, ngân hàng gửi mã OTP bảo nhập để xác nhận chuyển khoản cho nhà cung cấp",
+            "em đăng nhập zalo trên máy tính rồi, nó gửi mã xác nhận về điện thoại bảo nhập",
+            "anh đăng nhập vào hệ thống kế toán rồi, cần mật khẩu wifi không anh"]
+
+
+async def test_fraud_everyday_login_messages_never_hard_red(db: AsyncSession) -> None:
+    """Không bộ định tuyến ((d2) không chạy được): ứng viên mềm ghi mức thấp (fail-high nhưng không 🔴, không đẩy); có (d2) không đồng ý ⇒ không gì."""
+    for body in FP_STAFF:
+        for call in (None, fake_call("disagree")):
+            w = await world(db)
+            await w.group("nv", "Nhóm NV", 20)
+            _p, iid = await w.person("Nhân viên", ptype="staff", group="nv", history_days_ago=60)
+            await w.raw(body, sender=iid, group="nv")
+            out = await fraud.run(db, w.org, w.now, call=call)
+            assert all(s.level != "red" and s.delivery != "push_now" for s in out), body
+            assert all(not (a.facts.get("fraud_rules") or []) or "credentials_entered" not in a.facts["fraud_rules"] for a in await _alerts(db, w.org))
+            if call is not None:
+                assert out == [], body
+
+
+def _confirm_call(flags: list[str]) -> Any:
+    from gh.refinery.extract import ModelReply
+
+    async def call(messages: list[Any]) -> ModelReply:
+        return ModelReply(orjson.dumps({"gate": "lua_dao_dang_dien_ra", "flags_confirmed": flags, "harm": {"what": "mất tiền"}, "verdict": "agree",
+                                        "reason": "thử"}).decode(), "fake-strong")
+    return call
+
+
+async def test_fraud_soft_credential_candidate_written_only_when_d2_confirms(db: AsyncSession) -> None:
+    for call, want in ((fake_call("disagree"), None), (_confirm_call([]), "amber"), (_confirm_call(["credentials_entered"]), "red"), (None, "amber")):
+        w = await world(db)
+        await w.group("nv", "Nhóm NV", 20)
+        _p, iid = await w.person("Nhân viên", ptype="staff", group="nv", history_days_ago=60)
+        await w.raw(FP_STAFF[1], sender=iid, group="nv")
+        out = await fraud.run(db, w.org, w.now, call=call)
+        assert [s.level for s in out] == ([want] if want else [])
+        if want == "red":
+            assert out[0].gate == levels.G1
+
+
+async def test_fraud_soft_candidate_not_lost_when_d2_budget_exhausted_or_errors(db: AsyncSession) -> None:
+    """Security review: hết trần (d2) lượt này / (d2) lỗi ⇒ KHÔNG đánh dấu "đã quét" (lượt sau còn xử lý); lỗi đủ MAX_FAILS ⇒ ghi mức thấp."""
+    w = await world(db)
+    await w.group("nv", "Nhóm NV", 20)
+    _p, iid = await w.person("Nhân viên", ptype="staff", group="nv", history_days_ago=60)
+    await w.raw(FP_STAFF[1], sender=iid, group="nv")
+    seen = fraud.SeenStore()
+    keys: list[str] = []
+    assert await fraud.run(db, w.org, w.now, call=_confirm_call(["credentials_entered"]), max_d2=0, seen=seen, processed=keys) == []
+    first = set(keys)                                                    # chỉ tin chào hỏi cũ (không phải ứng viên) được đánh dấu
+    out = await fraud.run(db, w.org, w.now, call=_confirm_call(["credentials_entered"]), seen=seen, processed=keys)
+    assert [s.level for s in out] == ["red"] and len(set(keys) - first) == 1    # hết trần lượt trước: tin không mất, lượt sau xử lý
+    w2 = await world(db)
+    await w2.group("nv", "Nhóm NV", 20)
+    _p2, iid2 = await w2.person("Nhân viên", ptype="staff", group="nv", history_days_ago=60)
+    await w2.raw(FP_STAFF[1], sender=iid2, group="nv")
+    seen2 = fraud.SeenStore()
+    outs, marked = [], []
+    for _ in range(fraud.MAX_FAILS):
+        keys2: list[str] = []
+        outs.append(await fraud.run(db, w2.org, w2.now, call=fake_call(error=True), seen=seen2, processed=keys2))
+        marked.append(len(keys2))
+    assert all(o == [] for o in outs[:-1]) and [s.level for s in outs[-1]] == ["amber"]
+    assert marked[-1] == marked[0] + 1                                   # chỉ lượt cuối (đủ MAX_FAILS) mới đánh dấu tin
