@@ -59,6 +59,7 @@ class Incident:
     title: str
     body: str
     link: str = LINK
+    fingerprint: str = ""                 # `last:<giờ tin cuối>` cho im lặng: bằng chứng dương để biết khi nào thật sự thông
     covered_by: tuple[str, ...] = ()      # sự cố cùng gốc đã có chuông ở nơi khác (channel.down / bridge.silent): không mở chuông thứ hai
 
 
@@ -128,7 +129,8 @@ async def _silence(db: AsyncSession, org: Any, now: datetime) -> list[Incident]:
     if gap <= limit:
         return []
     return [Incident(f"{PREFIX}silent", "agent.silent", "warn", f"Không có tin nào vào suốt {_human(gap)} — bất thường so với giờ này mọi ngày",
-                     "Có thể tài khoản của Gen bị khoá hoặc mất kết nối dù cầu nối vẫn báo bình thường. Mở Kết nối để kiểm tra.")]
+                     "Có thể tài khoản của Gen bị khoá hoặc mất kết nối dù cầu nối vẫn báo bình thường. Mở Kết nối để kiểm tra.",
+                     fingerprint=f"last:{r.last.isoformat()}")]
 
 
 # ─── (3) một nhóm ────────────────────────────────────────────────────────────
@@ -162,7 +164,8 @@ async def _groups(db: AsyncSession, org: Any, now: datetime) -> tuple[list[Incid
                 quiet.append((gap / limit, g, gap))
         for _, g, gap in sorted(quiet, key=lambda t: -t[0])[:GROUP_MAX]:
             out.append(Incident(f"{PREFIX}group_quiet:{g.id}", "agent.group_quiet", "warn", f"Nhóm «{_clean(g.name)}» im lặng bất thường ({_human(gap)})",
-                                "Nhóm này im lâu hơn nhiều so với nhịp thường ngày — có thể Gen đã bị loại khỏi nhóm mà không có thông báo. Mở nhóm trên điện thoại để kiểm tra."))
+                                "Nhóm này im lâu hơn nhiều so với nhịp thường ngày — có thể Gen đã bị loại khỏi nhóm mà không có thông báo. Mở nhóm trên điện thoại để kiểm tra.",
+                                fingerprint=f"last:{g.last.isoformat()}"))
     return out, evaluate_quiet
 
 
@@ -216,36 +219,54 @@ async def evaluate(db: AsyncSession, org: Any, now: datetime) -> Evaluation:
     return Evaluation({i.key: i for i in found}, () if quiet_evaluated else (f"{PREFIX}group_quiet:",), states)
 
 
-async def _resolution(db: AsyncSession, org: Any, key: str, now: datetime, ev: Evaluation) -> str:
-    """Sự cố đang mở mà lượt này không còn thấy: `recovered` (thật sự hết ⇒ báo hồi phục), `silent` (hết cửa sổ/hết điều kiện đánh giá nhưng KHÔNG
-    phải đã khỏi ⇒ đóng im lặng) hoặc `hold` (chưa khỏi, giữ mở)."""
+async def _newer_than(db: AsyncSession, org: Any, fingerprint: str, now: datetime, group: str | None = None) -> bool:
+    """Bằng chứng dương: có tin vào MỚI HƠN tin cuối lúc mở sự cố (`fingerprint = last:<giờ>`)."""
+    if not fingerprint.startswith("last:"):
+        return False
+    try:
+        since = datetime.fromisoformat(fingerprint[5:])
+    except ValueError:
+        return False
+    return bool((await db.execute(text("""SELECT EXISTS (SELECT 1 FROM raw.events WHERE org_id = :o AND direction = 'inbound'
+                                            AND occurred_at > :s AND occurred_at <= :n AND (CAST(:g AS uuid) IS NULL OR group_id = CAST(:g AS uuid)))"""),
+                                  {"o": org, "s": since, "n": now, "g": group})).scalar_one())
+
+
+async def _resolution(db: AsyncSession, org: Any, key: str, fingerprint: str, now: datetime, ev: Evaluation) -> str:
+    """Sự cố đang mở mà lượt này không còn thấy: `recovered` (có BẰNG CHỨNG DƯƠNG là đã khỏi ⇒ báo hồi phục), `silent` (hết cửa sổ/hết điều kiện đánh giá,
+    KHÔNG phải đã khỏi ⇒ đóng im lặng) hoặc `hold` (mặc định — chưa chứng minh được ⇒ giữ mở)."""
     kind, _, ref = key[len(PREFIX):].partition(":")
     if kind == "session":
-        return "silent" if ev.session_states.get(ref, "gone") in (*ENDED_STATES, "gone") else "recovered"
+        state = ev.session_states.get(ref, "gone")
+        return "recovered" if state == "active" else ("silent" if state in (*ENDED_STATES, "gone") else "hold")
     if kind in ("group_removed", "group_quiet"):
         g = (await db.execute(text("SELECT left_at, listen_mode FROM core.groups WHERE org_id = :o AND id = CAST(:g AS uuid)"), {"o": org, "g": ref})).one_or_none()
         if g is None:
             return "silent"
         if kind == "group_removed":
             return "recovered" if g.left_at is None else "silent"
-        return "recovered" if g.left_at is None and g.listen_mode in GROUP_LISTEN_MODES else "silent"
+        if g.left_at is not None or g.listen_mode not in GROUP_LISTEN_MODES:
+            return "silent"
+        return "recovered" if await _newer_than(db, org, fingerprint, now, ref) else "hold"
+    if kind == "silent":
+        return "recovered" if await _newer_than(db, org, fingerprint, now) else "hold"
     if kind == "digest_late":
         from gh.gen import briefing
 
-        raised_at = briefing.slot_for(now).at          # có bản tin nào tới tay Sếp từ mốc gần nhất ⇒ đã thông; chưa ⇒ giữ mở (không tự hết theo cửa sổ)
+        since = briefing.slot_for(now).at          # có bản tin nào tới tay Sếp từ mốc gần nhất ⇒ đã thông; chưa ⇒ giữ mở (không tự hết theo cửa sổ)
         sent = (await db.execute(text("""
             SELECT EXISTS (SELECT 1 FROM ops.telegram_outbox WHERE org_id = :o AND kind = 'briefing' AND sent_at >= :t)
-                OR EXISTS (SELECT 1 FROM ops.owner_outbox WHERE org_id = :o AND kind = 'digest' AND sent_at >= :t)"""), {"o": org, "t": raised_at})).scalar_one()
+                OR EXISTS (SELECT 1 FROM ops.owner_outbox WHERE org_id = :o AND kind = 'digest' AND sent_at >= :t)"""), {"o": org, "t": since})).scalar_one()
         if sent:
             return "recovered"
         return "hold" if await _briefing_runs(db, org) else "silent"
-    return "recovered"
+    return "hold"
 
 
 async def reconcile(db: AsyncSession, redis: Any, org: Any, now: datetime) -> dict[str, int]:
     """Mở/đóng sự cố của một tổ chức theo `evaluate`. Bên gọi commit."""
     ev = await evaluate(db, org, now)
-    opened = (await db.execute(text("SELECT key, title FROM ops.health_alerts WHERE org_id = :o AND key LIKE 'agent.%' AND cleared_at IS NULL"),
+    opened = (await db.execute(text("SELECT key, title, fingerprint FROM ops.health_alerts WHERE org_id = :o AND key LIKE 'agent.%' AND cleared_at IS NULL"),
                                {"o": org})).all()
     own_open = {r.key for r in opened}
     external = {r.key: r.raised_at for r in (await db.execute(text("""SELECT key, raised_at FROM ops.health_alerts
@@ -259,18 +280,21 @@ async def reconcile(db: AsyncSession, redis: Any, org: Any, now: datetime) -> di
             if await backup.notify(db, org, f"{inc.title}. {inc.body}", kind="incident", dedupe_key=f"{inc.key}:cover:{cover}:{external[cover].strftime('%Y%m%d%H%M%S')}"):
                 raised += 1
             continue
-        fresh = await health.raise_once(db, org, key=inc.key, kind=inc.kind, severity=inc.severity, title=inc.title, body=inc.body, link=inc.link, redis=redis)
+        fresh = await health.raise_once(db, org, key=inc.key, kind=inc.kind, severity=inc.severity, title=inc.title, body=inc.body, link=inc.link, fingerprint=inc.fingerprint, redis=redis)
         if fresh:
             raised += 1
             await backup.notify(db, org, f"{inc.title}. {inc.body}", kind="incident", dedupe_key=f"{inc.key}:{stamp}")
     for row in opened:
         if row.key in ev.desired or any(row.key.startswith(p) for p in ev.keep):
             continue
-        outcome = await _resolution(db, org, row.key, now, ev)
+        outcome = await _resolution(db, org, row.key, row.fingerprint, now, ev)
         if outcome == "hold":
             continue
         if await health.clear(db, org, row.key, redis=redis):
             cleared += 1
+            # Lý do đóng ghi vào `fingerprint` của dòng đã đóng (bảng không có cột riêng; mở lại thì raise_once ghi đè): `recovered_lines` chỉ lấy `closed:recovered`.
+            await db.execute(text("UPDATE ops.health_alerts SET fingerprint = :f WHERE org_id = :o AND key = :k AND cleared_at IS NOT NULL"),
+                             {"f": f"closed:{outcome}", "o": org, "k": row.key})
             if outcome == "recovered":
                 await backup.notify(db, org, f"Đã hồi phục: {row.title}", kind="incident", dedupe_key=f"ok:{row.key}:{stamp}")
     return {"raised": raised, "cleared": cleared}
@@ -279,7 +303,7 @@ async def reconcile(db: AsyncSession, redis: Any, org: Any, now: datetime) -> di
 async def recovered_lines(db: AsyncSession, org: Any, *, since: datetime) -> list[str]:
     """Dòng "đã hồi phục" cho bản tin kế (T3 chèn): các sự cố của watchdog đóng từ `since`."""
     rows = (await db.execute(text("""SELECT title FROM ops.health_alerts WHERE org_id = :o AND cleared_at >= :s
-                                       AND (key LIKE 'agent.%' OR key LIKE 'channel.down:%' OR key = 'bridge.silent')
+                                       AND ((key LIKE 'agent.%' AND fingerprint = 'closed:recovered') OR key LIKE 'channel.down:%' OR key = 'bridge.silent')
                                      ORDER BY cleared_at"""), {"o": org, "s": since})).scalars().all()
     return [f"Đã hồi phục: {t}" for t in rows]
 

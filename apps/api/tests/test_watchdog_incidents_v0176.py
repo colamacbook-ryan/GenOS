@@ -472,3 +472,56 @@ async def test_recovered_lines_include_channel_down_and_bridge_silent(db: Any) -
     await health.clear(db, org, "channel.down:zalo")
     await db.commit()
     assert await watchdog.recovered_lines(db, org, since=NOW) == ["Đã hồi phục: Zalo ngắt"]
+
+
+# ─── review vòng 2: mặc định hold, chỉ hồi phục khi có bằng chứng dương ──────
+
+async def test_silence_not_recovered_on_hour_rollover_without_new_message(db: Any) -> None:
+    org = await mk_org(db)
+    await _telegram(db, org)
+    ch = await _channel(db, org)
+    await _session(db, ch, org, heartbeat=NOW + timedelta(minutes=70))
+    await _history(db, org, ch, last=NOW - timedelta(hours=2))
+    await _tick(db, org, NOW + timedelta(minutes=50))
+    assert [a.key for a in await _alerts(db)] == ["agent.silent"]
+    await _tick(db, org, NOW + timedelta(minutes=61))                 # sang khung 13h: thiếu lịch sử ⇒ không đánh giá được, KHÔNG phải đã thông
+    assert [a.key for a in await _alerts(db)] == ["agent.silent"] and _no_recovery(await _backup_rows(db))
+    await _events(db, org, ch, [NOW + timedelta(minutes=62)])         # có tin mới vào ⇒ bằng chứng dương
+    await _tick(db, org, NOW + timedelta(minutes=63))
+    assert await _alerts(db) == [] and not _no_recovery(await _backup_rows(db))
+
+
+async def test_group_quiet_recovers_only_with_new_message(db: Any) -> None:
+    org = await mk_org(db)
+    await _telegram(db, org)
+    ch = await _channel(db, org)
+    await _session(db, ch, org, heartbeat=NOW + timedelta(days=3))
+    g = await _group(db, org, ch)
+    await _events(db, org, ch, _every(60, NOW - timedelta(days=10), NOW - timedelta(hours=20)), g)
+    await _tick(db, org)
+    assert [a.key for a in await _alerts(db)] == [f"agent.group_quiet:{g}"]
+    await db.execute(text("DELETE FROM ops.listen_events"))          # (không đổi gì) — chỉ chặn nhiễu
+    await db.commit()
+    await _tick(db, org, NOW + timedelta(days=2))                     # vẫn im, sau 2 ngày nhịp mẫu cũ rơi khỏi cửa sổ: không được tự "khỏi"
+    assert [a.key for a in await _alerts(db)] == [f"agent.group_quiet:{g}"] and _no_recovery(await _backup_rows(db))
+    await _events(db, org, ch, [NOW + timedelta(days=2, minutes=1)], g)
+    await _tick(db, org, NOW + timedelta(days=2, minutes=2))
+    assert await _alerts(db) == [] and not _no_recovery(await _backup_rows(db))
+
+
+async def test_recovered_lines_only_for_real_recoveries(db: Any) -> None:
+    org = await mk_org(db)
+    await _telegram(db, org)
+    zl = await _channel(db, org, "zalo")
+    await _session(db, zl, org, "expired", ended=NOW - timedelta(minutes=3))
+    await _tick(db, org)
+    await _tick(db, org, NOW + timedelta(days=7, minutes=1))          # đóng im lặng (hết cửa sổ)
+    assert await watchdog.recovered_lines(db, org, since=NOW) == []
+    wa = await _channel(db, org, "whatsapp")
+    sid = await _session(db, wa, org, "active", heartbeat=NOW - timedelta(minutes=5))
+    await _tick(db, org, NOW)
+    await db.execute(text("UPDATE core.channel_sessions SET last_heartbeat_at = :h WHERE id = :i"), {"h": NOW + timedelta(minutes=1), "i": sid})
+    await db.commit()
+    await _tick(db, org, NOW + timedelta(minutes=1))                  # hồi phục thật
+    lines = await watchdog.recovered_lines(db, org, since=NOW - timedelta(days=30))
+    assert len(lines) == 1 and "WhatsApp" in lines[0]
