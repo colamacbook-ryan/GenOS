@@ -33,7 +33,7 @@ from gh.owner_channel.identity import OwnerIds
 
 log = logging.getLogger("gh.owner_channel.group_cmds")
 
-KINDS = ("nhom", "nghe", "bo", "ho_tro", "xac_nhan")
+KINDS = ("nhom", "nghe", "bo", "ho_tro", "xac_nhan", "boi_canh")
 CONFIRM_TTL = timedelta(minutes=5)
 MAX_LIST = 15
 MAX_HOURS = 24 * 30
@@ -43,6 +43,8 @@ _TAT = ("tat", "tắt", "off")
 USAGE_SUPPORT = ("Cách dùng: /ho_tro (xem) · /ho_tro <mã nhóm> bat [số giờ] · /ho_tro <mã nhóm> tat. "
                  "Mã nhóm xem ở /nhom.")
 LOCKED = "Trợ lý đang bị khoá nên em không bật hỗ trợ nhóm được. Sếp mở khoá trên Console (mã PIN) trước."
+USAGE_CONTEXT = ("Cách dùng: /boi_canh <mã nhóm> <bối cảnh>. Bối cảnh: kinh doanh, công việc, học tập, "
+                 "gia đình, bạn bè, nhân viên, giao thương, khác. Mã nhóm xem ở /nhom.")
 NO_Q = "Em không thấy câu hỏi mã đó (có thể đã trả lời hoặc hết hạn). Gõ /nhom để xem lại."
 
 
@@ -205,6 +207,31 @@ async def _xac_nhan(db: AsyncSession, redis: Redis, org_id: uuid.UUID, channel: 
     return f"Đã bật chế độ hỗ trợ nhóm «{str(g.name)[:60]}»" + tail
 
 
+async def _boi_canh(db: AsyncSession, redis: Redis, org_id: uuid.UUID, oi: OwnerIds, args: str) -> str:
+    """v0.1.76 (T2, W8 `context_set`, việc riêng làm ngay): Sếp gán bối cảnh cho một nhóm (nhãn `owner`,
+    thay nhãn cũ của Sếp). Bối cảnh không tắt được cổng lừa đảo / an toàn (luật trong `mem.contexts`)."""
+    from gh.biz.mem import contexts
+    from gh.textnorm import strip_accents
+
+    parts = args.split(maxsplit=1)
+    if len(parts) < 2 or oi.owner_user_id is None:
+        return USAGE_CONTEXT
+    want = "_".join(strip_accents(parts[1]).lower().replace("_", " ").split())
+    rows = (await db.execute(text("SELECT code, label_vi FROM mem.context_types"))).all()
+    hit = next((r for r in rows if want in (r.code, "_".join(strip_accents(r.label_vi).lower().split()))), None)
+    if hit is None:
+        return USAGE_CONTEXT
+    g = await _find_group(db, org_id, oi.channel, parts[0])
+    if g is None:
+        return "Em không tìm thấy nhóm đó (hoặc mã trùng nhiều nhóm). Gõ /nhom để xem mã."
+    await contexts.set_group_contexts(db, org_id, g.id, [{"context": hit.code, "is_primary": True}],
+                                      user_id=oi.owner_user_id)
+    await _announce(db, redis, org_id, oi.channel, "boi_canh",
+                    f"Gán bối cảnh «{hit.label_vi}» cho nhóm «{str(g.name)[:60]}».", g.id,
+                    {"group_id": str(g.id), "context": hit.code})
+    return f"Đã gán bối cảnh «{hit.label_vi}» cho nhóm «{str(g.name)[:60]}»."
+
+
 async def handle(db: AsyncSession, redis: Redis, org_id: uuid.UUID, oi: OwnerIds, kind: str, args: str) -> str:
     """Chạy một lệnh nhóm; trả chữ trả lời. Gọi khi `oi.enabled`; commit do bên gọi."""
     channel = oi.channel
@@ -214,6 +241,8 @@ async def handle(db: AsyncSession, redis: Redis, org_id: uuid.UUID, oi: OwnerIds
         return await _answer_listen(db, redis, org_id, channel, kind, args.split()[0] if args.split() else "")
     if kind == "ho_tro":
         return await _ho_tro(db, redis, org_id, channel, args)
+    if kind == "boi_canh":
+        return await _boi_canh(db, redis, org_id, oi, args)
     if kind == "xac_nhan":
         return await _xac_nhan(db, redis, org_id, channel, args.split()[0] if args.split() else "")
     return "Em chưa có lệnh đó. Gõ /tro_giup để xem các lệnh em hiểu."
