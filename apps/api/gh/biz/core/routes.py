@@ -14,7 +14,7 @@ from gh.auth import rbac, service
 from gh.auth.deps import current_user, require, require_pin
 from gh.biz.core import drafts, explain
 from gh.biz.core.scope import Scope, ensure_group, ensure_person, group_view_sql, not_found, scope_for
-from gh.biz.intel import strong_confirm
+from gh.biz.intel import asks, strong_confirm
 from gh.biz.queue import service as qsvc
 from gh.chassis import actionlog
 from gh.data.common import has_masked_number, iso, mask_text, parse_cursor
@@ -344,6 +344,8 @@ async def _decide(request: Request, draft_id: uuid.UUID, user: service.CurrentUs
                             bus=request.app.state.bus, redis=request.app.state.redis)
     except drafts.DraftError as e:
         raise ApiError(e.status, e.code, e.title) from e
+    # v0.1.76 (T2): một hàng Cần quyết — đường Console cũ đóng ask của nháp CÙNG transaction
+    await asks.close_for(db, user.org_id, "draft", draft_id, state="cancelled" if verdict == "reject" else "executed")
     return await get_draft(draft_id, user, db)
 
 
