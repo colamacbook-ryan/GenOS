@@ -402,3 +402,44 @@ async def test_attack_privacy_is_sticky_strictest_wins_on_merge_relane_reeval(db
     assert await priv() == ("console_pin", "console_pin")
     await signals.reevaluate_due(db, NOW + timedelta(hours=3))
     assert await priv() == ("console_pin", "console_pin")
+
+
+async def test_attack_merge_weaker_followup_never_demotes_fraud_red(db: AsyncSession) -> None:
+    """Cùng vụ (cùng khoá): tin đỏ (luật cứng + xin tiền) rồi tin YẾU hơn ("em đổi số điện thoại rồi") ⇒ vẫn 🔴, hard_rule_hit giữ đủ cả hai."""
+    org = await mk_org(db)
+    await _install(db, org)
+    red = _li("rui_ro_lua_dao", hard_rule_hit=["stk_changed_money_request"], txn_state="pending", flags={"money_request": True},
+              victims=[{"ref": "kh1", "customer": True}], payee_refs=["stkA"])
+    s1 = await signals.upsert(db, org, _up("rui_ro_lua_dao", red, await _raw(db, org, "cho em mượn 5 triệu"), "fr:imp|x"), NOW)
+    assert (s1.level, s1.gate) == ("red", levels.G1)
+    weak = _li("rui_ro_lua_dao", ago_h=0.1, now=NOW + timedelta(minutes=3), hard_rule_hit=["emergency"], harm_what="",
+               victims=[], confidence_exist=0.5, d2={"verdict": "disagree"})
+    s2 = await signals.upsert(db, org, _up("rui_ro_lua_dao", weak, await _raw(db, org, "em đổi số điện thoại rồi"), "fr:imp|x"),
+                              NOW + timedelta(minutes=3))
+    assert s2.id == s1.id and s2.level == "red" and s2.gate == levels.G1
+    li = (await db.execute(text("SELECT level_input FROM biz.alerts WHERE id = :i"), {"i": s1.id})).scalar_one()
+    assert set(li["hard_rule_hit"]) == {"stk_changed_money_request", "emergency"}
+    assert li["txn_state"] == "pending" and li["flags"]["money_request"] is True and [v["ref"] for v in li["victims"]] == ["kh1"]
+
+
+async def test_attack_merge_late_ocr_same_raw_event_keeps_red(db: AsyncSession) -> None:
+    """OCR của CÙNG ảnh tới sau (khớp theo raw_event_ids, khoá khác) không hạ 🔴 đã có."""
+    org = await mk_org(db)
+    await _install(db, org)
+    raw = await _raw(db, org, "[ảnh]")
+    red = _li("rui_ro_lua_dao", flags={"credentials_entered": True}, victims=[{"ref": "nv", "team": True}])
+    s1 = await signals.upsert(db, org, _up("rui_ro_lua_dao", red, raw, "fr:a"), NOW)
+    assert s1.level == "red"
+    ocr = _li("rui_ro_lua_dao", ago_h=0.05, victims=[], harm_what="")
+    up = signals.UpsertIn(kind="rui_ro_lua_dao", title="t", detector="ocr", level_input=ocr, case_key="rui_ro_lua_dao:domain|qua-tang.xyz|x",
+                          evidence=[signals.EvidenceIn(type="raw_event", id=raw, source_field="ocr", span_start=0, span_end=10)])
+    s2 = await signals.upsert(db, org, up, NOW + timedelta(minutes=2))
+    assert s2.id == s1.id and s2.level == "red" and s2.gate == levels.G1
+
+
+def test_merge_level_input_closure_still_applies() -> None:
+    """Hợp không chặn đường đóng hợp lệ: tin hoàn thành (status da_xu_ly, A16) và hạn dời vẫn theo tin mới."""
+    old = _li("nghia_vu_loi_hua", due_in_h=2, promise={"to_customer": True})
+    new = _li("nghia_vu_loi_hua", due_in_h=24 * 6, status="da_xu_ly", promise={"to_customer": True, "completed": True})
+    m = signals.merge_level_input(old, new)
+    assert m.status == "da_xu_ly" and m.promise.completed and m.deadline_at == new.deadline_at

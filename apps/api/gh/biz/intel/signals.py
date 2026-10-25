@@ -220,6 +220,68 @@ def _raw_ids(evidence: list[dict[str, Any]], extra: uuid.UUID | None) -> list[st
     return sorted(ids)
 
 
+TXN_ORDER = ("none", "pending", "just_done", "done_cannot_stop")
+
+
+def _union_people(a: list[levels.PersonRel], b: list[levels.PersonRel]) -> list[levels.PersonRel]:
+    out: dict[str, levels.PersonRel] = {}
+    for p in [*a, *b]:
+        if p.ref in out:
+            q = out[p.ref]
+            out[p.ref] = levels.PersonRel(ref=p.ref, **{k: getattr(q, k) or getattr(p, k) for k in levels.PersonRel.model_fields if k != "ref"})
+        else:
+            out[p.ref] = p
+    return list(out.values())
+
+
+def merge_level_input(old: levels.SignalIn, new: levels.SignalIn) -> levels.SignalIn:
+    """Gộp tin mới vào vụ đang mở: HỢP với bản cũ, không thay thế — tin yếu hơn tới sau (cùng khoá / cùng tin gốc, OCR tới muộn) không
+    bao giờ hạ được 🔴 lừa đảo/an toàn (fail-high). Tập (`hard_rule_hit`, victims, impersonated, payee_refs) hợp; cờ OR; `txn_state`
+    mạnh nhất; độ chắc lấy max; (d2) "đồng ý" ở bất kỳ tin nào thắng; mốc thời gian mới nhất. Dữ kiện ĐÓNG VIỆC (status, closure,
+    remediation, hạn, promise/opportunity/work) theo tin mới — đó là đường hạ hợp lệ (A16, đã kiểm người gửi ở bên gọi); `privacy` dính."""
+    f_old, f_new = old.flags, new.flags
+    flags = levels.Flags.model_validate({k: (max(getattr(f_old, k) or 0, getattr(f_new, k) or 0) or None) if k == "repeat_n"
+                                         else bool(getattr(f_old, k) or getattr(f_new, k)) for k in levels.Flags.model_fields})
+    t_old, t_new = TXN_ORDER.index(old.txn_state), TXN_ORDER.index(new.txn_state)
+    txn_state, txn_at = (new.txn_state, new.txn_at or old.txn_at) if t_new >= t_old else (old.txn_state, old.txn_at or new.txn_at)
+    agree = old.d2.verdict == "agree" or new.d2.verdict == "agree"
+    d2 = levels.D2(verdict="agree", error=False, flags_confirmed=sorted(set(old.d2.flags_confirmed) | set(new.d2.flags_confirmed)),
+                   harm_what=new.d2.harm_what or old.d2.harm_what) if agree else (new.d2 if (new.d2.verdict or new.d2.error) else old.d2)
+    money_new = (new.money_vnd or 0) >= (old.money_vnd or 0)
+
+    def latest(a: datetime | None, b: datetime | None) -> datetime | None:
+        return max((x for x in (a, b) if x is not None), default=None, key=_aware)
+
+    return new.model_copy(update={
+        "privacy": "console_pin" if "console_pin" in (old.privacy, new.privacy) else "chat_ok",
+        "gate_candidate": new.gate_candidate or old.gate_candidate,
+        "msg_at": latest(old.msg_at, new.msg_at), "event_at": latest(old.event_at, new.event_at),
+        "deadline_at": new.deadline_at or old.deadline_at,
+        "ongoing": old.ongoing or new.ongoing, "flags": flags,
+        "hard_rule_hit": list(dict.fromkeys([*old.hard_rule_hit, *new.hard_rule_hit])), "d2": d2,
+        "harm_what": new.harm_what.strip() or old.harm_what,
+        "victims": _union_people(old.victims, new.victims), "impersonated": _union_people(old.impersonated, new.impersonated),
+        "delivery_form": "direct" if "direct" in (old.delivery_form, new.delivery_form) else new.delivery_form,
+        "customer_of_owner": old.customer_of_owner or new.customer_of_owner,
+        "case_history": new.case_history or old.case_history, "case_anchor_at": new.case_anchor_at or old.case_anchor_at,
+        "txn_state": txn_state, "txn_at": txn_at,
+        "owner_resolved": old.owner_resolved or new.owner_resolved,
+        "closure": new.closure if new.closure != "none" else old.closure,
+        "remediation": new.remediation if new.remediation != "none" else old.remediation,
+        "impact_base": max(old.impact_base, new.impact_base),
+        "money_vnd": new.money_vnd if money_new else old.money_vnd, "money_basis": new.money_basis if money_new else old.money_basis,
+        "irreversible": old.irreversible or new.irreversible,
+        "non_forwarded_sources_n": max(old.non_forwarded_sources_n, new.non_forwarded_sources_n),
+        "source_class": "rule" if "rule" in (old.source_class, new.source_class) else new.source_class,
+        "confidence_exist": max(old.confidence_exist, new.confidence_exist),
+        "confidence_content": max(old.confidence_content, new.confidence_content),
+        "payee_refs": list(dict.fromkeys([*old.payee_refs, *new.payee_refs])),
+        "owner_unanswered_h": max(old.owner_unanswered_h, new.owner_unanswered_h),
+        "subject_entity_id": new.subject_entity_id or old.subject_entity_id,
+        "goal_priority1_match_valid": old.goal_priority1_match_valid or new.goal_priority1_match_valid,
+        "mute": None, "case_prior": None})
+
+
 # ─── upsert ───────────────────────────────────────────────────────────────────
 
 async def upsert(db: AsyncSession, org_id: uuid.UUID, inp: UpsertIn, now: datetime) -> Signal:
@@ -235,11 +297,13 @@ async def upsert(db: AsyncSession, org_id: uuid.UUID, inp: UpsertIn, now: dateti
     owner_fact_ids = [f for f in dict.fromkeys(inp.owner_fact_ids) if prof.has(f)]      # sai org / chưa xác nhận ⇒ bỏ (§4C)
     li = inp.level_input.model_copy(update={"kind": inp.kind})
     row = (await db.execute(text("""
-        SELECT id, evidence, fact_ids, raw_event_ids, privacy FROM biz.alerts
+        SELECT id, evidence, fact_ids, raw_event_ids, privacy, level_input FROM biz.alerts
         WHERE org_id = :o AND kind = :k AND status IN ('open', 'acknowledged')
           AND (case_key = :ck OR (cardinality(CAST(:raw AS uuid[])) > 0 AND raw_event_ids && CAST(:raw AS uuid[])))
         ORDER BY (case_key = :ck) DESC, created_at LIMIT 1 FOR UPDATE"""),
         {"o": org_id, "k": inp.kind, "ck": inp.case_key, "raw": raw_ids})).one_or_none()
+    if row is not None and row.level_input is not None:
+        li = merge_level_input(levels.SignalIn.model_validate(row.level_input), li)   # HỢP, không thay thế (fail-high)
     if row is not None and row.privacy == "console_pin":
         li = li.model_copy(update={"privacy": "console_pin"})   # riêng tư DÍNH: chặt nhất thắng, gộp không bao giờ hạ (§8.1)
     level_input = li.model_dump(mode="json")
