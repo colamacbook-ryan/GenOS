@@ -149,3 +149,25 @@ def test_fraud_stk_regex_positive(s: str) -> None:
 @pytest.mark.parametrize("s", STK_NEG)
 def test_fraud_stk_regex_negative(s: str) -> None:
     assert not F.scan(s).accounts, s
+
+
+@pytest.mark.parametrize(("body", "want"), [
+    ("Phí ship 50k thôi, còn lại chuyển 50 triệu vào tài khoản giúp em", 50_000_000),
+    ("Em lấy hàng, phí ship 50k, đơn 50 triệu, không cọc, gửi ngay giúp em", 50_000_000),
+    ("Cọc 200 nghìn, tổng 1,5 tỷ", 1_500_000_000),
+    ("tổng 12.500.000đ, ship 30k", 12_500_000),
+])
+def test_fraud_amount_takes_max_not_first(body: str, want: int) -> None:
+    """Tấn công: số nhỏ đứng TRƯỚC số lớn không kéo được số tiền (và mức) xuống."""
+    assert F.scan(body).amount_vnd == want
+
+
+def test_fraud_amount_small_first_does_not_lower_level() -> None:
+    small_first = "Em đặt hàng, phí ship 50k, đơn 50 triệu, không cọc, gửi ngay giúp em"
+    big_only = "Em đặt hàng, đơn 50 triệu, không cọc, gửi ngay giúp em"
+    a, b = _run(small_first, "stranger", "dm"), _run(big_only, "stranger", "dm")
+    assert a is not None and b is not None and a.level == b.level == "red"
+    da = F.decide(F.scan(small_first), CTX["stranger"])
+    assert da is not None and da.amount_vnd == 50_000_000 and "goods_no_deposit_rush" in da.rules
+    li = F.signal_input(da, msg_at=H.NOW, thread=L.Thread(type="dm_agent", size=2, agent_in_thread=True))
+    assert L.axes(li, H.profile(), H.state(), H.NOW)[0] == 3                    # impact theo số lớn (≥ 50 triệu)

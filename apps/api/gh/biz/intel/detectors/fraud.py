@@ -237,6 +237,29 @@ def _accounts(fold: str, idx: list[int], n: int) -> list[Account]:
     return uniq
 
 
+_AMOUNT = re.compile(r"(?<![\d.,])(\d{1,3}(?:[.,]\d{3})+|\d+(?:[.,]\d+)?)\s*(ty|ti|tr|trieu|cu|nghin|ngan|k|d|dong|vnd)\b")
+_UNIT = {"ty": 1_000_000_000, "ti": 1_000_000_000, "tr": 1_000_000, "trieu": 1_000_000, "cu": 1_000_000, "nghin": 1_000, "ngan": 1_000, "k": 1_000}
+
+
+def _vnd(num: str, unit: str) -> int | None:
+    try:
+        if re.fullmatch(r"\d{1,3}(?:[.,]\d{3})+", num) and unit not in ("ty", "ti", "tr", "trieu", "cu"):
+            base = float(re.sub(r"[.,]", "", num))
+        elif re.fullmatch(r"\d{1,3}(?:[.,]\d{3})+", num):
+            base = float(re.sub(r"[.,]", "", num))          # "1.000 triệu" vẫn là nghìn triệu
+        else:
+            base = float(num.replace(",", "."))
+    except ValueError:
+        return None
+    return int(base * _UNIT.get(unit, 1))
+
+
+def max_amount(fold: str) -> int | None:
+    """Số tiền (VND) LỚN NHẤT trong chữ đã bỏ dấu — "50k phí ship … chuyển 50 triệu" ⇒ 50 triệu (chống kéo mức xuống bằng số nhỏ đứng trước)."""
+    vals = [v for m in _AMOUNT.finditer(fold) if (v := _vnd(m.group(1), m.group(2)))]
+    return max(vals) if vals else None
+
+
 def _span(m: re.Match[str] | None, idx: list[int], n: int) -> tuple[int, int] | None:
     return _orig_span(idx, n, m.start(), m.end()) if m else None
 
@@ -322,7 +345,7 @@ def _scan_one(t: str, source_field: str) -> Scan:
     pay = _PAY_VERB.search(fold) if accts else None
     ask = _ASK_MONEY.search(fold)
     order, nodep, rush = _ORDER.search(fold), _NO_DEPOSIT.search(fold), _RUSH.search(fold)
-    amount = next((int(c.details["vnd"]) for c in cands if c.flag == "amount" and c.details.get("vnd")), None)   # số tiền do luật (a) L2 đọc
+    amount = max_amount(fold)          # số LỚN NHẤT trong chữ (không dùng ứng viên "amount" đầu tiên của L2 — chỉ để hiển thị)
     qty = max((int(q.group(1)) for q in _QTY.finditer(fold)), default=0)
     big = (amount or 0) >= BIG_ORDER_VND or qty >= BIG_ORDER_QTY or _BIG_WORDS.search(fold) is not None
     goods = _span(order, idx, n) if (order and nodep and rush and big) else None
@@ -384,6 +407,7 @@ class Decision:
     source_field: str
     record_only: bool = False                    # chỉ ghi lịch sử STK (lần đầu thấy) — không tín hiệu
     safe_verified: bool = False                  # STK trùng STK Sếp đã xác minh ⇒ không báo
+    amount_vnd: int | None = None                # số tiền LỚN NHẤT trong chữ (trục impact)
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -497,7 +521,7 @@ def decide(sc: Scan, ctx: Ctx) -> Decision | None:
     vic = tuple(v for v in victims if not (v.ref in seen or seen.add(v.ref)))     # type: ignore[func-returns-value]
     span = next((s for s in spans if s[1] > s[0]), (0, 0))
     return Decision(tuple(dict.fromkeys(rules)), tuple(dict.fromkeys(hard)), flags, vic, tuple(imp), txn, payee,
-                    sc.domain if "phishing" in rules else None, span, sc.source_field, safe_verified=verified_hit)
+                    sc.domain if "phishing" in rules else None, span, sc.source_field, safe_verified=verified_hit, amount_vnd=sc.amount_vnd)
 
 
 # ─── chữ hiển thị (không số, không phán xét người) ───────────────────────────────────────────────────────────────────────
@@ -541,7 +565,8 @@ def signal_input(d: Decision, *, msg_at: datetime, thread: levels.Thread, delive
                            victims=list(d.victims), impersonated=list(d.impersonated), thread=thread, txn_state=d.txn_state,  # type: ignore[arg-type]
                            txn_at=msg_at if d.txn_state == "just_done" else None, source_class="rule", confidence_exist=1.0,
                            confidence_content=1.0, impact_base=imp, delivery_form=delivery_form,  # type: ignore[arg-type]
-                           payee_refs=[f"stk:{d.payee.digest[:16]}"] if d.payee and d.payee.digest else [])
+                           payee_refs=[f"stk:{d.payee.digest[:16]}"] if d.payee and d.payee.digest else [],
+                           money_vnd=d.amount_vnd, money_basis="quoted" if d.amount_vnd else None)
 
 
 # ─── tầng DB ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
