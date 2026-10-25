@@ -90,7 +90,10 @@ def render(d: digest_mod.Digest, *, label: str, shadow: bool, hidden_console: in
     if hidden_console:
         tail.append(f"Có {hidden_console} mục cần xem trên Console.")
     if d.system_question:
-        tail.append("❓ " + _one_line(str(d.system_question.get("summary") or ""), 120))
+        if d.system_question.get("hidden"):
+            tail.append("Có câu hỏi cần xem trên Console.")      # ask về NGƯỜI (profile/identity): chỉ đếm, không lộ chữ
+        else:
+            tail.append("❓ " + _one_line(str(d.system_question.get("summary") or ""), 120))
     tail.append(_one_line(coverage_line, 200))
     if d.items:
         tail.append(HINT)
@@ -154,6 +157,11 @@ async def deliver_digest(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> 
         return "already_sent"
     off = bool(cfg.get("digest_off"))
     d = await digest_mod.build(db, org_id, now, audience="chat", only_new=True)
+    if d.system_question is not None:                               # kênh chat: chỉ câu hỏi `question` hiện chữ (ask về người cần PIN)
+        src = (await db.execute(text("SELECT source FROM ops.asks WHERE id = :i AND org_id = :o"),
+                                {"i": uuid.UUID(d.system_question["ask_id"]), "o": org_id})).scalar_one_or_none()
+        if src != "question":
+            d.system_question = {"hidden": True}
     if off:
         d.items[:] = [it for it in d.items if it.delivery in digest_mod.TOP]
         for i, it in enumerate(d.items, 1):

@@ -195,3 +195,32 @@ async def test_coverage_line_counts_messages_media_and_lost_groups(db: Any) -> N
     async with SM()() as s:
         line = await coverage.line(s, org, NOW)
     assert "đọc 2 tin" in line and "1 nhóm mất kết nối" in line
+
+
+async def _ask(db: Any, org: uuid.UUID, source: str, summary: str) -> None:
+    from gh.biz.intel import asks
+
+    await asks.create(db, org, source=source, ref_id=uuid.uuid4(), decision_kind=asks.DECISION_KINDS[0], summary=summary)
+    await db.commit()
+
+
+async def test_people_ask_summary_never_leaks_to_zalo_digest(db: Any) -> None:
+    """TẤN CÔNG: ask về NGƯỜI (profile/identity) chỉ xem được qua PIN ⇒ bản tin Zalo chỉ có dòng đếm; Console (audience owner) vẫn thấy đủ."""
+    from gh.biz.intel import digest as digest_mod
+
+    for source in ("identity", "profile"):
+        org, _ = await world(db)
+        await _ask(db, org, source, "Hùng và Hưng có phải một người? BÍ MẬT-NHÂN-SỰ")
+        assert await run(org) == "sent"
+        text_ = (await db.execute(text("SELECT text FROM ops.owner_outbox WHERE org_id = :o AND kind = 'digest'"), {"o": org})).scalar_one()
+        assert "BÍ MẬT-NHÂN-SỰ" not in text_ and "Hùng" not in text_ and "câu hỏi cần xem trên Console" in text_
+        async with SM()() as s:
+            owner_view = await digest_mod.build(s, org, EVENING, audience="owner", only_new=False)
+        assert owner_view.system_question is not None and "BÍ MẬT-NHÂN-SỰ" in owner_view.system_question["summary"]
+
+
+async def test_question_ask_summary_is_shown_in_zalo_digest(db: Any) -> None:
+    org, _ = await world(db)
+    await _ask(db, org, "question", "Anh muốn giao hàng hôm nào?")
+    assert await run(org) == "sent"
+    assert "❓ Anh muốn giao hàng hôm nào?" in (await outbox(db))[0].text
