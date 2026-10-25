@@ -130,7 +130,7 @@ async def _ctx(db: AsyncSession, org_id: uuid.UUID, f: Any, sets: g.OrgSets, *, 
     gid, size = await g.raw_group(db, f.source_raw_event_id)
     kind = "viec_han" if f.predicate == "deadline" else "nghia_vu_loi_hua"
     to_customer = to is not None and to in sets.customers
-    owner_side = subj == sets.owner or subj in sets.staff                  # việc của Sếp (không phải việc của nhóm/tổ chức bất kỳ)
+    owner_side = sets.is_owner(subj) or subj in sets.staff                  # việc của Sếp (không phải việc của nhóm/tổ chức bất kỳ)
     obstacle = False
     if to_customer and gid is not None:
         pid = await _person_of(db, subj)
@@ -237,8 +237,8 @@ async def project(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, limit: 
     và xếp theo hạn GẦN `now` nhất — fact cũ không chặn lời hứa mới."""
     await db.execute(text("SELECT pg_advisory_xact_lock(hashtext('intel_promises:' || :o))"), {"o": str(org_id)})
     sets = await g.org_sets(db, org_id)
-    side = [e for e in (sets.owner, *sets.staff) if e is not None]
-    tos = [e for e in (sets.owner, *sets.key_relations) if e is not None]
+    side = [*sets.owners, *sets.staff]
+    tos = [*sets.owners, *sets.key_relations]
     rows = (await db.execute(text(f"""
         SELECT * FROM (
           SELECT {_FACT_COLS}, d.due_ts IS NULL AS nodue,
@@ -288,8 +288,8 @@ async def _project_one(db: AsyncSession, org_id: uuid.UUID, f: Any, sets: g.OrgS
         if not c.owner_work:
             return None                                                   # việc không phải của Sếp / không chặn việc Sếp
         return await _signal_for(db, org_id, f, c, None, now, person_ids=[])
-    owner_side = subj == sets.owner or subj in sets.staff
-    other_to_owner = to is not None and (to == sets.owner or to in sets.key_relations)
+    owner_side = sets.is_owner(subj) or subj in sets.staff
+    other_to_owner = to is not None and (sets.is_owner(to) or to in sets.key_relations)
     if not (owner_side or other_to_owner):
         return None                                                       # giữa hai người ngoài
     p_from, p_to = await _person_of(db, subj), await _person_of(db, to)

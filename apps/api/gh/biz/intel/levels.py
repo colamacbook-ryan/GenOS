@@ -101,6 +101,9 @@ class D2(_M):
 class Thread(_M):
     type: Literal["group", "dm_owner", "dm_agent"] = "group"
     size: int = 0
+    #: False ⇒ cầu nối không báo cỡ nhóm (`core.groups.member_count` NULL): `size` là 0 giả, KHÔNG được coi là "nhóm nhỏ ⇒ gần"
+    #: (fail-open cho 🔴 — G-KB Đợt 2 P7); nhóm vẫn tính ≤ 200 và vẫn gần nếu Sếp đã xác nhận bối cảnh gần (gia_dinh/ban_be/nhan_vien).
+    size_known: bool = True
     owner_in_thread: bool = False
     agent_in_thread: bool = False
 
@@ -321,7 +324,7 @@ def owner_side(s: SignalIn, policy: Policy) -> OwnerSide:
     in_thread = th.owner_in_thread or th.agent_in_thread
     grp = th.type == "group" and in_thread
     small200 = grp and th.size <= N_WIDE_MAX
-    near = (th.type == "dm_owner" or (grp and th.size <= N_NEAR_SMALL)
+    near = (th.type == "dm_owner" or (grp and th.size_known and th.size <= N_NEAR_SMALL)
             or (grp and th.size <= N_NEAR_CTX and any(c in NEAR_CTX for c in contexts)))
     victim_core = any(_is_core(p) for p in s.victims)
     member_victim = any(p.thread_member and not p.is_agent for p in s.victims)

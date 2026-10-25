@@ -1014,7 +1014,8 @@ async def _thread(db: AsyncSession, org_id: uuid.UUID, group_id: uuid.UUID | Non
     owner_in = bool(owner_people) and (await db.execute(text("""SELECT 1 FROM core.group_members WHERE group_id = :g AND person_id = ANY(:p)
                                                                 AND left_at IS NULL LIMIT 1"""), {"g": group_id, "p": list(owner_people)})).first() is not None
     name = (g.name if g else None) or "nhóm"
-    return levels.Thread(type="group", size=int(g.member_count or 0) if g else 0, owner_in_thread=owner_in, agent_in_thread=True), f"nhóm “{name[:60]}”"
+    return (levels.Thread(type="group", size=int(g.member_count or 0) if g else 0, size_known=g is not None and g.member_count is not None,
+                          owner_in_thread=owner_in, agent_in_thread=True), f"nhóm “{name[:60]}”")
 
 
 async def _effective_case(db: AsyncSession, org_id: uuid.UUID, ck: str, at: datetime) -> str:
@@ -1219,6 +1220,7 @@ async def run(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, call: Any =
     """Quét một tổ chức. Luật cứng ⇒ ghi NGAY rồi (d2); không luật cứng ⇒ (d2) TRƯỚC rồi ghi (không 🔴 nào bị hạ sau khi đẩy).
     Bên gọi commit. KHÔNG tự đánh dấu "đã quét" (dấu chỉ có SAU commit: `run_and_commit`; `processed` nhận các khoá đã xử lý xong).
     Một tin lỗi không dừng tin khác (lỗi chỉ ghi mã tin + tên lỗi); tin lỗi ≥ `MAX_FAILS` lượt mới bị bỏ."""
+    from gh.biz.intel.detectors import generic as g
     from gh.biz.mem import entities, profile, profile_read
 
     seen = seen or MEMORY_SEEN
@@ -1232,6 +1234,8 @@ async def run(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, call: Any =
     key_rel = prof.key_relation_entity_ids()
     owner_people = set(await profile.owner_person_ids(db, org_id))
     owner_ent = (await entities.owner(db, org_id)).id if owner_people else None
+    # Chế độ tài khoản bot: hồ sơ người đã ghép mã (attrs.is_owner, nhận theo ID tài khoản) cũng là Sếp (G-KB Đợt 2 P3).
+    owner_people |= set(await g.paired_owner_person_ids(db, org_id))
     out: list[signals.Signal] = []
     d2_left = max_d2 if call is not None else 0
     for row in rows:
