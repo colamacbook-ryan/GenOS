@@ -1,0 +1,231 @@
+# ruff: noqa: E501
+"""Cửa giao hàng của Tình báo tới Zalo (v0.1.76, gói T3 — spec r6 W7, §4.2.1 (e), CNS-117/121). CHỈ THỰC THI `Level.delivery` đã lưu
+(trần, giờ yên lặng, bóng, `bypass_all` đã quyết ở `levels.compute`; ở đây không tính lại).
+
+- `deliver_digest`: bản tin 07:30 / 17:30 (khung của `gen.briefing`) qua `reports.enqueue(kind='digest')` ⇒ `flush` ⇒ `send_auto(owner_dm)`.
+  Dựng bằng `digest.build(audience='chat')` ⇒ CHỈ tín hiệu `privacy='chat_ok'`; tín hiệu `console_pin` chỉ là dòng "có N mục cần xem trên
+  Console" (không tiêu đề, không trích). ≤ 10 dòng, ≤ 1.500 ký tự; mọi mục có trích đã che «…»; STK/SĐT hiển thị dạng "0123…789".
+  Cuối bản tin: "Đã hồi phục" (watchdog T10), dòng độ phủ; "[chạy thử]" khi `intel.mode=shadow`. Một khung giờ chỉ một bản tin (cổng
+  `ops.job_watermarks`). Đang khoá trợ lý ⇒ không xếp gì, không tiêu thụ cổng.
+- "Tắt bản tin" (`set_digest(off=True)`): bản tin dừng, nhưng mục `digest_top`/`digest_morning` (🔴 chưa đẩy, lừa đảo/an toàn…) gom thành
+  tin "Điểm gấp trong ngày" (CNS-121) — không có mục gấp thì im.
+- `push_alerts`: tín hiệu `push_now` (🔴 đã được chấm là đẩy ngay, kể cả lừa đảo/an toàn bypass giờ yên lặng) ⇒ `kind='alert'` 3 dòng.
+Nơi ghi `sent_at` giữ nguyên ở `owner_outbox` (`reports.flush`) nên dead-man của T10 vẫn đọc đúng.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+import uuid
+from datetime import datetime, timedelta
+from typing import Any
+
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from gh.biz.hooks import CronJob
+from gh.biz.intel import digest as digest_mod
+from gh.biz.intel.pipes import coverage, watchdog
+from gh.owner_channel import reports
+from gh.owner_channel.identity import CHANNELS, owner_ids
+from gh.telegram import backup
+
+log = logging.getLogger("gh.intel.delivery")
+
+JOB = "intel.digest_zalo"
+MAX_LINES, MAX_CHARS, MAX_ITEMS, QUOTE_MAX = 10, reports.TEXT_MAX, 6, 80
+HINT = "Trả lời: «1 ok» · «2 sai» · «3 không cần báo» · «em sót: …»"
+QUIET_DAY = "Hôm nay yên, không có gì cần Sếp ra tay."
+URGENT_HEAD = "Điểm gấp trong ngày"
+MARK = {"red": "🔴", "amber": "🟠", "grey": "⚪"}
+_LONGNUM = re.compile(r"(?<!\d)(\d[\d .-]{6,22}\d)(?!\d)")
+_WS = re.compile(r"\s+")
+
+
+def display_mask(s: str) -> str:
+    """Số dài (≥ 8 chữ số: STK, SĐT, thẻ) hiển thị dạng "0123…789" — phòng thủ khi tài khoản Zalo của Sếp bị chiếm (§8.1)."""
+    def sub(m: re.Match[str]) -> str:
+        d = re.sub(r"\D", "", m.group(1))
+        return m.group(1) if len(d) < 8 else f"{d[:4]}…{d[-3:]}"
+
+    return _LONGNUM.sub(sub, s)
+
+
+def _one_line(s: str, limit: int) -> str:
+    s = _WS.sub(" ", s).strip()
+    return s if len(s) <= limit else s[: limit - 1] + "…"
+
+
+# ─── cài đặt ─────────────────────────────────────────────────────────────────
+
+async def _intel(db: AsyncSession, org_id: uuid.UUID) -> dict[str, Any]:
+    v = (await db.execute(text("SELECT settings -> 'intel' FROM core.organizations WHERE id = :o"), {"o": org_id})).scalar_one_or_none()
+    return v if isinstance(v, dict) else {}
+
+
+async def set_digest(db: AsyncSession, org_id: uuid.UUID, *, off: bool) -> None:
+    """Bật/tắt bản tin Zalo (`settings.intel.digest_off`). Bên gọi lo xác nhận (kênh phụ) và commit."""
+    await db.execute(text("""UPDATE core.organizations SET settings = settings || jsonb_build_object('intel',
+                               COALESCE(settings->'intel', '{}'::jsonb) || jsonb_build_object('digest_off', CAST(:v AS boolean)))
+                             WHERE id = :o"""), {"o": org_id, "v": off})
+
+
+# ─── dựng chữ ────────────────────────────────────────────────────────────────
+
+def _item_line(it: digest_mod.DigestItem) -> str:
+    head = f"{it.n}. {MARK.get(it.level, '⚪')} {_one_line(it.title, 90)}"
+    if it.line_facts:
+        head += " " + _one_line(" · ".join(it.line_facts), 60)
+    if it.quote:
+        head += f" «{_one_line(it.quote, QUOTE_MAX)}»"
+    return head
+
+
+def render(d: digest_mod.Digest, *, label: str, shadow: bool, hidden_console: int, coverage_line: str, recovered: list[str],
+           urgent_only: bool = False) -> tuple[str, list[digest_mod.DigestItem]]:
+    """Bản chữ Zalo + các mục thật sự nằm trong tin (refs chỉ gồm các mục này, đúng số thứ tự)."""
+    head = (URGENT_HEAD if urgent_only else "Bản tin") + f" {label}" + (" [chạy thử]" if shadow else "")
+    tail = [_one_line(r, 120) for r in recovered[:2]]
+    if hidden_console:
+        tail.append(f"Có {hidden_console} mục cần xem trên Console.")
+    if d.system_question:
+        tail.append("❓ " + _one_line(str(d.system_question.get("summary") or ""), 120))
+    tail.append(_one_line(coverage_line, 200))
+    if d.items:
+        tail.append(HINT)
+    budget = max(0, MAX_LINES - 1 - len(tail))
+    k = len(d.items) if len(d.items) <= min(MAX_ITEMS, budget) else max(0, min(MAX_ITEMS, budget - 1))
+
+    def build(k: int) -> str:
+        lines = [head]
+        if not d.items:
+            if not urgent_only:
+                lines.append(QUIET_DAY)
+        else:
+            lines += [_item_line(it) for it in d.items[:k]]
+            if k < len(d.items):
+                lines.append(f"…và {len(d.items) - k} mục nữa (xem trên Console).")
+        return display_mask("\n".join(lines + tail))
+
+    out = build(k)
+    while len(out) > MAX_CHARS and k > 0:
+        k -= 1
+        out = build(k)
+    return out[:MAX_CHARS], d.items[:k]
+
+
+async def _hidden_console(db: AsyncSession, org_id: uuid.UUID) -> int:
+    return int((await db.execute(text("""
+        SELECT count(*) FROM biz.alerts WHERE org_id = :o AND privacy = 'console_pin' AND status IN ('open', 'acknowledged')
+          AND delivery = ANY(:d) AND kind NOT IN ('system', 'legacy') AND digest_at IS NULL"""),
+        {"o": org_id, "d": list(digest_mod.SHOWN)})).scalar_one())
+
+
+async def _since(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> datetime:
+    last = (await db.execute(text("SELECT max(created_at) FROM ops.owner_outbox WHERE org_id = :o AND kind = 'digest'"), {"o": org_id})).scalar_one()
+    return last if last is not None and last < now else now - timedelta(hours=24)
+
+
+async def _channel(db: AsyncSession, org_id: uuid.UUID) -> str | None:
+    for ch in CHANNELS:
+        if (await owner_ids(db, org_id, ch)).enabled:
+            return ch
+    return None
+
+
+# ─── bản tin ─────────────────────────────────────────────────────────────────
+
+async def deliver_digest(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> str:
+    """Một lượt cho một tổ chức. Trả: sent | nothing | locked | no_channel | no_slot | already_sent. Bên gọi commit."""
+    from gh.gen import briefing
+
+    slot = briefing.due_slot(now)
+    if slot is None:
+        return "no_slot"
+    ch = await _channel(db, org_id)
+    if ch is None:
+        return "no_channel"
+    if await backup.is_locked(db, org_id):
+        return "locked"
+    cfg = await _intel(db, org_id)
+    last = (await db.execute(text("SELECT last_at FROM ops.job_watermarks WHERE org_id = :o AND job = :j"), {"o": org_id, "j": JOB})).scalar_one_or_none()
+    if last is not None and last >= slot.at:
+        return "already_sent"
+    off = bool(cfg.get("digest_off"))
+    d = await digest_mod.build(db, org_id, now, audience="chat", only_new=True)
+    if off:
+        d.items[:] = [it for it in d.items if it.delivery in digest_mod.TOP]
+        for i, it in enumerate(d.items, 1):
+            it.n = i
+        d.system_question = None
+        if not d.items:
+            return "nothing"
+    cov = await coverage.line(db, org_id, now)
+    rec = [] if off else await watchdog.recovered_lines(db, org_id, since=await _since(db, org_id, now))
+    hidden = 0 if off else await _hidden_console(db, org_id)
+    body, shown = render(d, label=slot.label, shadow=cfg.get("mode") == "shadow", hidden_console=hidden, coverage_line=cov,
+                         recovered=rec, urgent_only=off)
+    shown_d = digest_mod.Digest(d.org_id, d.at, shown, d.counts, d.system_question)
+    ok = await reports.enqueue(db, org_id, ch, kind="digest", severity="important", text_=body, dedupe_key=f"digest:{slot.at.isoformat()}",
+                               refs=shown_d.refs(), now=now)
+    if not ok:
+        return "locked" if await backup.is_locked(db, org_id) else "no_channel"
+    await db.execute(text("""INSERT INTO ops.job_watermarks (org_id, job, last_at, updated_at) VALUES (:o, :j, :s, now())
+                             ON CONFLICT (org_id, job) DO UPDATE SET last_at = EXCLUDED.last_at, updated_at = now()"""),
+                     {"o": org_id, "j": JOB, "s": slot.at})
+    await digest_mod.mark_sent(db, org_id, shown_d, now)
+    return "sent"
+
+
+# ─── 🔴 tức thì ──────────────────────────────────────────────────────────────
+
+async def push_alerts(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> int:
+    """Xếp tin 🔴 cho tín hiệu `push_now` chưa gửi (mỗi lần đẩy/leo thang một khoá riêng). Chỉ `chat_ok`; khoá trợ lý ⇒ 0. Trả số tin đã xếp."""
+    ch = await _channel(db, org_id)
+    if ch is None or await backup.is_locked(db, org_id):
+        return 0
+    rows = (await db.execute(text("""
+        SELECT id, title, summary, suggested_action, evidence, pushed_at FROM biz.alerts
+        WHERE org_id = :o AND delivery = 'push_now' AND privacy = 'chat_ok' AND pushed_at IS NOT NULL
+          AND status IN ('open', 'acknowledged') AND kind NOT IN ('system', 'legacy') ORDER BY pushed_at LIMIT 10"""), {"o": org_id})).all()
+    n = 0
+    for r in rows:
+        why = _one_line(r.summary or "Vụ này cần Sếp xem ngay.", 160)
+        quote = digest_mod._quote(r.evidence)
+        lines = [f"🔴 {_one_line(r.title, 110)}" + (f" «{_one_line(quote, QUOTE_MAX)}»" if quote else ""), f"Vì sao: {why}",
+                 f"Đề xuất: {_one_line(r.suggested_action or 'Sếp xem chi tiết trên Console.', 160)}", "Trả lời: «1 ok» · «1 sai» · «1 không cần báo»"]
+        refs = [{"n": 1, "signal_id": str(r.id), "ask_id": None, "ask_code": None, "cluster_ids": None}]
+        if await reports.enqueue(db, org_id, ch, kind="alert", severity="urgent", text_=display_mask("\n".join(lines)),
+                                 dedupe_key=f"signal:{r.id}:{int(r.pushed_at.timestamp())}", refs=refs, now=now, bypass_quiet=True):
+            n += 1
+    return n
+
+
+# ─── việc nền ────────────────────────────────────────────────────────────────
+
+async def intel_delivery(ctx: dict[str, Any]) -> dict[str, int]:
+    """Mỗi phút: 🔴 tức thì + bản tin tới khung. `flush` (worker) gửi đi. Một tổ chức lỗi không dừng tổ chức khác."""
+    from gh.db import sessionmaker
+    from gh.refinery import clock
+
+    now = clock.now()
+    sm = sessionmaker()
+    out = {"alerts": 0, "digests": 0, "errors": 0}
+    async with sm() as db:
+        orgs = (await db.execute(text("SELECT id FROM core.organizations"))).scalars().all()
+    for org in orgs:
+        try:
+            async with sm() as db:
+                out["alerts"] += await push_alerts(db, org, now)
+                if await deliver_digest(db, org, now) == "sent":
+                    out["digests"] += 1
+                await db.commit()
+        except Exception:                                       # noqa: BLE001
+            log.exception("intel_delivery lỗi ở một tổ chức")
+            out["errors"] += 1
+    return out
+
+
+JOBS: list[CronJob] = [(intel_delivery, {"minute": set(range(60))})]
+__all__ = ["JOBS", "deliver_digest", "display_mask", "push_alerts", "render", "set_digest"]
