@@ -728,6 +728,13 @@ class SeenStore:
         for k in keys:
             self._d[f"{org_id}:{k}"] = t + SEEN_TTL_S
 
+    async def fail(self, org_id: uuid.UUID, key: str) -> int:
+        """Đếm số lần MỘT tin làm lượt quét lỗi (để tin hỏng không bị quét lại vô hạn). Trả số lần sau khi cộng."""
+        k = f"fail:{org_id}:{key}"
+        self._f = getattr(self, "_f", {})
+        self._f[k] = self._f.get(k, 0) + 1
+        return self._f[k]
+
 
 class RedisSeen(SeenStore):
     def __init__(self, redis: Any) -> None:
@@ -747,8 +754,15 @@ class RedisSeen(SeenStore):
                 pipe.set(f"intel:fraud:seen:{org_id}:{k}", b"1", ex=SEEN_TTL_S)
             await pipe.execute()
 
+    async def fail(self, org_id: uuid.UUID, key: str) -> int:
+        k = f"intel:fraud:fail:{org_id}:{key}"
+        n = int(await self.r.incr(k))
+        await self.r.expire(k, SEEN_TTL_S)
+        return n
+
 
 MEMORY_SEEN = SeenStore()
+MAX_FAILS = 3                             # tin làm lỗi ≥ 3 lượt ⇒ đánh dấu "đã quét" (bỏ), không quét lại vô hạn
 
 
 def _seen_key(row: _Row) -> str:
@@ -1160,9 +1174,11 @@ async def _d2_allowed(db: AsyncSession, org_id: uuid.UUID, thread_key: str, now:
 # ─── chạy ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 async def run(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, call: Any = None, limit: int = SCAN_LIMIT,
-              max_d2: int = MAX_D2_PER_RUN, seen: SeenStore | None = None, budget_s: float = RUN_BUDGET_S) -> list[signals.Signal]:
+              max_d2: int = MAX_D2_PER_RUN, seen: SeenStore | None = None, budget_s: float = RUN_BUDGET_S,
+              processed: list[str] | None = None) -> list[signals.Signal]:
     """Quét một tổ chức. Luật cứng ⇒ ghi NGAY rồi (d2); không luật cứng ⇒ (d2) TRƯỚC rồi ghi (không 🔴 nào bị hạ sau khi đẩy).
-    Bên gọi commit. Một tin lỗi không dừng tin khác (lỗi chỉ ghi mã tin + tên lỗi)."""
+    Bên gọi commit. KHÔNG tự đánh dấu "đã quét" (dấu chỉ có SAU commit: `run_and_commit`; `processed` nhận các khoá đã xử lý xong).
+    Một tin lỗi không dừng tin khác (lỗi chỉ ghi mã tin + tên lỗi); tin lỗi ≥ `MAX_FAILS` lượt mới bị bỏ."""
     from gh.biz.mem import entities, profile, profile_read
 
     seen = seen or MEMORY_SEEN
@@ -1182,11 +1198,12 @@ async def run(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, call: Any =
         if time.monotonic() - started > budget_s:
             log.warning("fraud: hết trần thời gian lượt quét, còn %d tin để lượt sau", len(rows) - rows.index(row))
             break
-        await seen.mark(org_id, [_seen_key(row)])                  # đánh dấu TRƯỚC: tin hỏng không bị quét lại mãi
         try:
             async with db.begin_nested():
                 p = await prepare(db, org_id, row, key_rel=key_rel, owner_people=owner_people, owner_entity=owner_ent)
             if p is None:
+                if processed is not None:
+                    processed.append(_seen_key(row))
                 continue
             want_d2 = d2_left > 0 and await _d2_allowed(db, org_id, p.upsert.thread_key or "", now)
             if p.decision.hard:
@@ -1201,8 +1218,24 @@ async def run(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, call: Any =
                     p = await run_d2(db, org_id, p, call)
                 sig = await _write(db, org_id, p, now)
             out.append(sig)
+            if processed is not None:
+                processed.append(_seen_key(row))
         except Exception as e:  # noqa: BLE001 — một tin hỏng chỉ bỏ qua tin đó (mã tin + tên lỗi, không nội dung), lô vẫn chạy tiếp
-            log.warning("fraud: bỏ qua tin %s: %s", row.event_id, type(e).__name__)
+            n_fail = await seen.fail(org_id, _seen_key(row))
+            log.warning("fraud: bỏ qua tin %s (lần lỗi %d): %s", row.event_id, n_fail, type(e).__name__)
+            if n_fail >= MAX_FAILS:
+                await seen.mark(org_id, [_seen_key(row)])          # tin hỏng: thôi quét lại (không phụ thuộc commit)
+    return out
+
+
+async def run_and_commit(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, seen: SeenStore | None = None, **kw: Any) -> list[signals.Signal]:
+    """`run` → COMMIT → mới đánh dấu "đã quét". Commit lỗi / bị huỷ / worker chết giữa chừng ⇒ không có dấu nào ⇒ lượt sau quét lại
+    (không bao giờ có tin lừa đảo bị đánh dấu "đã quét" trong khi tín hiệu của nó đã rollback)."""
+    seen = seen or MEMORY_SEEN
+    keys: list[str] = []
+    out = await run(db, org_id, now, seen=seen, processed=keys, **kw)
+    await db.commit()
+    await seen.mark(org_id, keys)
     return out
 
 
@@ -1223,8 +1256,7 @@ async def intel_fraud(ctx: dict[str, Any]) -> dict[str, int]:
         call = router_caller(router, org, purpose=budget.PURPOSE[budget.KIND_SAFETY], tier="strong") if router is not None else None
         try:
             async with sm() as db:
-                res["signals"] += len(await asyncio.wait_for(run(db, org, now, call=call, seen=seen), timeout=240))
-                await db.commit()
+                res["signals"] += len(await asyncio.wait_for(run_and_commit(db, org, now, call=call, seen=seen), timeout=240))
         except Exception as e:  # noqa: BLE001 — một tổ chức lỗi không dừng tổ chức khác; không ghi nội dung tin
             log.error("intel_fraud lỗi ở một tổ chức: %s", type(e).__name__)
             res["errors"] += 1

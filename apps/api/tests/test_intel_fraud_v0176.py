@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -253,7 +254,7 @@ async def test_fraud_flood_401_then_scam_caught_first_run(db: AsyncSession) -> N
         await w.raw(f"hàng về chưa anh {i}", sender=ok, group="kh", at=w.now - timedelta(minutes=5))
     await w.raw("Anh Minh ơi ứng giúp em 5 triệu, chiều em trả liền ạ", sender=siid, group="kh")
     store = fraud.SeenStore()
-    out = await fraud.run(db, w.org, w.now, seen=store)
+    out = await fraud.run_and_commit(db, w.org, w.now, seen=store)
     assert len(out) == 1 and out[0].level == "red"
     calls: list[str] = []
     real = fraud.prepare
@@ -267,8 +268,8 @@ async def test_fraud_flood_401_then_scam_caught_first_run(db: AsyncSession) -> N
     mp = _pt.MonkeyPatch()
     mp.setattr(fraud, "prepare", spy)
     try:
-        await fraud.run(db, w.org, w.now + timedelta(minutes=1), seen=store)
-        await fraud.run(db, w.org, w.now + timedelta(minutes=2), seen=store)
+        await fraud.run_and_commit(db, w.org, w.now + timedelta(minutes=1), seen=store)
+        await fraud.run_and_commit(db, w.org, w.now + timedelta(minutes=2), seen=store)
     finally:
         mp.undo()
     # chỉ những tin CHƯA quét ở lượt đầu (402 tin trong cửa sổ + tin lịch sử của helper − 400 đã quét), mỗi tin một lần
@@ -371,3 +372,61 @@ async def test_fraud_hijacked_account_later_account_not_recorded(db: AsyncSessio
                                      AND object_value ->> 'digest' = :d"""), {"e": ent, "d": d})).scalar_one() == 0
     assert (await db.execute(text("SELECT count(*) FROM biz.payment_identifiers WHERE org_id = :o AND digest = :d"),
                              {"o": w.org, "d": d})).scalar_one() == 0
+
+
+async def test_fraud_watermark_only_after_commit_rollback_rescans(db: AsyncSession) -> None:
+    """Review rv3 (MAJOR): dấu "đã quét" chỉ có SAU commit. Lượt bị rollback (commit lỗi / wait_for huỷ / worker chết) ⇒ lượt sau vẫn bắt."""
+    w = await world(db, owner_name="Minh")
+    await w.group("kh", "Khách sỉ", 150)
+    _p, iid = await w.person("Tuấn Kiệt", group="kh", joined_days_ago=2)
+    await w.raw("Anh Minh ơi ứng giúp em 5 triệu, chiều em trả liền ạ", sender=iid, group="kh")
+    await db.commit()
+    seen = fraud.SeenStore()
+    assert len(await fraud.run(db, w.org, w.now, seen=seen)) == 1
+    await db.rollback()
+    out2 = await fraud.run(db, w.org, w.now + timedelta(minutes=1), seen=seen)
+    await db.commit()
+    assert len(out2) == 1 and out2[0].level == "red"
+    # run_and_commit: commit lỗi ⇒ không đánh dấu
+    _q, iid2 = await w.person("Người lạ 2", group="kh", joined_days_ago=1)
+    await w.raw("Anh Minh ơi cho em mượn 3 triệu, chuyển giúp em gấp", sender=iid2, group="kh")
+    await db.commit()
+    seen2 = fraud.SeenStore()
+    real_commit = db.commit
+
+    async def boom() -> None:
+        raise ConnectionError("mất kết nối lúc commit")
+
+    db.commit = boom  # type: ignore[method-assign]
+    try:
+        await fraud.run_and_commit(db, w.org, w.now + timedelta(minutes=2), seen=seen2)
+        raise AssertionError("commit phải lỗi")
+    except ConnectionError:
+        pass
+    finally:
+        db.commit = real_commit  # type: ignore[method-assign]
+    await db.rollback()
+    again = await fraud.run_and_commit(db, w.org, w.now + timedelta(minutes=3), seen=seen2)
+    assert len(again) == 1 and again[0].level == "red"
+
+
+async def test_fraud_poison_message_dropped_after_max_fails(db: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tin làm hỏng bộ xử lý: thử tối đa `MAX_FAILS` lượt rồi bỏ (không quét lại vô hạn); tin khác vẫn chạy."""
+    w = await world(db)
+    await w.group("g", "Nhóm nhỏ", 20)
+    _p, iid = await w.person("Người lạ", group="g", joined_days_ago=1)
+    bad = await w.raw("TIN_HONG cho em mượn 2 triệu", sender=iid, group="g", at=w.now - timedelta(minutes=3))
+    real = fraud.prepare
+    tries: list[int] = []
+
+    async def flaky(db_: AsyncSession, org: object, row: object, **kw: object) -> object:
+        if row.event_id == bad[0]:  # type: ignore[attr-defined]
+            tries.append(1)
+            raise ValueError("parser hỏng")
+        return await real(db_, org, row, **kw)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(fraud, "prepare", flaky)
+    seen = fraud.SeenStore()
+    for k in range(fraud.MAX_FAILS + 2):
+        await fraud.run_and_commit(db, w.org, w.now + timedelta(minutes=k), seen=seen)
+    assert len(tries) == fraud.MAX_FAILS
