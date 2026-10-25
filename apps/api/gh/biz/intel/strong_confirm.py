@@ -184,7 +184,7 @@ def _locked(action: str, until: datetime) -> NeedConsole:
 # ─── luật ───────────────────────────────────────────────────────────────────
 
 async def require(db: Any, org_id: uuid.UUID, action: str, *, via: str = "chat", pin_verified: bool = False,
-                  now: datetime | None = None) -> Allowed | NeedConsole | NeedCode:
+                  now: datetime | None = None, notify_chat: str | None = None) -> Allowed | NeedConsole | NeedCode:
     """Quyết hành động nhạy cảm có làm được không. `via='chat'` (mặc định — kênh quản trị) hoặc `'console'` (+ `pin_verified`).
     Fail-closed: hành động lạ, không có DB, hay lỗi trạng thái ⇒ `NeedConsole`."""
     if db is None or action not in ACTIONS:
@@ -197,7 +197,7 @@ async def require(db: Any, org_id: uuid.UUID, action: str, *, via: str = "chat",
             await _record(db, org_id, "strong_confirm.console", target=action)
             if action != OUTBOUND:
                 await backup.notify(db, org_id, f"Sếp vừa {LABEL[action]} trên Console (đã nhập mã PIN). Nếu không phải Sếp: «khoá trợ lý» ngay.",
-                                    kind="security", dedupe_key=f"sc.console:{uuid.uuid4().hex}")
+                                    kind="security", dedupe_key=f"sc.console:{uuid.uuid4().hex}", to_chat=notify_chat)
         return Allowed(action, "console_pin")
     if via != "chat":
         return NeedConsole(action)

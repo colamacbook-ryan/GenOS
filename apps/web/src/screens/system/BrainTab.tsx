@@ -13,6 +13,7 @@ import { BackgroundSourcesCard } from './BackgroundSourcesCard';
 import { GenMemoryCard } from './GenMemoryCard';
 import { GenCoachCard } from './GenCoachCard';
 import { AiBudgetCard } from './AiBudgetCard';
+import { IntelCard } from './IntelCard';
 import { useCan } from '../../lib/permissions';
 import { StandardModeStrip } from '../../defaults/StandardModeStrip';
 import { AI_SOURCE_PATH } from '../../setup/steps';
@@ -225,6 +226,7 @@ export function BrainTabBody() {
 
       <div className="sys-grid2">
         <TriageCard />
+        <IntelCard />
       </div>
     </div>
   );

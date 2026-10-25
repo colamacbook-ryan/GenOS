@@ -221,6 +221,8 @@ export const ACTION_LABEL: Record<string, string> = {
   'intel.payment_identifier.verify': 'Sếp xác minh số tài khoản nhận tiền',
   'intel.promises.skip': 'Bỏ qua một lời hứa không dựng được tín hiệu',
   'intel.generic.skip': 'Bỏ qua một mục không dựng được tín hiệu',
+  'intel.settings.changed': 'Đổi cách chạy tình báo (chạy thật / chạy thử, nhịp báo)',
+  'backup.rebind_notice_failed': 'Không báo được tới kênh phụ cũ khi đổi kênh phụ',
   'assistant.lock': 'Khoá trợ lý',
   'assistant.unlock': 'Mở khoá trợ lý',
   'assistant.lock_denied': 'Chặn một lệnh khoá/mở khoá trợ lý không hợp lệ',

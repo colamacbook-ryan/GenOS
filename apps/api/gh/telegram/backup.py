@@ -65,10 +65,23 @@ async def _telegram_enabled(db: AsyncSession, org_id: uuid.UUID) -> bool:
     return bool((await db.execute(text("SELECT enabled FROM ops.notify_channels WHERE org_id = :o"), {"o": org_id})).scalar_one_or_none())
 
 
-async def notify(db: AsyncSession, org_id: uuid.UUID, text_: str, *, kind: str = "incident", dedupe_key: str | None = None) -> bool:
-    """Xếp một tin báo vào kênh phụ (không commit). Trả True nếu thêm dòng mới (trùng `dedupe_key` ⇒ False)."""
+TO_PREFIX = "to:"
+
+
+def _target_of(dedupe_key: Any) -> str | None:
+    """Dòng có đích riêng (`to:<chat>:<khoá>`): chat lưu theo hàng lúc xếp hàng — flush gửi tới đó, không theo cấu hình mới."""
+    parts = str(dedupe_key or "").split(":", 2)
+    return parts[1] if len(parts) == 3 and parts[0] == "to" and parts[1] else None
+
+
+async def notify(db: AsyncSession, org_id: uuid.UUID, text_: str, *, kind: str = "incident", dedupe_key: str | None = None,
+                 to_chat: str | None = None) -> bool:
+    """Xếp một tin báo vào kênh phụ (không commit). Trả True nếu thêm dòng mới (trùng `dedupe_key` ⇒ False).
+    `to_chat`: gửi tới đúng chat này (vd chat CŨ khi Sếp đổi kênh phụ) thay vì chat đang cấu hình lúc flush."""
     if kind not in KINDS:
         raise ValueError(f"kind lạ: {kind}")
+    if to_chat:
+        dedupe_key = f"{TO_PREFIX}{to_chat}:{dedupe_key or uuid.uuid4().hex}"
     channel = "telegram" if await _telegram_enabled(db, org_id) else "console"
     row = (await db.execute(text("""
         INSERT INTO ops.backup_outbox (org_id, channel, kind, dedupe_key, text, sent_at)
@@ -76,6 +89,27 @@ async def notify(db: AsyncSession, org_id: uuid.UUID, text_: str, *, kind: str =
         ON CONFLICT (org_id, channel, dedupe_key) DO NOTHING RETURNING id"""),
         {"o": org_id, "c": channel, "k": kind, "d": dedupe_key, "t": text_[:TEXT_MAX]})).scalar_one_or_none()
     return row is not None
+
+
+async def warn_old_channel(db: AsyncSession, org_id: uuid.UUID, client: tg.TelegramClient, what: str, *, paired_only: bool = False) -> bool:
+    """Báo NGAY (đồng bộ, trước khi đổi) tới kênh phụ CŨ đang hiệu lực rằng Sếp sắp {what} — kẻ có phiên PIN không đổi kênh trong im lặng.
+    Gửi bằng token + chat đang cấu hình (chat riêng đã ghép nếu có). Không có kênh cũ ⇒ False (không có ai để báo); `paired_only`: chỉ báo chat riêng đã ghép (ghép/gỡ ghép), không báo chat báo động chung. Gửi lỗi ⇒ ghi Nhật ký
+    `backup.rebind_notice_failed` (không có token/chat), không chặn việc đổi. Không commit."""
+    cfg = await tsvc.get_config(db, org_id)
+    if cfg is None or not cfg.enabled:
+        return False
+    owner_chat = (await db.execute(text("SELECT owner_chat_id FROM ops.notify_channels WHERE org_id = :o"), {"o": org_id})).scalar_one_or_none()
+    if paired_only and not owner_chat:
+        return False
+    body = f"Cảnh báo kênh phụ: Sếp vừa {what} trên Console (đã nhập mã PIN). Nếu không phải Sếp: nhắn «khoá trợ lý» ngay."
+    try:
+        await client.send_message(tsvc.decrypt_token(cfg), str(owner_chat or cfg.chat_id), body)
+    except Exception as e:  # noqa: BLE001 — không để lỗi gửi chặn thao tác của Sếp; ghi lại để biết kênh cũ không nhận được
+        log.warning("kênh phụ: báo kênh cũ lỗi (%s)", type(e).__name__)
+        await actionlog.record(db, org_id=org_id, actor_type="system", actor_id=ACTOR, action="backup.rebind_notice_failed", result="failed",
+                               detail={"error": type(e).__name__})
+        return False
+    return True
 
 
 def hash_code(org_id: uuid.UUID, code: str) -> str:
@@ -172,7 +206,7 @@ async def flush(sm: Any, *, transport: Any = None) -> dict[str, int]:
             if mine is None:
                 await db.rollback()
                 continue
-            chat = cred[1]
+            chat = _target_of(r.dedupe_key) or cred[1]
             if r.kind == "code":
                 # Mã CHỈ tới chat riêng của Sếp đã ghép lúc tạo mã; không còn khớp (đổi/gỡ ghép) ⇒ huỷ, không bao giờ rơi về chat chung.
                 target = str(r.dedupe_key or "").split(":")[1] if str(r.dedupe_key or "").count(":") >= 2 else ""
@@ -244,10 +278,16 @@ async def is_locked(db: AsyncSession, org_id: uuid.UUID) -> bool:
                                   {"o": org_id})).scalar_one_or_none())
 
 
+async def _serialize(db: AsyncSession, org_id: uuid.UUID) -> None:
+    """Cùng khoá với `strong_confirm._serialize`: khoá/mở khoá trợ lý và mọi đếm/khoá xác nhận mạnh của một tổ chức chạy tuần tự."""
+    await db.execute(text("SELECT pg_advisory_xact_lock(hashtext('strong_confirm:' || :o))"), {"o": str(org_id)})
+
+
 async def lock_assistant(db: AsyncSession, org_id: uuid.UUID, *, via: str, user_id: uuid.UUID | None = None, tg_user_id: str | None = None,
                          chat_id: str | None = None, channel: str | None = None, sender_external_id: str | None = None,
                          sender_alt_id: str | None = None) -> LockResult:
-    """Khoá trợ lý ngay. Không commit (bên gọi commit — kể cả khi bị từ chối, để dòng `assistant.lock_denied` được giữ)."""
+    """Khoá trợ lý ngay (xoá luôn «mở khoá hôm nay»). Không commit (bên gọi commit — kể cả khi bị từ chối, để dòng `assistant.lock_denied` được giữ)."""
+    await _serialize(db, org_id)
     why = await _authorize(db, org_id, via, user_id=user_id, tg_user_id=tg_user_id, chat_id=chat_id, channel=channel,
                            sender_external_id=sender_external_id, sender_alt_id=sender_alt_id)
     if why is not None:
@@ -259,7 +299,7 @@ async def lock_assistant(db: AsyncSession, org_id: uuid.UUID, *, via: str, user_
     from gh.owner_channel import inbound as owner_inbound
 
     await db.execute(text("""UPDATE core.organizations SET settings = settings || jsonb_build_object('intel',
-                               COALESCE(settings->'intel', '{}'::jsonb) || jsonb_build_object('assistant_locked_at', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+                               (COALESCE(settings->'intel', '{}'::jsonb) - 'outbound_unlocked_on') || jsonb_build_object('assistant_locked_at', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
                                                                                               'assistant_locked_via', CAST(:v AS text)))
                              WHERE id = :o"""), {"o": org_id, "v": via})
     await db.execute(text("UPDATE ops.owner_channels SET enabled = false WHERE org_id = :o"), {"o": org_id})
@@ -274,15 +314,19 @@ async def lock_assistant(db: AsyncSession, org_id: uuid.UUID, *, via: str, user_
 
 
 async def unlock_assistant(db: AsyncSession, org_id: uuid.UUID, *, user_id: uuid.UUID | None) -> LockResult:
-    """Chỉ Owner Console. Xoá cờ khoá; KHÔNG bật lại kênh quản trị/hỗ trợ nhóm."""
+    """Chỉ Owner Console. Xoá cờ khoá; KHÔNG bật lại kênh quản trị/hỗ trợ nhóm. Kiểm-và-xoá trong cùng khoá tổ chức;
+    đã mở khoá ⇒ `LockResult(True, already=True)` (không ghi thêm)."""
+    await _serialize(db, org_id)
     why = await _authorize(db, org_id, "console", user_id=user_id, tg_user_id=None, chat_id=None, channel=None,
                            sender_external_id=None, sender_alt_id=None)
     if why is not None:
         await actionlog.record(db, org_id=org_id, actor_type="system", actor_id=ACTOR, action="assistant.lock_denied", result="blocked",
                                detail={"via": "console", "code": why, "op": "unlock"})
         return LockResult(False, why)
+    if not await is_locked(db, org_id):
+        return LockResult(True, already=True)
     await db.execute(text("""UPDATE core.organizations SET settings = jsonb_set(settings, '{intel}',
                                (COALESCE(settings->'intel', '{}'::jsonb) - 'assistant_locked_at') - 'assistant_locked_via')
                              WHERE id = :o"""), {"o": org_id})
-    await actionlog.record(db, org_id=org_id, actor_type="user", actor_id=str(user_id), action="assistant.unlock")
+    await actionlog.record(db, org_id=org_id, actor_type="user", actor_id=f"user:{user_id}", action="assistant.unlock")
     return LockResult(True)

@@ -8,6 +8,8 @@ import { parseVnd, priceStr } from './moneyInput';
 import { toast } from '../../lib/toast';
 import { CardError, InlineError, Panel, SkeletonLines } from '../common';
 import { useAiCost, useSetAiBudget, useSetModelPrice } from './queries';
+import { useIntelBudget, useSetIntelBudget } from './intelQueries';
+import { INTEL_CAPS } from './intelModel';
 
 const PRICE_SOURCE_LABEL: Record<string, string> = {
   owner: 'Sếp nhập',
@@ -85,6 +87,8 @@ function AiBudgetBody({ data }: { data: AiCost }) {
         Gen báo chuông, không tự dừng.
       </p>
       {setBudget.isError ? <InlineError detail={errorDetail(setBudget.error)}>{errorText(setBudget.error)}</InlineError> : null}
+
+      <IntelCaps canManage={canManage} />
 
       {models.length === 0 ? (
         <p className="muted-note">Chưa có model nào.</p>
@@ -198,5 +202,53 @@ function PriceRow({ m, canManage }: { m: AiCostModel; canManage: boolean }) {
         </td>
       ) : null}
     </tr>
+  );
+}
+
+/**
+ * v0.1.76 (T11, CNS-100): trần tình báo `settings.ai_cost.intel_*` — lượt gọi model mỗi ngày và ngân sách ₫ (0 = không gọi model tính tiền
+ * theo token). Ô để trống = về mặc định. Chỉ khoá đã sửa mới gửi; đổi cần mã PIN (hộp PIN tự mở). Vượt trần an toàn chỉ báo, không cắt.
+ */
+function IntelCaps({ canManage }: { canManage: boolean }) {
+  const q = useIntelBudget(true);
+  const save = useSetIntelBudget();
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  useEffect(() => setDraft({}), [q.data]);
+  if (q.isPending) return <SkeletonLines rows={2} padding="0" />;
+  if (q.isError) return <CardError error={q.error} onRetry={() => void q.refetch()} retrying={q.isFetching} />;
+  const { values, defaults } = q.data;
+  const shown = (k: string) => draft[k] ?? String(values[k] ?? defaults[k] ?? 0);
+  const parsed = (k: string) => parseVnd(shown(k));
+  const dirty = INTEL_CAPS.filter((c) => draft[c.key] !== undefined);
+  const bad = dirty.some((c) => parsed(c.key) === undefined);
+  const submit = () => {
+    const body: Record<string, number | null> = {};
+    for (const c of dirty) body[c.key] = parsed(c.key) ?? null;
+    save.mutate(body, { onSuccess: () => toast('Đã lưu trần tình báo') });
+  };
+  return (
+    <div className="ai-budget__intel" data-testid="intel-caps">
+      <strong className="intel-row__title">Trần tình báo</strong>
+      <div className="ai-budget__intel-grid">
+        {INTEL_CAPS.map((c) => (
+          <TextField
+            key={c.key}
+            label={`${c.label} (${c.unit})`}
+            inputMode="numeric"
+            value={shown(c.key)}
+            disabled={!canManage}
+            hint={`Mặc định ${fmtInt(defaults[c.key] ?? 0)}`}
+            error={draft[c.key] !== undefined && parsed(c.key) === undefined ? 'Nhập số nguyên không âm' : null}
+            onChange={(e) => setDraft((d) => ({ ...d, [c.key]: e.target.value }))}
+          />
+        ))}
+      </div>
+      {canManage ? (
+        <Button variant="secondary" size="sm" disabled={dirty.length === 0 || bad} loading={save.isPending} onClick={submit}>
+          Lưu trần tình báo (cần mã PIN)
+        </Button>
+      ) : null}
+      {save.isError ? <InlineError detail={errorDetail(save.error)}>{errorText(save.error)}</InlineError> : null}
+    </div>
   );
 }
