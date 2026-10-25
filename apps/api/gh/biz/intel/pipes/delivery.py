@@ -20,6 +20,7 @@ import re
 import secrets
 import unicodedata
 import uuid
+from collections.abc import Iterable
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -77,11 +78,19 @@ def display_mask(s: str) -> str:
     return _LONGNUM.sub(sub, s)
 
 
-def mask_reply(s: str) -> str:
-    """Che hiển thị câu trả lời gửi Sếp, TRỪ khung nguyên văn đề xuất GỬI TIN («——— nội dung ———» … «——— hết ———»): Sếp phải thấy đủ từng
-    ký tự tin sẽ gửi (luật «OK riêng từng tin, nêu rõ nội dung»); phần còn lại vẫn che."""
-    parts = _FRAME.split(s)
-    return "".join(p if i % 2 else display_mask(p) for i, p in enumerate(parts))
+def _defang_frame(s: str) -> str:
+    return s.replace("——— nội dung ———", "—— nội dung ——").replace("——— hết ———", "—— hết ——")
+
+
+def mask_reply(s: str, trusted_frames: Iterable[str] = ()) -> str:
+    """Che hiển thị câu trả lời gửi Sếp. CHỈ các khung nguyên văn do CODE dựng từ đề xuất đã lưu (`trusted_frames`, khớp CHÍNH XÁC từng ký tự)
+    được giữ nguyên — Sếp phải thấy đủ từng ký tự tin sẽ gửi. Mọi đoạn khác (kể cả chữ tự do của model hay người ngoài chèn, kể cả khi in giả dấu
+    khung «——— nội dung ———») đều bị che; dấu khung trong đoạn không tin cậy bị đổi dạng để không giả được khung."""
+    frames = sorted({f for f in trusted_frames if f}, key=len, reverse=True)
+    if not frames:
+        return display_mask(_defang_frame(s))
+    parts = re.split("(" + "|".join(re.escape(f) for f in frames) + ")", s)
+    return "".join(p if i % 2 else display_mask(_defang_frame(p)) for i, p in enumerate(parts))
 
 
 def new_code() -> str:

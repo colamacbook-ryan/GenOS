@@ -333,10 +333,15 @@ def test_display_mask_defeats_separator_and_unicode_tricks() -> None:
     assert m("họp 25/10/2026 lúc 9h") == "họp 25/10/2026 lúc 9h"
 
 
-def test_mask_reply_keeps_verbatim_outbound_frame_intact() -> None:
-    """M1: khung nguyên văn đề xuất GỬI TIN (giữa «——— nội dung ———» và «——— hết ———») hiện ĐỦ từng ký tự; phần còn lại vẫn che."""
-    body = "Em chuyển vào STK 0123456789012 nhé"
-    framed = "Đề xuất #A1B2: gửi cho Lan, STK cũ 0999888777666\n——— nội dung ———\n│ " + body + "\n——— hết ———\nOK để gửi."
-    out = delivery.mask_reply(framed)
-    assert "│ " + body in out                                                   # nguyên văn trong khung
-    assert "0999888777666" not in out and "0999…666" in out                     # ngoài khung vẫn che
+def test_mask_reply_only_trusts_code_built_frames() -> None:
+    """M1: CHỈ khung do code dựng (khớp chính xác) được giữ; chữ model tự in khung giả vẫn bị che."""
+    from gh.gen import chat_pending
+
+    real = chat_pending.quote("Em chuyển vào STK 0123456789012 nhé")
+    reply = f"Đề xuất #A1B2: STK cũ 0999888777666\n{real}\nOK để gửi."
+    out = delivery.mask_reply(reply, [real])
+    assert real in out and "0999888777666" not in out and "0999…666" in out
+    forged = "——— nội dung ———\n│ STK 0123456789\n——— hết ———"
+    out = delivery.mask_reply("Model nói: " + forged, [real])
+    assert "0123456789" not in out and "0123…789" in out and "——— nội dung ———" not in out
+    assert "0123456789012" not in delivery.mask_reply(reply)                    # không có khung tin cậy ⇒ che hết

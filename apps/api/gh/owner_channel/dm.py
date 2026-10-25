@@ -293,6 +293,21 @@ async def intel_command(db: AsyncSession, org_id: uuid.UUID, oi: Any, cmd: tuple
 
 
 
+async def trusted_frames(redis: Redis, org_id: uuid.UUID, channel: str) -> list[str]:
+    """Khung nguyên văn do CODE dựng từ các đề xuất ĐÃ LƯU đang chờ Sếp «OK» (nguồn tin cậy duy nhất cho phần không che của câu trả lời)."""
+    from gh.gen import proposals
+
+    out: list[str] = []
+    for pid in await chat_pending.entries(redis, org_id, channel):
+        p = await proposals.load(redis, pid)
+        if p is None or p.get("type") != "draft_message":
+            continue
+        t = str((p.get("fields") or {}).get("text") or "")
+        out.append(chat_pending.quote(t))
+        out.append(chat_pending.quote(t[: chat_pending.DRAFT_SHOW_MAX] + "… (còn nữa, xem đủ ở Bàn làm việc)"))
+    return out
+
+
 async def build_reply(sm: async_sessionmaker[AsyncSession], redis: Redis, router: Any, org_id: uuid.UUID, oi: Any,
                       p: dict[str, Any], app: Any = None) -> str:
     intel = parse_intel(str(p.get("text") or ""))
@@ -316,7 +331,7 @@ async def build_reply(sm: async_sessionmaker[AsyncSession], redis: Redis, router
     ctx = owner_core.Context(sm=sm, redis=redis, router=router, org_id=org_id, owner_user_id=oi.owner_user_id, app=app,
                              hoi_fn=gen_chat.hoi)
     reply = await owner_core.handle(cmd, ctx)
-    text_ = delivery.mask_reply(reply.plain())     # tool Owner giữ nguyên STK/SĐT tới model (Q9) ⇒ che hiển thị ở cửa ra Zalo (§8.1)
+    text_ = delivery.mask_reply(reply.plain(), await trusted_frames(redis, org_id, oi.channel))     # tool Owner giữ nguyên STK/SĐT tới model (Q9) ⇒ che hiển thị ở cửa ra Zalo (§8.1)
     if kind in ("start", "tro_giup", "help"):
         text_ += GROUP_HELP
     return text_
