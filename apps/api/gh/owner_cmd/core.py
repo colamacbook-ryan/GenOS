@@ -731,15 +731,37 @@ PROFILE_CONSOLE = ("Việc này cần mở Console (mã PIN) mới ghi được:
                    "không đổi qua chat để phòng khi tài khoản bị chiếm.")
 
 
+#: Chữ thường gặp trong lừa đảo / tiền bạc ngoài từ vựng của Hồ sơ (review bảo mật T2) — chỉ để quyết định đường ghi (Console).
+_EXTRA_DEFENSIVE = re.compile(r"\b(?:gian lan|chuyen tien|rut tien|mat tien|vay tien|nap tien|canh bao)\b")
+#: "báo" kèm khung giờ ("sau 9h", "22h trở đi", "từ 10 giờ", "ban đêm"…) ở mục cách báo / nhịp sống ⇒ Console (có thể nuốt cảnh báo).
+_BAO = re.compile(r"\bbao\b")
+_TIME_WINDOW = re.compile(r"\b\d{1,2}\s*(?:h|g|gio)\b|\b(?:ban dem|buoi toi|dem khuya|nua dem|sang som|truoc|sau|tu|den)\s+\d{1,2}\b")
+
+
+def normalize_note(raw: str) -> str:
+    """Xoá HẲN ký tự định dạng vô hình (Unicode Cf: ZWSP, WORD JOINER, BOM…) rồi chuẩn hoá NFKC (chữ full-width…) TRƯỚC khi so khớp."""
+    import unicodedata
+
+    s = "".join(ch for ch in raw if unicodedata.category(ch) != "Cf")
+    return unicodedata.normalize("NFC", unicodedata.normalize("NFKC", s))
+
+
 def profile_note(raw: str) -> str | None:
-    """Phần nội dung của «ghi nhớ: anh …» (giữ nguyên dấu, bỏ tiền tố), hoặc None nếu không đúng dạng."""
+    """Phần nội dung của «ghi nhớ: anh …» (giữ nguyên dấu, bỏ tiền tố), hoặc None nếu không đúng dạng. Sau đại từ là TÊN RIÊNG viết
+    hoa («anh Tuấn …») ⇒ nói về người khác, không phải Sếp ⇒ None (đi đường đề xuất Ghi nhớ, chờ «OK»)."""
     from gh.textnorm import strip_accents
 
     folded = strip_accents(raw)
     if len(folded) != len(raw):         # bỏ dấu đổi độ dài (ký tự tổ hợp) ⇒ không cắt theo vị trí được; đi đường thường
         return None
     m = _PROFILE_NOTE.match(folded.lower())
-    return raw[m.start(1):].strip() if m else None
+    if not m:
+        return None
+    content = raw[m.start(1):].strip()
+    words = content.split()
+    if len(words) > 1 and words[1][:1].isupper():
+        return None
+    return content
 
 
 def _profile_section(content: str) -> str | None:
@@ -749,7 +771,9 @@ def _profile_section(content: str) -> str | None:
     section = found[0][0] if found else None
     # sở thích báo / giờ yên lặng đi mục `report_prefs` dù câu còn khớp mục khác (để luật phòng thủ + báo kênh phụ áp được)
     asks_quiet = profile.is_quiet_hours("report_prefs", content)
-    if section not in ("rhythm", "report_prefs") and (asks_quiet or profile._NEGATIVE_REPORT_RE.search(profile._fold(content))):
+    f = profile._fold(content)
+    timed = bool(_BAO.search(f) and _TIME_WINDOW.search(f))
+    if section not in ("rhythm", "report_prefs") and (asks_quiet or timed or profile._NEGATIVE_REPORT_RE.search(f)):
         section = "report_prefs"
     return section
 
@@ -760,8 +784,9 @@ def profile_defensive(section: str, content: str) -> bool:
     from gh.biz.mem import profile
 
     f = profile._fold(content)
+    timed = section in ("report_prefs", "rhythm") and bool(_BAO.search(f) and _TIME_WINDOW.search(f))
     return (profile.is_defensive(section, content) or bool(profile._DEFENSIVE_RE.search(f))
-            or bool(profile._NEGATIVE_REPORT_RE.search(f)))
+            or bool(profile._NEGATIVE_REPORT_RE.search(f)) or bool(_EXTRA_DEFENSIVE.search(f)) or timed)
 
 
 async def profile_add(cmd: OwnerCommand, ctx: Context, owner: service.CurrentUser, content: str) -> Reply | None:
@@ -865,7 +890,7 @@ async def handle(cmd: OwnerCommand, ctx: Context, *, overrides: Mapping[str, Han
         if cmd.kind == "nhap":
             return await nhap(cmd, ctx)
         if cmd.kind == "hoi" and cmd.via in PROFILE_VIAS:
-            note = profile_note(cmd.text)
+            note = profile_note(normalize_note(cmd.text))
             if note is not None:
                 done = await profile_add(cmd, ctx, owner, note)
                 if done is not None:
