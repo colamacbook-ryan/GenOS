@@ -6,6 +6,7 @@ evidence, level_input), `ops.asks.summary`, Nhật ký (`ops.action_log`), `mem.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import timedelta
 
 import pytest
@@ -13,11 +14,13 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gh import suspicious
+from gh.biz.intel import signals
 from gh.biz.intel.detectors import fraud
 from gh.biz.mem import facts
 from tests.fraud_helpers import ACCT_NEW, ACCT_OLD, OTP, fake_call, world
 
 CARD = "4111 1111 1111 1111"
+ACCT_LEGIT = "1122334455"
 
 
 async def _dump_tables(db: AsyncSession) -> str:
@@ -30,6 +33,18 @@ async def _dump_tables(db: AsyncSession) -> str:
         for r in (await db.execute(text(q))).all():
             parts.extend(str(x) for x in r)
     return "\n".join(parts)
+
+
+def _cpu_ms(fn: object, *args: object) -> float:
+    """Thời gian CPU của tiến trình (ms), lấy lượt nhanh nhất trong 3 — đo chi phí thuật toán, không đo máy CI đang bận (load cao)."""
+    import time
+
+    best = float("inf")
+    for _ in range(3):
+        t0 = time.process_time()
+        fn(*args)  # type: ignore[operator]
+        best = min(best, time.process_time() - t0)
+    return best * 1000
 
 
 def _no_secret(blob: str) -> None:
@@ -100,18 +115,63 @@ async def test_fraud_security_idor_org_isolation(db: AsyncSession) -> None:
 
 @pytest.mark.parametrize("unit", [". a", ", ,", ", ,  ;", " ,x", "! b ", " - 1", ";;;;a "])
 def test_fraud_security_redos_long_punctuation_under_100ms(unit: str) -> None:
-    import time
-
     prefixes = ("", "đổi ", "điền ", "điền rồi ", "ứng ", "stk ", "chuyển vào ")   # "điền " + ", ," từng treo > 60 giây với bộ đệm cũ
     worst = 0.0
     for pre in prefixes:
         body = pre + unit * (10_000 // len(unit))
-        t0 = time.perf_counter()
-        fraud.scan(body)
-        worst = max(worst, time.perf_counter() - t0)
-    assert worst < 0.1, f"quét chậm {worst * 1000:.0f} ms"
-    assert len(body) >= 10_000 > fraud.MAX_SCAN_CHARS
+        worst = max(worst, _cpu_ms(fraud.scan, body))
+    assert worst < 100, f"quét chậm {worst:.0f} ms"
+    assert len(body) >= 10_000 > fraud.WINDOW_CHARS
 
 
 def test_fraud_security_filler_is_unambiguous() -> None:
     assert fraud._W == r"(?:[\s,.:;!?-]+[^\s,.:;!?-]+)"
+
+
+@pytest.mark.parametrize("pad", ["a " * 7500, ". " * 7500, "Chào cả nhà, " * 1200])
+def test_fraud_security_padding_cannot_push_scam_out_of_scan(pad: str) -> None:
+    """Tấn công đệm: 15000 ký tự vô hại phía trước, nội dung lừa đảo phía sau ⇒ vẫn bắt (quét cửa sổ chồng lấn phủ kín ≤ 20000)."""
+    pad = pad[:15_000]
+    for scam, attr in (("Em lỡ nhập mã OTP rồi anh ơi", "cred"), (f"Anh chuyển vào tài khoản mới {ACCT_NEW} MB giúp em", "accounts"),
+                       ("Cho em mượn 3 triệu, chuyển giúp em gấp", "ask_money")):
+        body = pad + scam
+        sc = fraud.scan(body)
+        assert getattr(sc, attr), f"bỏ sót sau đệm: {attr}"
+        dt = _cpu_ms(fraud.scan, body)
+        assert dt < 100 * len(body) / 10_000, f"quét chậm {dt:.0f} ms"
+        if attr == "accounts":
+            a, b = sc.accounts[0].span
+            assert re.sub(r"\D", "", body[a:b]) == ACCT_NEW                   # span quy về vị trí trong chữ gốc
+    w = fraud._windows(30_000)
+    assert w[0][0] == 0 and w[-1][1] == fraud.MAX_SCAN_CHARS
+    assert all(w[i][1] - w[i + 1][0] >= fraud.WINDOW_OVERLAP for i in range(len(w) - 1))
+
+
+async def test_fraud_security_second_account_in_flagged_message_never_known(db: AsyncSession) -> None:
+    """Tấn công đầu độc bằng STK THỨ HAI trong tin đã bị gắn cờ: 8 ngày sau dùng STK thứ hai vẫn bị bắt."""
+    w = await world(db)
+    await w.group("kh", "Khách", 120)
+    p, iid = await w.person("Đối tác Bình", ptype="partner", group="kh", history_days_ago=60)
+    await db.execute(text("""INSERT INTO biz.payment_identifiers (org_id, person_id, digest, last3, source, created_at)
+                             VALUES (:o, :p, :d, '455', 'chat', :ca)"""), {"o": w.org, "p": p, "d": facts.payment_digest(ACCT_LEGIT), "ca": w.now - timedelta(days=90)})
+    t0 = w.now - timedelta(days=8)
+    await w.raw(f"Bên em đổi STK sang {ACCT_NEW} MB, hoặc {ACCT_OLD} VCB cũng được, anh chuyển vào số này", sender=iid, group="kh", at=t0)
+    first = await fraud.run(db, w.org, t0 + timedelta(minutes=1))
+    assert len(first) == 1 and first[0].level == "red"
+    n = (await db.execute(text("SELECT count(*) FROM biz.payment_identifiers WHERE org_id = :o"), {"o": w.org})).scalar_one()
+    assert n == 1                                                                 # tin đã kích luật: không STK nào vào lịch sử
+    await signals.resolve_by_owner(db, w.org, first[0].id, now=t0 + timedelta(hours=1), actor_id="t")   # vụ cũ đã đóng
+    await w.raw(f"Anh chuyển vào STK {ACCT_OLD} VCB giúp em nhé", sender=iid, group="kh")
+    out = await fraud.run(db, w.org, w.now)
+    assert len(out) == 1 and out[0].level == "red" and out[0].id != first[0].id      # STK thứ hai ≠ STK đã biết ⇒ đổi STK, vẫn bị bắt
+    li = (await db.execute(text("SELECT level_input FROM biz.alerts WHERE id = :i"), {"i": out[0].id})).scalar_one()
+    assert "stk_khac_lich_su+money_request" in li["hard_rule_hit"]
+    # cả khi dòng lịch sử đã có sẵn từ trước (ghi trước khi bị gắn cờ): STK nằm trong `fraud_digests` của tín hiệu W5 ⇒ không bao giờ "đã biết"
+    from gh.biz.intel.detectors.fraud import Who, _history
+
+    ent = (await db.execute(text("SELECT id FROM mem.entities WHERE person_id = :p"), {"p": p})).scalar_one()
+    await db.execute(text("""INSERT INTO biz.payment_identifiers (org_id, person_id, digest, last3, source, created_at)
+                             VALUES (:o, :p, :d, '321', 'chat', :ca) ON CONFLICT (org_id, digest) DO UPDATE SET created_at = EXCLUDED.created_at"""),
+                     {"o": w.org, "p": p, "d": facts.payment_digest(ACCT_OLD), "ca": w.now - timedelta(days=30)})
+    known, _v, _a = await _history(db, w.org, Who(ref="x", person_id=p, entity_id=ent), w.now + timedelta(days=1))
+    assert facts.payment_digest(ACCT_OLD) not in known

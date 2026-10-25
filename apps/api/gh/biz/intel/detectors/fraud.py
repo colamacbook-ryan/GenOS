@@ -34,6 +34,7 @@ log, Nhật ký hay thân lỗi. Log chỉ có mã tin + mã luật + tên lỗi
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import re
 import uuid
@@ -63,7 +64,9 @@ STRANGER_DAYS = 7.0
 BIG_ORDER_VND = 5_000_000
 BIG_ORDER_QTY = 10
 SOURCE_FIELDS = ("body", "ocr", "transcript")
-MAX_SCAN_CHARS = 4000                     # trần độ dài chữ mỗi lần quét (chặn xả tin dài làm chậm worker)
+WINDOW_CHARS = 4000                       # cỡ MỘT cửa sổ quét (regex chạy trên cửa sổ, không trên cả tin dài)
+WINDOW_OVERLAP = 400                      # chồng lấn giữa hai cửa sổ: mẫu nằm vắt qua ranh giới vẫn trọn trong một cửa sổ
+MAX_SCAN_CHARS = 20_000                   # trần TỔNG = ngưỡng của prefilter (L2); đệm phía trước không đẩy được nội dung ra khỏi vùng quét
 
 # Mã luật cứng (đi vào `SignalIn.hard_rule_hit`; `levels` coi mọi mã là luật cứng: exist 1,00, (d2) không hạ).
 H_CRED = "credentials_entered"
@@ -80,13 +83,26 @@ class FraudError(ValueError):
 
 # ─── chuẩn hoá: bản bỏ dấu + ánh xạ vị trí về chữ gốc ───────────────────────────────────────────────────────────────────
 
+@functools.lru_cache(maxsize=4096)
+def _fold_char(ch: str) -> str:
+    return strip_accents(ch).lower()
+
+
 def _fold_map(s: str) -> tuple[str, list[int]]:
+    table = {ord(ch): _fold_char(ch) for ch in set(s)}
+    if all(len(v) == 1 for v in table.values()):        # trường hợp thường (tiếng Việt): bỏ dấu giữ nguyên độ dài ⇒ một lần translate
+        return s.translate(table), list(range(len(s)))
     out: list[str] = []
     idx: list[int] = []
     for i, ch in enumerate(s):
-        for c in strip_accents(ch).lower():
-            out.append(c)
+        f = _fold_char(ch)
+        if len(f) == 1:
+            out.append(f)
             idx.append(i)
+        else:
+            for c in f:
+                out.append(c)
+                idx.append(i)
     return "".join(out), idx
 
 
@@ -225,13 +241,6 @@ def _span(m: re.Match[str] | None, idx: list[int], n: int) -> tuple[int, int] | 
     return _orig_span(idx, n, m.start(), m.end()) if m else None
 
 
-def _amount(fold: str) -> int | None:
-    from gh.refinery import prefilter
-
-    vals = prefilter.parse_amounts(fold)
-    return max(vals) if vals else None
-
-
 def _addressed_surfaces(t: str) -> list[str]:
     """Cách gọi "chị Lan", "anh Minh Tuấn" (tên viết hoa sau từ xưng hô) — chỉ để tra `mem.aliases` chính xác."""
     out: list[str] = []
@@ -247,11 +256,50 @@ def _addressed_surfaces(t: str) -> list[str]:
     return out
 
 
+def _windows(n: int) -> list[tuple[int, int]]:
+    """Cửa sổ `WINDOW_CHARS` chồng lấn `WINDOW_OVERLAP`, phủ KÍN [0, min(n, MAX_SCAN_CHARS)) — đầu, giữa, cuối đều được quét."""
+    end = min(n, MAX_SCAN_CHARS)
+    if end <= WINDOW_CHARS:
+        return [(0, end)]
+    step = WINDOW_CHARS - WINDOW_OVERLAP
+    out = [(a, min(a + WINDOW_CHARS, end)) for a in range(0, end - WINDOW_OVERLAP, step)]
+    if out[-1][1] < end:
+        out.append((max(0, end - WINDOW_CHARS), end))
+    return out
+
+
+def _shift(sp: tuple[int, int] | None, off: int) -> tuple[int, int] | None:
+    return None if sp is None else (sp[0] + off, sp[1] + off)
+
+
 def scan(body: str | None, source_field: str = "body") -> Scan:
-    """Luật W5 trên MỘT đoạn chữ (tin / OCR / transcript). Hàm thuần."""
+    """Luật W5 trên MỘT đoạn chữ (tin / OCR / transcript), quét theo cửa sổ chồng lấn rồi gộp (span theo vị trí trong chữ gốc). Hàm thuần."""
     if source_field not in SOURCE_FIELDS:
         raise FraudError("trường nguồn không hợp lệ")
-    t = (body or "")[:MAX_SCAN_CHARS]
+    t = body or ""
+    if not t.strip():
+        return Scan(source_field)
+    parts = [(a, _scan_one(t[a:b], source_field)) for a, b in _windows(len(t))]
+    if len(parts) == 1:
+        return parts[0][1]
+
+    def first(name: str) -> tuple[int, int] | None:
+        return next((_shift(getattr(sc, name), a) for a, sc in parts if getattr(sc, name)), None)
+
+    accts: dict[str, Account] = {}
+    for a, sc in parts:
+        for ac in sc.accounts:
+            k = ac.digest or ac.last3
+            accts.setdefault(k, replace(ac, span=(ac.span[0] + a, ac.span[1] + a)))
+    cred_part = next(((a, sc) for a, sc in parts if sc.cred), None)
+    amounts = [sc.amount_vnd for _a, sc in parts if sc.amount_vnd]
+    return Scan(source_field, tuple(accts.values()), first("change"), first("pay_ask"), first("ask_money"), first("goods"), first("unc"),
+                first("cred"), cred_part[1].cred_first_person if cred_part else True, first("takeover"), first("phishing"),
+                next((sc.domain for _a, sc in parts if sc.domain), None), max(amounts) if amounts else None,
+                tuple(dict.fromkeys(x for _a, sc in parts for x in sc.addressed))[:3])
+
+
+def _scan_one(t: str, source_field: str) -> Scan:
     if not t.strip():
         return Scan(source_field)
     from gh.refinery import prefilter
@@ -274,7 +322,7 @@ def scan(body: str | None, source_field: str = "body") -> Scan:
     pay = _PAY_VERB.search(fold) if accts else None
     ask = _ASK_MONEY.search(fold)
     order, nodep, rush = _ORDER.search(fold), _NO_DEPOSIT.search(fold), _RUSH.search(fold)
-    amount = _amount(fold)
+    amount = next((int(c.details["vnd"]) for c in cands if c.flag == "amount" and c.details.get("vnd")), None)   # số tiền do luật (a) L2 đọc
     qty = max((int(q.group(1)) for q in _QTY.finditer(fold)), default=0)
     big = (amount or 0) >= BIG_ORDER_VND or qty >= BIG_ORDER_QTY or _BIG_WORDS.search(fold) is not None
     goods = _span(order, idx, n) if (order and nodep and rush and big) else None
@@ -643,13 +691,15 @@ async def _history(db: AsyncSession, org_id: uuid.UUID, owner_of: Who, at: datet
                    OR (f.status = 'asserted' AND f.valid_from <= :old
                        AND NOT EXISTS (SELECT 1 FROM biz.alerts a WHERE a.org_id = :o AND a.kind = 'rui_ro_lua_dao'
                                          AND (a.facts ->> 'payee_digest' = f.object_value ->> 'digest'
+                                              OR coalesce(a.facts -> 'fraud_digests', '[]'::jsonb) ? (f.object_value ->> 'digest')
                                               OR (f.source_raw_event_id IS NOT NULL AND a.raw_event_ids @> ARRAY[f.source_raw_event_id])))))"""),
                                  {"o": org_id, "e": owner_of.entity_id, "old": old})).scalars().all()
         known.update(x for x in rows if x)
     pi = (await db.execute(text("""
         SELECT p.digest, p.verified_at IS NOT NULL AS v,
                (p.created_at <= :old AND NOT EXISTS (SELECT 1 FROM biz.alerts a WHERE a.org_id = :o AND a.kind = 'rui_ro_lua_dao'
-                                                     AND a.facts ->> 'payee_digest' = p.digest)) AS aged
+                                                     AND (a.facts ->> 'payee_digest' = p.digest
+                                                          OR coalesce(a.facts -> 'fraud_digests', '[]'::jsonb) ? p.digest))) AS aged
         FROM biz.payment_identifiers p
         WHERE p.org_id = :o AND ((CAST(:p AS uuid) IS NOT NULL AND p.person_id = :p) OR (CAST(:e AS uuid) IS NOT NULL AND p.entity_id = :e))"""),
                           {"o": org_id, "p": owner_of.person_id, "e": owner_of.entity_id, "old": old})).all()
@@ -781,7 +831,8 @@ async def prepare(db: AsyncSession, org_id: uuid.UUID, row: _Row, *, key_rel: fr
     for a in sc.accounts:
         if a.digest in verified:
             continue
-        await _record_identifier(db, org_id, a, sender=sender)
+        if not (d and d.rules):
+            await _record_identifier(db, org_id, a, sender=sender)      # tin đã kích luật: KHÔNG STK nào của tin vào lịch sử
         if imp is None and not stranger:
             dispute = await _record_fact(db, org_id, a, subject=sender, row=row, suspicious_msg=bool(d and d.rules)) or dispute
     if dispute is not None and (d is None or d.record_only or "stk_change" not in d.rules):
@@ -793,9 +844,15 @@ async def prepare(db: AsyncSession, org_id: uuid.UUID, row: _Row, *, key_rel: fr
     title, harm, action = wording(d, place, imp.name if imp else None)
     li = signal_input(d, msg_at=row.occurred_at, thread=thread).model_copy(update={"harm_what": harm, "subject_entity_id": stk_owner.entity_id})
     ck = await _effective_case(db, org_id, _case_key(d, row, ctx))
-    fx: dict[str, Any] = {"fraud_rules": list(d.rules), "fraud_case": _case_key(d, row, ctx), "fraud_v": VERSION}
+    fx: dict[str, Any] = {"fraud_rules": list(d.rules), "fraud_case": _case_key(d, row, ctx), "fraud_v": VERSION,
+                          "fraud_digests": sorted({a.digest for a in sc.accounts if a.digest})}   # MỌI STK của tin (băm) ⇒ không bao giờ thành lịch sử
+    prev = (await db.execute(text("""SELECT facts -> 'fraud_digests' FROM biz.alerts WHERE org_id = :o AND kind = 'rui_ro_lua_dao'
+                                     AND case_key = :ck AND status IN ('open', 'acknowledged') LIMIT 1"""), {"o": org_id, "ck": ck})).scalar_one_or_none()
+    if isinstance(prev, list):                     # `upsert` ghi đè khoá `facts` ⇒ cộng dồn STK của mọi tin trong vụ
+        fx["fraud_digests"] = sorted(set(fx["fraud_digests"]) | {x for x in prev if isinstance(x, str)})
     if d.payee and d.payee.digest:
-        fx |= {"payee_digest": d.payee.digest, "payee_last3": d.payee.last3, "payee_bank": d.payee.bank}
+        fx |= {"payee_digest": d.payee.digest, "payee_last3": d.payee.last3, "payee_bank": d.payee.bank,
+               "payee_person_id": str(sender.person_id) if sender.person_id else None}
     if d.domain:
         fx["domain"] = d.domain
     if dispute:
@@ -950,17 +1007,47 @@ async def verify_identifier(db: AsyncSession, org_id: uuid.UUID, identifier_id: 
     """Sếp xác minh một STK (§8.1: "thêm/xác minh STK trong payment_identifiers" là việc hạ phòng thủ ⇒ chỉ Console + PIN, hoặc
     `strong_confirm` cho qua). Ghi `verified_by/at`, Nhật ký (không số), và ĐÓNG các tín hiệu W5 đang mở về đúng STK đó bằng đường
     "Sếp đã xử lý" (một trong hai đường xuống ⚪ của nguyên lý fail-high). Sai tổ chức ⇒ `FraudError` (không lộ có/không)."""
+    await _require_strong(db, org_id, pin_verified)
+    r = (await db.execute(text("""SELECT id, digest FROM biz.payment_identifiers WHERE id = :i AND org_id = :o FOR UPDATE"""),
+                          {"i": identifier_id, "o": org_id})).one_or_none()
+    if r is None:
+        raise FraudError("không tìm thấy số tài khoản")
+    return await _verify_row(db, org_id, r.id, r.digest, user_id=user_id, now=now)
+
+
+async def verify_signal_payee(db: AsyncSession, org_id: uuid.UUID, signal_id: uuid.UUID, *, user_id: uuid.UUID, pin_verified: bool,
+                              now: datetime) -> list[signals.Signal]:
+    """Sếp xác minh STK của MỘT tín hiệu W5 (STK trong tin đã kích luật KHÔNG được ghi vào lịch sử khi quét, nên Console xác minh theo
+    tín hiệu): tạo dòng `payment_identifiers` đã xác minh từ băm + 3 số cuối lưu ở tín hiệu rồi đóng các tín hiệu cùng STK."""
+    await _require_strong(db, org_id, pin_verified)
+    a = (await db.execute(text("""SELECT facts FROM biz.alerts WHERE id = :i AND org_id = :o AND kind = 'rui_ro_lua_dao'"""),
+                          {"i": signal_id, "o": org_id})).scalar_one_or_none()
+    fx = a if isinstance(a, dict) else {}
+    digest = fx.get("payee_digest")
+    if not isinstance(digest, str) or len(digest) != 64:
+        raise FraudError("không tìm thấy số tài khoản")
+    pp = fx.get("payee_person_id")
+    rid = (await db.execute(text("""
+        INSERT INTO biz.payment_identifiers (org_id, person_id, digest, last3, bank, source)
+        VALUES (:o, CAST(:p AS uuid), :d, :l, :b, 'owner')
+        ON CONFLICT (org_id, digest) DO UPDATE SET digest = EXCLUDED.digest RETURNING id"""),
+        {"o": org_id, "p": pp if isinstance(pp, str) else None, "d": digest, "l": fx.get("payee_last3"), "b": fx.get("payee_bank")})).scalar_one()
+    return await _verify_row(db, org_id, rid, digest, user_id=user_id, now=now)
+
+
+async def _require_strong(db: AsyncSession, org_id: uuid.UUID, pin_verified: bool) -> None:
     from gh.biz.intel import strong_confirm
-    from gh.chassis import actionlog
 
     if not pin_verified:
         ok = await strong_confirm.require(db, org_id, "payment_identifier_verify")
         if not isinstance(ok, strong_confirm.Allowed):
             raise FraudError("Việc này cần mở Console (mã PIN)")
-    r = (await db.execute(text("""SELECT id, digest FROM biz.payment_identifiers WHERE id = :i AND org_id = :o FOR UPDATE"""),
-                          {"i": identifier_id, "o": org_id})).one_or_none()
-    if r is None:
-        raise FraudError("không tìm thấy số tài khoản")
+
+
+async def _verify_row(db: AsyncSession, org_id: uuid.UUID, rid: uuid.UUID, digest: str, *, user_id: uuid.UUID, now: datetime) -> list[signals.Signal]:
+    from gh.chassis import actionlog
+
+    r = SimpleNamespace(id=rid, digest=digest)
     await db.execute(text("""UPDATE biz.payment_identifiers SET verified_by = :u, verified_at = :t, source = CASE WHEN source = 'chat' THEN 'owner' ELSE source END
                              WHERE id = :i AND org_id = :o"""), {"u": user_id, "t": now, "i": r.id, "o": org_id})
     await actionlog.record(db, org_id=org_id, actor_type="user", actor_id=str(user_id), action="intel.payment_identifier.verify",

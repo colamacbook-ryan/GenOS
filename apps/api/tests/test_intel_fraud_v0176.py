@@ -121,16 +121,18 @@ async def test_fraud_verified_account_is_safe_and_verify_resolves_case(db: Async
     await w.raw(f"Bên em đổi số tài khoản sang {ACCT_NEW} MB, anh chuyển vào số này nhé", sender=ncc_iid, group="kh")
     out = await fraud.run(db, w.org, w.now)
     assert len(out) == 1 and out[0].level == "red"
-    pid = (await db.execute(text("SELECT id FROM biz.payment_identifiers WHERE org_id = :o AND digest = :d"),
-                            {"o": w.org, "d": facts.payment_digest(ACCT_NEW)})).scalar_one()
+    assert (await db.execute(text("SELECT count(*) FROM biz.payment_identifiers WHERE org_id = :o AND digest = :d"),
+                             {"o": w.org, "d": facts.payment_digest(ACCT_NEW)})).scalar_one() == 0      # tin đã kích luật: không vào lịch sử
     uid = (await db.execute(text("INSERT INTO core.users (org_id, email, display_name, password_hash) VALUES (:o, 'sep@x.vn', 'Sếp', 'x') RETURNING id"),
                             {"o": w.org})).scalar_one()
     try:
-        await fraud.verify_identifier(db, w.org, pid, user_id=uid, pin_verified=False, now=w.now)
+        await fraud.verify_signal_payee(db, w.org, out[0].id, user_id=uid, pin_verified=False, now=w.now)
         raise AssertionError("phải cần Console + PIN")
     except fraud.FraudError as e:
         assert "PIN" in str(e)
-    closed = await fraud.verify_identifier(db, w.org, pid, user_id=uid, pin_verified=True, now=w.now)
+    closed = await fraud.verify_signal_payee(db, w.org, out[0].id, user_id=uid, pin_verified=True, now=w.now)
+    pid = (await db.execute(text("SELECT id FROM biz.payment_identifiers WHERE org_id = :o AND digest = :d AND verified_at IS NOT NULL"),
+                            {"o": w.org, "d": facts.payment_digest(ACCT_NEW)})).scalar_one()
     assert [c.id for c in closed] == [out[0].id] and closed[0].level == "grey" and closed[0].status == "resolved"
     await db.execute(text("UPDATE biz.payment_identifiers SET person_id = :p WHERE id = :i"), {"p": ncc, "i": pid})
     await w.raw(f"Anh chuyển vào số {ACCT_NEW} MB giúp em nha", sender=ncc_iid, group="kh")
@@ -208,8 +210,8 @@ async def test_fraud_poisoning_impersonator_repeats_account_still_caught(db: Asy
 
     known, _v, _a = await _history(db, w.org, Who(ref="x", person_id=ncc, entity_id=ncc_ent), w.now + timedelta(days=30))
     assert new_d not in known
-    pi = (await db.execute(text("SELECT person_id FROM biz.payment_identifiers WHERE org_id = :o AND digest = :d"), {"o": w.org, "d": new_d})).scalar_one()
-    assert pi != ncc                                                              # gắn người gửi thật
+    pi = (await db.execute(text("SELECT person_id FROM biz.payment_identifiers WHERE org_id = :o AND digest = :d"), {"o": w.org, "d": new_d})).scalars().all()
+    assert ncc not in pi                                                          # không bao giờ gắn với người bị mạo danh
 
 
 async def test_fraud_poisoning_fresh_account_not_known_and_suspicious_never_asserted(db: AsyncSession) -> None:
