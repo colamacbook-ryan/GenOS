@@ -42,6 +42,7 @@ _TAT = ("tat", "tắt", "off")
 
 USAGE_SUPPORT = ("Cách dùng: /ho_tro (xem) · /ho_tro <mã nhóm> bat [số giờ] · /ho_tro <mã nhóm> tat. "
                  "Mã nhóm xem ở /nhom.")
+LOCKED = "Trợ lý đang bị khoá nên em không bật hỗ trợ nhóm được. Sếp mở khoá trên Console (mã PIN) trước."
 NO_Q = "Em không thấy câu hỏi mã đó (có thể đã trả lời hoặc hết hạn). Gõ /nhom để xem lại."
 
 
@@ -147,6 +148,8 @@ async def _ho_tro(db: AsyncSession, redis: Redis, org_id: uuid.UUID, channel: st
                         g.id, {"group_id": str(g.id)})
         await sync_listen_sets(db, redis, org_id)
         return f"Đã tắt chế độ hỗ trợ nhóm «{str(g.name)[:60]}»."
+    if await oin.assistant_locked(db, org_id):
+        return LOCKED
     hours: int | None = None
     if len(parts) >= 3:
         if not re.fullmatch(r"\d{1,4}", parts[2]) or not 1 <= int(parts[2]) <= MAX_HOURS:
@@ -166,6 +169,8 @@ async def _ho_tro(db: AsyncSession, redis: Redis, org_id: uuid.UUID, channel: st
 
 
 async def _xac_nhan(db: AsyncSession, redis: Redis, org_id: uuid.UUID, channel: str, code: str) -> str:
+    if await oin.assistant_locked(db, org_id):
+        return LOCKED
     q = await questions.open_by_code(db, org_id, code, kind="support_confirm")
     if q is None or q.subject_id is None:
         return NO_Q

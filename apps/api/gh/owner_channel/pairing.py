@@ -56,6 +56,9 @@ async def start_pairing(db: AsyncSession, redis: Redis, org_id: uuid.UUID, chann
     Không commit."""
     if channel not in CHANNELS:
         raise ApiError(404, "CHANNEL_NOT_FOUND", "Kênh này chưa hỗ trợ kênh quản trị")
+    if await oin.assistant_locked(db, org_id):
+        raise ApiError(423, "ASSISTANT_LOCKED", "Trợ lý đang bị khoá",
+                       "Mở khoá trợ lý trên Console (mã PIN) rồi mới ghép lại kênh quản trị.")
     sess = await active_session(db, org_id, channel)
     if sess is None:
         raise ApiError(409, "SESSION_NOT_ACTIVE", "Kênh chưa đăng nhập — nối tài khoản của bot trước rồi mới ghép")
@@ -106,6 +109,8 @@ async def try_pair(db: AsyncSession, redis: Redis, org_id: uuid.UUID, p: dict[st
         WHERE oc.org_id = :o AND oc.channel_type = :c"""), {"o": org_id, "c": ch})).one_or_none()
     if row is None or row.pair_code_hash is None:
         return False, "no_code"
+    if await oin.assistant_locked(db, org_id):
+        return False, "assistant_locked"   # v0.1.76: mã xin trước lúc khoá cũng không ghép được
     if not ext or len(code) != 6 or not code.isdigit():
         return False, "bad_input"
     if row.pair_expires_at is None or row.pair_expires_at <= now:

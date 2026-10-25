@@ -52,6 +52,13 @@ def _when(value: Any) -> datetime:
     return datetime.now(UTC)
 
 
+async def assistant_locked(db: AsyncSession, org_id: uuid.UUID) -> bool:
+    """v0.1.76 (T2): cờ "khoá trợ lý" (T10 `backup.lock_assistant`). Import muộn tránh vòng import với `gh.telegram.backup`."""
+    from gh.telegram import backup
+
+    return await backup.is_locked(db, org_id)
+
+
 async def _channel(db: AsyncSession, org_id: uuid.UUID, ch: str) -> Any:
     if ch not in CHANNELS:
         return None
@@ -77,6 +84,8 @@ async def handle_owner_dm(db: AsyncSession, redis: Redis, org_id: uuid.UUID, p: 
         return False
     if (now or datetime.now(UTC)) - _when(p.get("occurred_at")) > DM_MAX_AGE:
         return False
+    if await assistant_locked(db, org_id):
+        return False   # v0.1.76: trợ lý đang bị khoá ⇒ không nhận lệnh nào (kể cả khi kênh bị bật lại bằng đường khác)
     if not await redis.set(f"gh:owner:dm:{ch}:{msg_id}", str(int(time.time())), nx=True, ex=86400):
         return False
     stash(db, "dm", {"channel": ch, "session_id": str(oi.session_id), "external_msg_id": msg_id,
@@ -90,6 +99,8 @@ async def handle_owner_pair(db: AsyncSession, org_id: uuid.UUID, p: dict[str, An
     code = str(p.get("code") or "")
     if await _channel(db, org_id, ch) is None or len(code) != 6 or not code.isdigit() or p.get("forwarded"):
         return False
+    if await assistant_locked(db, org_id):
+        return False   # v0.1.76: đang khoá trợ lý ⇒ không ghép lại được (mở khoá trên Console + PIN trước)
     live = (await db.execute(text("""
         SELECT 1 FROM ops.owner_channels WHERE org_id = :o AND channel_type = :c AND pair_code_hash IS NOT NULL
           AND pair_expires_at > now()"""), {"o": org_id, "c": ch})).first()
