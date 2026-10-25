@@ -43,7 +43,9 @@ HINT = "Trả lời: «1 ok» · «2 sai» · «3 không cần báo» · «em s�
 QUIET_DAY = "Hôm nay yên, không có gì cần Sếp ra tay."
 URGENT_HEAD = "Điểm gấp trong ngày"
 MARK = {"red": "🔴", "amber": "🟠", "grey": "⚪"}
-_LONGNUM = re.compile(r"(?<!\d)(\d[\d .,/_\-]{6,22}\d)(?!\d)")
+# Dãy ≥ 8 chữ số, giữa các chữ số có thể có ≤ 3 ký tự BẤT KỲ không phải chữ/số/xuống dòng (kể cả `_`): `0912–345–678`, `(0912) 345 678`.
+_LONGNUM = re.compile(r"(?<!\d)(\d(?:(?:[^\w\n]|_){0,3}\d){7,24})(?!\d)")
+_PROTECT = re.compile(r"\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[./-]\d{1,2}[./-]\d{4}|(?<![\d:])\d{1,2}:\d{2}(?::\d{2})?(?![\d:])")
 _INVISIBLE = re.compile("[\u00ad\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]")
 _FRAME = re.compile(r"(——— nội dung ———\n.*?\n——— hết ———)", re.S)
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -62,6 +64,13 @@ def display_mask(s: str) -> str:
     +84) và (2) ngữ cảnh tiền sát bên (đ/VND/k/tr/triệu/tỷ sau số, hoặc «giá / số tiền / VND» trước số) mà trong 30 ký tự phía trước KHÔNG có
     từ khoá tài khoản (STK, tài khoản, thẻ, card…). Hoặc là ngày tháng."""
     s = _INVISIBLE.sub("", unicodedata.normalize("NFKC", s))      # chống lách: chữ số toàn chiều, NBSP/khoảng trắng lạ, ký tự vô hình
+    kept: list[str] = []
+
+    def protect(m: re.Match[str]) -> str:                        # ngày / giờ thật: đổi sang mốc toàn chữ cái (không dính chữ số) rồi trả lại
+        kept.append(m.group(0))
+        return "ZQ" + "".join(chr(97 + int(c)) for c in str(len(kept) - 1)) + "QZ"
+
+    s = _PROTECT.sub(protect, s)
 
     def sub(m: re.Match[str]) -> str:
         raw = m.group(1)
@@ -75,7 +84,8 @@ def display_mask(s: str) -> str:
                  and _ACCOUNT_KW.search(before) is None)
         return raw if money else f"{d[:4]}…{d[-3:]}"
 
-    return _LONGNUM.sub(sub, s)
+    out = _LONGNUM.sub(sub, s)
+    return re.sub(r"ZQ([a-j]+)QZ", lambda m: kept[int("".join(str(ord(c) - 97) for c in m.group(1)))], out) if kept else out
 
 
 def _defang_frame(s: str) -> str:
@@ -178,6 +188,15 @@ async def _hidden_console(db: AsyncSession, org_id: uuid.UUID) -> int:
         {"o": org_id, "d": [*digest_mod.SHOWN, "push_now"]})).scalar_one())
 
 
+async def _hidden_defensive(db: AsyncSession, org_id: uuid.UUID) -> bool:
+    """Có mục phòng thủ (lừa đảo/an toàn) `console_pin` chỉ được ĐẾM trong bản tin ⇒ vẫn kéo `bypass_quiet`."""
+    return bool((await db.execute(text("""
+        SELECT EXISTS (SELECT 1 FROM biz.alerts WHERE org_id = :o AND privacy = 'console_pin' AND status IN ('open', 'acknowledged')
+          AND delivery = ANY(:d) AND kind NOT IN ('system', 'legacy') AND digest_at IS NULL
+          AND (kind = ANY(:k) OR gate = ANY(:g) OR candidate = ANY(:g)))"""),
+        {"o": org_id, "d": [*digest_mod.SHOWN, "push_now"], "k": list(mutes.DEFENSIVE_KINDS), "g": list(levels.BYPASS_GATES)})).scalar_one())
+
+
 async def _since(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> datetime:
     last = (await db.execute(text("SELECT max(created_at) FROM ops.owner_outbox WHERE org_id = :o AND kind = 'digest'"), {"o": org_id})).scalar_one()
     return last if last is not None and last < now else now - timedelta(hours=24)
@@ -229,7 +248,8 @@ async def deliver_digest(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> 
     body, shown = render(d, label=slot.label, shadow=cfg.get("mode") == "shadow", hidden_console=hidden, coverage_line=cov,
                          recovered=rec, urgent_only=off, code=code)
     shown_d = digest_mod.Digest(d.org_id, d.at, shown, d.counts, d.system_question)
-    defensive = any((it.gate or it.candidate) in levels.BYPASS_GATES or it.kind in mutes.DEFENSIVE_KINDS for it in shown)
+    defensive = any((it.gate or it.candidate) in levels.BYPASS_GATES or it.kind in mutes.DEFENSIVE_KINDS for it in shown) or (
+        not off and hidden > 0 and await _hidden_defensive(db, org_id))
     ok = await reports.enqueue(db, org_id, ch, kind="digest", severity="important", text_=body, dedupe_key=f"digest:{slot.at.isoformat()}",
                                refs=[{**r, "code": code} for r in shown_d.refs()], now=now, bypass_quiet=defensive or None)
     if not ok:
@@ -261,7 +281,8 @@ async def push_alerts(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> int
         code = new_code()
         key = f"signal:{r.id}:{int(r.pushed_at.timestamp())}"
         if r.privacy != "chat_ok":              # 🔴 riêng tư (console_pin): tin 🔴 KHÔNG nội dung, không refs
-            body, refs = f"🔴 Có 1 vụ khẩn cần xem trên Console (mã PIN). #{code}", []
+            body = f"🔴 Có 1 vụ khẩn cần xem trên Console (mã PIN). #{code}"
+            refs = [{"n": 1, "signal_id": None, "ask_id": None, "ask_code": None, "cluster_ids": None, "code": code, "console_only": True}]
         else:
             why = _one_line(r.summary or "Vụ này cần Sếp xem ngay.", 160)
             quote = digest_mod._quote(r.evidence)

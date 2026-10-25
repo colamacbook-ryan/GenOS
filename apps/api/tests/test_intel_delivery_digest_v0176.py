@@ -168,7 +168,7 @@ async def test_push_alerts_sends_push_now_chat_ok_only_and_dedupes(db: Any) -> N
         assert n in (1, 2)
         assert await delivery.push_alerts(s, org, NOW) == 0                      # trùng khoá
         await s.commit()
-    rows = [r for r in await outbox(db, "alert") if r.refs]                      # tin có nội dung (chat_ok); console_pin ⇒ tin không refs (xem test M3)
+    rows = [r for r in await outbox(db, "alert") if r.refs and not r.refs[0].get("console_only")]                      # tin có nội dung (chat_ok); console_pin ⇒ tin không refs (xem test M3)
     assert len(rows) == 1 and rows[0].severity == "urgent" and "«abc»" in rows[0].text
     assert rows[0].refs[0]["signal_id"] == str(red.id)
     assert all(str(priv.id) not in str(r.refs) and str(amber.id) not in str(r.refs) for r in await outbox(db, "alert"))
@@ -345,3 +345,63 @@ def test_mask_reply_only_trusts_code_built_frames() -> None:
     out = delivery.mask_reply("Model nói: " + forged, [real])
     assert "0123456789" not in out and "0123…789" in out and "——— nội dung ———" not in out
     assert "0123456789012" not in delivery.mask_reply(reply)                    # không có khung tin cậy ⇒ che hết
+
+
+# ─── review T3 vòng 2 ────────────────────────────────────────────────────────
+
+def test_display_mask_any_nonword_separator_but_dates_and_times_survive() -> None:
+    m = delivery.display_mask
+    for leak in ("0912–345–678", "0912‐345‐678", "0912·345·678", "0912*345*678", "0912~345~678", "(0912) 345 678", "0912:345:678", "0912 - 345 - 678", "0912\\345\\678"):
+        out = m(leak)
+        assert "…" in out and "345" not in out.replace("0912…678", ""), (leak, out)
+    for keep in ("họp 25/10/2026 lúc 9h", "ngày 2026-10-23 17:35", "lúc 17:35:10 ngày 23.10.2026", "chuyển 25.000.000đ nhé"):
+        assert m(keep) == keep, keep
+    assert m("2026-10-23 17:35 STK 0123456789012") == "2026-10-23 17:35 STK 0123…012"
+
+
+async def test_push_alerts_newest_first_order(db: Any) -> None:
+    """Giữ ORDER BY pushed_at DESC: lượt đầu (LIMIT 10) lấy 10 tín hiệu MỚI nhất (đổi sang ASC thì đỏ)."""
+    org = await mk_org(db)
+    await _install(db, org)
+    ids = []
+    for i in range(12):
+        s = await _sig(db, org, "xung_dot_khieu_nai", f"c{i}", customer_of_owner=True, flags={"public": True})
+        ids.append(s.id)
+        await db.execute(text("UPDATE biz.alerts SET delivery = 'push_now', pushed_at = now() - make_interval(secs => :k) WHERE id = :i"), {"k": 100 - i, "i": s.id})
+    await db.commit()
+    await bot_world(db, org)
+    async with SM()() as s:
+        assert await delivery.push_alerts(s, org, NOW) == 10
+        await s.commit()
+    sent = {r["signal_id"] for row in await outbox(db, "alert") for r in row.refs}
+    assert sent == {str(i) for i in ids[2:]} and str(ids[0]) not in sent and str(ids[1]) not in sent
+
+
+async def test_console_pin_push_alert_has_console_only_ref(db: Any) -> None:
+    org = await mk_org(db)
+    await _install(db, org)
+    s = await _sig(db, org, "xung_dot_khieu_nai", "cp", privacy="console_pin", customer_of_owner=True, flags={"public": True})
+    await db.execute(text("UPDATE biz.alerts SET delivery = 'push_now', pushed_at = now() WHERE id = :i"), {"i": s.id})
+    await db.commit()
+    await bot_world(db, org)
+    async with SM()() as sess:
+        assert await delivery.push_alerts(sess, org, NOW) == 1
+        await sess.commit()
+    [row] = await outbox(db, "alert")
+    [ref] = row.refs
+    assert ref["console_only"] is True and ref["signal_id"] is None and ref["n"] == 1 and ref["code"] and f"#{ref['code']}" in row.text
+
+
+async def test_digest_bypass_quiet_counts_hidden_console_pin_defensive_item(db: Any) -> None:
+    """m5: mục phòng thủ console_pin chỉ được ĐẾM cũng phải kéo `bypass_quiet`."""
+    org = await mk_org(db)
+    await _install(db, org)
+    s = await _sig(db, org, "rui_ro_lua_dao", "fr-priv", privacy="console_pin", flags={"credentials_entered": True}, confidence_exist=0.5, d2={"verdict": "disagree"})
+    assert s.delivery == "digest_top"
+    await bot_world(db, org)
+    await db.execute(text("""UPDATE core.organizations SET settings = settings || jsonb_build_object('intel', COALESCE(settings->'intel', '{}'::jsonb)
+                             || '{"quiet_start": "00:00", "quiet_end": "23:59"}'::jsonb) WHERE id = :o"""), {"o": org})
+    await db.commit()
+    assert await run(org) == "sent"
+    nb = (await db.execute(text("SELECT not_before, created_at, text FROM ops.owner_outbox WHERE kind = 'digest'"))).one()
+    assert "1 mục cần xem trên Console" in nb.text and nb.not_before == nb.created_at

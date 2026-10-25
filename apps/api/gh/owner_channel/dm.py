@@ -130,8 +130,8 @@ async def _resolve_ref(db: AsyncSession, org_id: uuid.UUID, n: int, code: str | 
     """(ref, lỗi). Có `code` ⇒ đúng bản tin mang mã đó; không mã ⇒ bản tin gần nhất và CHỈ khi còn mới (≤ 48 giờ)."""
     if code:
         row = (await db.execute(text("""SELECT refs FROM ops.owner_outbox WHERE org_id = :o AND kind IN ('digest', 'alert', 'ask') AND sent_at IS NOT NULL
-                                        AND refs @> CAST(:c AS jsonb) ORDER BY sent_at DESC LIMIT 1"""),
-                                {"o": org_id, "c": orjson.dumps([{"code": code}]).decode()})).scalar_one_or_none()
+                                        AND sent_at > :since AND refs @> CAST(:c AS jsonb) ORDER BY sent_at DESC LIMIT 1"""),
+                                {"o": org_id, "c": orjson.dumps([{"code": code}]).decode(), "since": clock.now() - STALE})).scalar_one_or_none()
         if row is None:
             return None, f"Em không thấy bản tin #{code}."
     else:
@@ -150,6 +150,8 @@ async def _feedback(db: AsyncSession, org_id: uuid.UUID, owner: Any, verdict: st
     ref, err = await _resolve_ref(db, org_id, n, code)
     if ref is None:
         return err or NOT_FOUND_REF.format(n=n)
+    if ref.get("console_only"):
+        return f"Mục {n} là vụ khẩn riêng tư — Sếp mở Console (mã PIN) để xem và xử lý."
     if not (ref.get("cluster_ids") or ref.get("signal_id")):
         return await _sample_item(db, org_id, owner, verdict, n, ref)
     if verdict == "missed":
@@ -207,6 +209,8 @@ async def _correct(db: AsyncSession, org_id: uuid.UUID, owner: Any, n: int | Non
     ref, err = await _resolve_ref(db, org_id, n, None)
     if ref is None:
         return err or NOT_FOUND_REF.format(n=n)
+    if ref.get("console_only"):
+        return f"Mục {n} là vụ khẩn riêng tư — Sếp mở Console (mã PIN) để xem và sửa."
     if not ref.get("signal_id") and not ref.get("cluster_ids"):
         return f"Mục {n} là mẫu kiểm tra, không có sự thật nào để sửa ạ."
     if ref.get("cluster_ids"):
@@ -300,7 +304,7 @@ async def trusted_frames(redis: Redis, org_id: uuid.UUID, channel: str) -> list[
     out: list[str] = []
     for pid in await chat_pending.entries(redis, org_id, channel):
         p = await proposals.load(redis, pid)
-        if p is None or p.get("type") != "draft_message":
+        if p is None or p.get("type") != "draft_message" or str(p.get("org_id")) != str(org_id):
             continue
         t = str((p.get("fields") or {}).get("text") or "")
         out.append(chat_pending.quote(t))

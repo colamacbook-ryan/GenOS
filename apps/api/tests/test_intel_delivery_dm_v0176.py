@@ -331,3 +331,38 @@ async def test_defensive_gate_covers_kind_without_gate_and_gate_with_other_kind(
     for cmd in ("sai 1", "1 không cần báo"):
         assert "Console" in await chat.say(cmd), cmd
     assert (await sig_row(db, s.id)).status == "open" and await feedback(db) == []
+
+
+# ─── review T3 vòng 2 ────────────────────────────────────────────────────────
+
+async def test_console_only_ref_points_to_console_both_paths(chat: Chat, db: Any) -> None:
+    """🔴 console_pin có ref `console_only`: «1 sai» không trỏ nhầm bản tin cũ, «sai 1 #MÃ» không báo "không thấy"."""
+    s = await setup(chat, db)
+    refs = [{"n": 1, "signal_id": None, "ask_id": None, "ask_code": None, "cluster_ids": None, "code": "PRIV", "console_only": True}]
+    await db.execute(text("""INSERT INTO ops.owner_outbox (org_id, channel_type, kind, severity, dedupe_key, text, created_at, sent_at, refs)
+                             VALUES (:o, 'zalo', 'alert', 'urgent', 'p', 'x', now() + interval '1 minute', now() + interval '1 minute', CAST(:r AS jsonb))"""),
+                     {"o": chat.org, "r": orjson.dumps(refs).decode()})
+    await db.commit()
+    for cmd in ("1 sai", "sai 1 #PRIV", "1 không cần báo", "1 sót"):
+        assert "Console" in await chat.say(cmd), cmd
+    assert await feedback(db) == [] and (await sig_row(db, s["fraud"].id)).status == "open"        # bản tin cũ không bị đụng
+    assert "Console" in await chat.say("sửa 1: x")
+
+
+async def test_code_reference_also_limited_to_48_hours(chat: Chat, db: Any) -> None:
+    s = await _two_digests(chat, db)
+    await db.execute(text("UPDATE ops.owner_outbox SET sent_at = now() - interval '3 days', created_at = now() - interval '3 days' WHERE refs @> '[{\"code\": \"OLD1\"}]'"))
+    await db.commit()
+    assert "không thấy bản tin" in (await chat.say("sai 1 #OLD1")).lower()
+    assert (await sig_row(db, s["old"].id)).status == "open"
+
+
+async def test_trusted_frames_ignore_other_orgs_proposal(chat: Chat, db: Any, world: dict[str, Any]) -> None:
+    from gh.gen import chat_pending, proposals
+    from tests.test_chat_confirm_v0173 import outbound_proposal
+
+    p = await outbound_proposal(chat, world, text_="STK 0987654321098")
+    assert chat_pending.quote("STK 0987654321098") in await dm.trusted_frames(chat.redis, chat.org, "zalo")
+    p["org_id"] = str(uuid.uuid4())                                           # đề xuất của tổ chức khác lọt vào sổ chờ
+    await proposals.save(chat.redis, p)
+    assert await dm.trusted_frames(chat.redis, chat.org, "zalo") == []
