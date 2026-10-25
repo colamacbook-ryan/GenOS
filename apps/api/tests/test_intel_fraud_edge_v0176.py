@@ -252,3 +252,27 @@ def test_fraud_cred_soft_candidate_has_no_hard_rule_and_no_flag() -> None:
 def test_fraud_cred_lure_keeps_ngoc_hard() -> None:
     body = next(c[1] for c in CASES if c[0] == "otp_ngoc")
     assert F.scan(body).cred is not None
+
+
+# — security review: ngữ cảnh "của chính mình" chỉ tính trong CÂU chứa khớp; bí mật đã đưa/nhập không bao giờ hạ mềm —
+CRED_STILL_HARD = [
+    "Em lỡ nhập OTP rồi. App ngân hàng của em vẫn bình thường mà",
+    "em lỡ đưa mã OTP cho nó rồi",
+    "Em đăng nhập rồi, nó hỏi mã OTP. Em dùng app ngân hàng VCB",
+    "Chị nhập xong rồi, nó hỏi mã PIN. Máy in nhà chị hỏng rồi",
+    "Em đăng nhập zalo rồi, nó bảo nhập mã OTP để nhận quà",
+]
+
+
+@pytest.mark.parametrize("body", CRED_STILL_HARD)
+def test_fraud_cred_own_context_cannot_be_injected_elsewhere(body: str) -> None:
+    d = F.decide(F.scan(body), CTX["staff"])
+    assert d is not None and F.H_CRED in d.hard, body
+
+
+def test_prefilter_never_softens_secret_given_rules() -> None:
+    from gh.refinery import prefilter
+
+    assert prefilter.CRED_SOFTENABLE == frozenset({"cred_enter_done2"})
+    c = next(c for c in prefilter.scan_text("em lỡ đưa mã OTP cho nó rồi, đang dùng app ngân hàng") if c.flag == "credentials_entered")
+    assert c.hard_rule_hit == "credentials_entered"

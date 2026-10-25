@@ -176,10 +176,9 @@ def _cred_match(fold: str) -> tuple[re.Match[str] | None, bool]:
     from gh.refinery import prefilter
 
     lure = prefilter.CRED_LURE.search(fold) is not None
-    own = prefilter.CRED_OWN.search(fold) is not None
     m = _CRED_NARROW.search(fold)
     if m:
-        return m, lure or not own
+        return m, lure or not prefilter.cred_own(fold, m.start(), m.end())       # ngữ cảnh của chính mình: chỉ trong CÂU chứa khớp
     m = _CRED_WIDE.search(fold) or _CRED_SENT.search(fold)
     return (m, lure) if m else (None, False)
 
@@ -1248,12 +1247,23 @@ async def run(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, call: Any =
                 continue
             want_d2 = d2_left > 0 and await _d2_allowed(db, org_id, p.upsert.thread_key or "", now)
             if p.decision.rules == ("credentials_suspect",):
-                # Ứng viên MỀM (T12): chỉ thành tín hiệu khi (d2) xác nhận `credentials_entered`; không có (d2) ⇒ để lượt model (đơn vị) quyết.
-                if want_d2:
+                # Ứng viên MỀM (T12) — không fail-open: (d2) đồng ý ⇒ ghi (🔴 chỉ khi xác nhận cờ `credentials_entered`); (d2)
+                # KHÔNG đồng ý ⇒ bỏ; không có bộ định tuyến ⇒ ghi ngay mức thấp (không cờ ⇒ tối đa 🟠); hết trần (d2) lượt này ⇒ KHÔNG đánh
+                # dấu "đã quét" (lượt sau thử lại); (d2) lỗi ⇒ đếm lỗi, đủ `MAX_FAILS` ⇒ ghi mức thấp.
+                if call is None:
+                    out.append(await _write(db, org_id, p, now))
+                elif not want_d2:
+                    continue
+                else:
                     d2_left -= 1
                     p = await run_d2(db, org_id, p, call)
-                    if "credentials_entered" in p.upsert.level_input.d2.flags_confirmed and p.upsert.level_input.d2.verdict == "agree":
+                    d2 = p.upsert.level_input.d2
+                    if d2.error or d2.verdict is None:
+                        if await seen.fail(org_id, _seen_key(row)) < MAX_FAILS:
+                            continue
                         out.append(await _write(db, org_id, p, now))
+                    elif d2.verdict == "agree":
+                        out.append(await _write(db, org_id, p, now))   # 🔴 chỉ khi (d2) xác nhận cờ `credentials_entered`; còn lại ≤ 🟠
                 if processed is not None:
                     processed.append(_seen_key(row))
                 continue
