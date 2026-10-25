@@ -139,6 +139,11 @@ async def _scan_slow_response(db: AsyncSession, org_id: uuid.UUID, redis: Any = 
         ref = {"type": "raw", "id": str(r.raw_id)}
         if await _already_evidenced(db, org_id, "slow_response", ref):
             continue
+        has_signal = (await db.execute(text(
+            "SELECT 1 FROM biz.alerts WHERE org_id = :o AND kind = 'cau_hoi_cho_xu_ly' AND detector = 'questions' "
+            "AND raw_event_ids @> ARRAY[CAST(:r AS uuid)] LIMIT 1"), {"o": org_id, "r": str(r.raw_id)})).first()
+        if has_signal:
+            continue                  # v0.1.76 (T5): detector `questions` đã có tín hiệu cho câu hỏi này
         who = r.person_name or "một khách"
         title = f"Chưa trả lời {who} sau {RESPONSE_SLA_MIN} phút"
         summary = f"Phụ trách: {r.owner_name}" if r.owner_name else "Chưa có người phụ trách"
@@ -191,11 +196,15 @@ async def _scan_competitor(db: AsyncSession, org_id: uuid.UUID, redis: Any = Non
 
 
 # ─── deadline / lời hứa bị bỏ quên ─────────────────────────────────────────────
+# v0.1.76 (T5): CHỈ quét dòng do đường cũ ghi (không `fact_id`/`signal_id`, `state='open'`).
+# Dòng do T4 quản (lời hứa có fact, khách→Sếp chỉ theo dõi, conditional/kept/cancelled) do detector
+# `promises` và tín hiệu của nó quyết, không sinh thêm P1 ở đây.
 
 async def _scan_forgotten_deadline(db: AsyncSession, org_id: uuid.UUID, redis: Any = None) -> int:
     rows = (await db.execute(text("""
         SELECT id, promiser_person_id, text, meaning_unit_id FROM biz.promises
         WHERE org_id = :o AND kept_at IS NULL AND due_at < now() AND broken IS NOT TRUE
+          AND fact_id IS NULL AND signal_id IS NULL AND state = 'open'
         LIMIT :lim"""), {"o": org_id, "lim": SCAN_LIMIT})).all()
     n = 0
     for r in rows:

@@ -123,16 +123,19 @@ async def emit(db: AsyncSession, org_id: uuid.UUID, q: QuestionIn, now: datetime
 
 async def refresh_waiting(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, limit: int = 200) -> list[signals.Signal]:
     """Câu hỏi chặn việc còn mở, đã quá `WAIT_ESCALATE_H` giờ mà `level_input` còn ghi ≤ 2 ⇒ làm mới `owner_unanswered_h`/`in_work_hours`
-    rồi `relane`. Chạy lại an toàn (đã làm mới thì không chọn lại). Trả các tín hiệu ĐỔI mức/phân phối. Bên gọi commit."""
+    rồi `relane`. Câu hỏi đã làm mới nhưng cờ `in_work_hours` đã lưu KHÁC giờ hiện tại (lần làm mới rơi vào giờ yên lặng) được chọn lại khi
+    đổi giờ ⇒ không kẹt ở mức cũ. Chạy lại an toàn (cờ đã khớp giờ hiện tại thì không chọn lại). Trả các tín hiệu ĐỔI mức/phân phối. Bên gọi commit."""
     st = await signals.delivery_state(db, org_id, now)
     rows = (await db.execute(text("""
         SELECT id, level, delivery, level_input FROM biz.alerts
         WHERE org_id = :o AND kind = :k AND status IN ('open', 'acknowledged') AND level_input IS NOT NULL
           AND COALESCE((level_input -> 'flags' ->> 'blocks_work')::boolean, false)
-          AND COALESCE((level_input ->> 'owner_unanswered_h')::numeric, 0) <= :th
+          AND (COALESCE((level_input ->> 'owner_unanswered_h')::numeric, 0) <= :th
+               OR COALESCE((level_input ->> 'in_work_hours')::boolean, true) <> :iw)     -- vào/ra giờ làm việc ⇒ đánh giá lại
           AND (level_input ->> 'msg_at')::timestamptz + make_interval(secs => :ths) <= :now
         ORDER BY created_at LIMIT :n FOR UPDATE"""),
-                            {"o": org_id, "k": KIND, "th": WAIT_ESCALATE_H, "ths": WAIT_ESCALATE_H * 3600, "now": now, "n": limit})).all()
+                            {"o": org_id, "k": KIND, "th": WAIT_ESCALATE_H, "ths": WAIT_ESCALATE_H * 3600, "now": now, "n": limit,
+                                    "iw": in_work_hours(now, st.quiet_hours)})).all()
     out: list[signals.Signal] = []
     for r in rows:
         li = dict(r.level_input)
@@ -160,6 +163,96 @@ async def mark_answered(db: AsyncSession, org_id: uuid.UUID, signal_id: uuid.UUI
     return await signals.relane(db, org_id, signal_id, now)
 
 
+NEEDS_REPLY = ("AskedPrice", "AskedStatus", "RequestedSample", "RequestedPartnership")
+SCAN_WINDOW_H = 24
+SCAN_SLA_MIN = 60
+SCAN_LIMIT = 50
+
+
+async def scan_units(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> list[signals.Signal]:
+    """Nối detector vào luồng thật: đơn vị ý nghĩa HỎI (`clean.meaning_units`: hỏi giá / hỏi tiến độ / xin mẫu / đề nghị hợp tác) của KHÁCH hoặc
+    NGƯỜI THÂN (`owner_key_relation`) mà tin gốc quá `SCAN_SLA_MIN` phút chưa có tin ĐI trả lời đúng người đó ⇒ `emit`. Người gửi do CODE
+    xác định qua `core.person_identities` (không do model). Nhân viên bị bỏ (câu nội bộ chặn việc cần cờ `blocks_work` của model).
+    Bỏ qua tin đã có cảnh báo `slow_response` cũ (cùng chứng cứ) — queue/jobs.py cũng bỏ tin đã có tín hiệu: một câu hỏi, một dòng."""
+    from gh.biz.mem import profile_read
+    from gh.data.common import NO_REPLY_KINDS, outbound_to_sql
+
+    key_rel = (await profile_read.snapshot(db, org_id)).key_relation_entity_ids()
+    rows = (await db.execute(text(f"""
+        SELECT c.raw_id, c.occurred_at, c.group_id, c.person_id, c.body_text, c.member_count
+        FROM (
+          SELECT e.id AS raw_id, e.received_at, e.channel_id, e.group_id, e.occurred_at, e.body_text, p.id AS person_id, p.person_type, g.member_count,
+                 ARRAY(SELECT x.id FROM core.person_identities x WHERE x.person_id = pi.person_id AND x.channel_id = e.channel_id) AS ids,
+                 ARRAY(SELECT NULLIF(split_part(x.external_id, '@', 1), '') FROM core.person_identities x
+                       WHERE x.person_id = pi.person_id AND x.channel_id = e.channel_id) AS ext
+          FROM raw.events e
+          JOIN core.person_identities pi ON pi.id = e.sender_identity_id
+          JOIN core.persons p ON p.id = pi.person_id
+          LEFT JOIN core.groups g ON g.id = e.group_id
+          WHERE e.org_id = :o AND e.direction = 'inbound' AND e.kind <> ALL(CAST(:nokind AS text[]))
+            AND e.body_text IS NOT NULL AND e.body_text <> '' AND COALESCE(p.person_type, '') <> 'staff'
+            AND e.occurred_at < CAST(:now AS timestamptz) - make_interval(mins => :sla)
+            AND e.occurred_at > CAST(:now AS timestamptz) - make_interval(hours => :win)
+            AND EXISTS (SELECT 1 FROM clean.evidence ev JOIN clean.meaning_units mu ON mu.id = ev.meaning_unit_id
+                         AND mu.observed_at = ev.meaning_observed_at AND mu.superseded_by IS NULL
+                        WHERE ev.raw_event_id = e.id AND ev.raw_received_at = e.received_at AND mu.event_type = ANY(CAST(:need AS text[])))
+        ) c
+        WHERE NOT EXISTS (
+          SELECT 1 FROM raw.events o2 WHERE o2.channel_id = c.channel_id AND o2.direction = 'outbound'
+            AND o2.received_at >= c.received_at AND o2.occurred_at > c.occurred_at
+            AND CASE WHEN c.group_id IS NOT NULL THEN o2.group_id = c.group_id
+                     ELSE o2.group_id IS NULL AND {outbound_to_sql("o2", "c.ids", "c.ext")} END)
+          AND NOT EXISTS (SELECT 1 FROM biz.alerts a WHERE a.org_id = :o AND a.alert_type = 'slow_response' AND a.evidence @> jsonb_build_array(jsonb_build_object('type', 'raw', 'id', c.raw_id::text)))
+        ORDER BY c.occurred_at LIMIT :lim"""),  # noqa: S608 — outbound_to_sql là hằng nội bộ
+                            {"o": org_id, "now": now, "sla": SCAN_SLA_MIN, "win": SCAN_WINDOW_H, "lim": SCAN_LIMIT * 4,
+                             "nokind": list(NO_REPLY_KINDS), "need": list(NEEDS_REPLY)})).all()
+    out: list[signals.Signal] = []
+    for r in rows:
+        if len(out) >= SCAN_LIMIT:
+            break
+        try:
+            ent = (await entities.ensure_person(db, org_id, r.person_id)).id
+        except entities.EntityError:
+            continue
+        customer = (await db.execute(text("""SELECT EXISTS (SELECT 1 FROM core.persons WHERE id = :p AND person_type = 'customer')
+                                                 OR EXISTS (SELECT 1 FROM mem.facts WHERE org_id = :o AND subject_id = :e AND predicate = 'customer_of'
+                                                            AND valid_to IS NULL AND status IN ('asserted', 'owner_confirmed'))"""),
+                                    {"p": r.person_id, "o": org_id, "e": ent})).scalar_one()
+        asker: AskerKind = "kin" if ent in key_rel else ("customer" if customer else "other")
+        if asker == "other":
+            continue
+        body = str(r.body_text)
+        q = QuestionIn(asked_at=r.occurred_at, raw_event_id=r.raw_id, span_end=min(len(body), 80), quote=body[:80], asker=asker,
+                       asker_person_id=r.person_id, thread=levels.Thread(type="group" if r.group_id else "dm_owner", size=int(r.member_count or 0),
+                                                                           owner_in_thread=True, agent_in_thread=True),
+                       thread_key=f"g:{r.group_id}" if r.group_id else None, group_id=r.group_id)
+        try:
+            async with db.begin_nested():
+                out.append(await emit(db, org_id, q, now))
+        except signals.SignalError:
+            log.warning("questions.scan_units: bỏ qua một tin", exc_info=True)
+    return out
+
+
+async def intel_questions_scan(ctx: dict[str, Any]) -> dict[str, int]:
+    from gh.db import sessionmaker
+    from gh.refinery import clock
+
+    sm = sessionmaker()
+    out = {"signals": 0, "errors": 0}
+    async with sm() as db:
+        orgs = (await db.execute(text("SELECT id FROM core.organizations"))).scalars().all()
+    for org in orgs:
+        try:
+            async with sm() as db:
+                out["signals"] += len(await scan_units(db, org, clock.now()))
+                await db.commit()
+        except Exception:                                       # noqa: BLE001 — một tổ chức lỗi không dừng tổ chức khác
+            log.exception("intel_questions_scan lỗi ở một tổ chức")
+            out["errors"] += 1
+    return out
+
+
 async def intel_questions_clock(ctx: dict[str, Any]) -> dict[str, int]:
     from gh.db import sessionmaker
     from gh.refinery import clock
@@ -180,4 +273,5 @@ async def intel_questions_clock(ctx: dict[str, Any]) -> dict[str, int]:
 
 
 HOOKS: list[Hook] = []
-JOBS: list[CronJob] = [(intel_questions_clock, {"minute": set(range(60))})]
+JOBS: list[CronJob] = [(intel_questions_clock, {"minute": set(range(60))}),
+                       (intel_questions_scan, {"minute": set(range(1, 60, 10))})]

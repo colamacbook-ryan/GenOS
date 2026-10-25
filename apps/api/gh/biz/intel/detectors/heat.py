@@ -57,10 +57,13 @@ async def _candidates(db: AsyncSession, org_id: uuid.UUID, key_rel: frozenset[uu
                (p.person_type = 'customer' OR EXISTS (SELECT 1 FROM mem.facts f WHERE f.org_id = :o AND f.subject_id = e.id AND f.predicate = 'customer_of'
                                                        AND f.valid_to IS NULL AND f.status IN ('asserted', 'owner_confirmed'))) AS customer
         FROM core.persons p JOIN mem.entities e ON e.person_id = p.id AND e.org_id = p.org_id AND e.merged_into IS NULL AND e.forgotten_at IS NULL
-        WHERE p.org_id = :o AND p.deleted_at IS NULL AND p.merged_into_id IS NULL AND NOT e.is_owner LIMIT :n"""),
-                            {"o": org_id, "n": SCAN_LIMIT * 4})).all()
+        WHERE p.org_id = :o AND p.deleted_at IS NULL AND p.merged_into_id IS NULL AND NOT e.is_owner
+          AND (e.id = ANY(:key) OR p.person_type = 'customer' OR EXISTS (SELECT 1 FROM mem.facts f WHERE f.org_id = :o AND f.subject_id = e.id
+               AND f.predicate = 'customer_of' AND f.valid_to IS NULL AND f.status IN ('asserted', 'owner_confirmed')))
+        ORDER BY e.id LIMIT :n"""),                                      # lọc khách/người quan trọng TRONG SQL rồi mới cắt (không bỏ sót vì LIMIT)
+                            {"o": org_id, "n": SCAN_LIMIT, "key": list(key_rel)})).all()
     return {r.person_id: {"entity": r.entity_id, "name": r.display_name, "customer": bool(r.customer), "key": r.entity_id in key_rel}
-            for r in rows if r.customer or r.entity_id in key_rel}
+            for r in rows}
 
 
 async def _last_message(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID) -> tuple[uuid.UUID, datetime, uuid.UUID | None] | None:
@@ -89,7 +92,7 @@ async def scan(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> dict[str, 
         cooling = heat.cooling(lines.get(c["entity"], []))
         case_key = levels.case_key(KIND, at=now, entity_id=str(c["entity"]))
         if not (silence or cooling):
-            out["resolved"] += await _resolve_recovered(db, org_id, case_key, now)
+            out["resolved"] += await _resolve_recovered(db, org_id, pid, now)
             continue
         last = await _last_message(db, org_id, pid)
         if last is None:
@@ -120,9 +123,10 @@ async def scan(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> dict[str, 
     return out
 
 
-async def _resolve_recovered(db: AsyncSession, org_id: uuid.UUID, case_key: str, now: datetime) -> int:
-    rows = (await db.execute(text("SELECT id FROM biz.alerts WHERE org_id = :o AND case_key = :ck AND kind = :k AND detector = 'heat' "
-                                  "AND status IN ('open', 'acknowledged')"), {"o": org_id, "ck": case_key, "k": KIND})).scalars().all()
+async def _resolve_recovered(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID, now: datetime) -> int:
+    """Đóng THEO NGƯỜI (không theo khoá cửa sổ 14 ngày): tín hiệu mở từ cửa sổ trước vẫn đóng khi quan hệ hồi phục."""
+    rows = (await db.execute(text("SELECT id FROM biz.alerts WHERE org_id = :o AND subject_id = :p AND kind = :k AND detector = 'heat' "
+                                  "AND status IN ('open', 'acknowledged')"), {"o": org_id, "p": person_id, "k": KIND})).scalars().all()
     for i in rows:
         await signals.transition(db, org_id, i, "resolved", now=now)
     return len(rows)

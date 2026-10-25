@@ -298,3 +298,136 @@ async def test_attack_question_of_other_person_is_not_labelled_kin_or_customer(d
     sig = await questions.emit(db, w.org, q, NOW)
     r = (await db.execute(text("SELECT facts, subject_id FROM biz.alerts WHERE id = :i"), {"i": sig.id})).one()
     assert r.facts["asker_kind"] == "other" and r.subject_id is None
+
+
+# ─── review T5: vụ đóng rồi chê lại, giờ yên lặng, nối luồng thật, lời hứa T4, heat, đùa phủ định, một 🔴 mỗi vụ ──────
+
+async def test_complaint_after_closure_opens_new_case_with_fresh_anchor(db) -> None:  # type: ignore[no-untyped-def]
+    for by in ("owner", "staff"):
+        w, pid, iid, _ = await _customer(db)
+        epoch = int(NOW.timestamp()) // (72 * 3600)
+        t0 = datetime.fromtimestamp(epoch * 72 * 3600 + 3600, tz=levels.VN)               # đầu cửa sổ 72 giờ
+        raw = await mk_raw(db, w.org, w.channel, identity=iid, body="dịch vụ tệ quá", at=t0)
+        [s1] = await conflicts.emit(db, w.org, _complaint(raw, pid, sent_at=t0), t0 + timedelta(minutes=5))
+        key = (await db.execute(text("SELECT case_key FROM biz.alerts WHERE id = :i"), {"i": s1.id})).scalar_one()
+        await conflicts.close_case(db, w.org, key, by=by, now=t0 + timedelta(hours=1))   # type: ignore[arg-type]
+        t1 = t0 + timedelta(hours=30)                                                    # cùng cửa sổ 72 giờ, > 24 giờ sau lời chê đầu
+        raw2 = await mk_raw(db, w.org, w.channel, identity=iid, body="lại giao sai nữa, tệ quá", at=t1)
+        [s2] = await conflicts.emit(db, w.org, _complaint(raw2, pid, sent_at=t1, quote="lại giao sai nữa"), t1 + timedelta(minutes=5))
+        r = await _row(db, s2.id)
+        assert s2.id != s1.id and r.level == "red" and r.gate == "khach_che_cong_khai_doa_bo", (by, r)
+        old = await _row(db, s1.id)                                                      # vụ cũ giữ nguyên closure (NV đóng ⇒ vẫn digest_low)
+        assert old.delivery == ("digest_low" if by == "staff" else "none"), (by, old)
+        a = await conflicts.emit(db, w.org, _complaint(raw2, pid, sent_at=t1, quote="lại giao sai nữa"), t1 + timedelta(minutes=6))  # chạy lại ⇒ không nhân đôi
+        assert a[0].id == s2.id
+
+
+async def test_question_refreshed_in_quiet_hours_still_escalates_when_work_hours_return(db) -> None:  # type: ignore[no-untyped-def]
+    w = await mk_world(db, await mk_org(db))
+    await _install(db, w.org)
+    asked = datetime(2026, 10, 23, 20, 30, tzinfo=levels.VN)
+    raw = await mk_raw(db, w.org, w.channel, identity=None, body="Anh ơi mai hết xi măng, lấy ở đâu?", at=asked)
+    q = questions.QuestionIn(asked_at=asked, raw_event_id=raw, span_end=20, asker="internal", blocks_work=True,
+                             thread=levels.Thread(type="group", size=12, owner_in_thread=True, agent_in_thread=True), thread_key=f"g:{uuid.uuid4()}")
+    sig = await questions.emit(db, w.org, q, asked + timedelta(minutes=1))
+    await questions.refresh_waiting(db, w.org, datetime(2026, 10, 23, 22, 40, tzinfo=levels.VN))      # giờ yên lặng: chưa leo
+    assert (await _row(db, sig.id)).level == "grey"
+    changed = await questions.refresh_waiting(db, w.org, datetime(2026, 10, 24, 8, 0, tzinfo=levels.VN))   # vào giờ làm việc ⇒ leo
+    assert [c.id for c in changed] == [sig.id] and (await _row(db, sig.id)).level == "amber"
+    assert await questions.refresh_waiting(db, w.org, datetime(2026, 10, 24, 8, 5, tzinfo=levels.VN)) == []
+
+
+async def test_scan_units_feeds_questions_from_real_meaning_units_and_dedupes_with_legacy(db) -> None:  # type: ignore[no-untyped-def]
+    from datetime import UTC
+
+    from gh.biz.queue import jobs as queue_jobs
+    from tests.test_p3_queue import _unit
+    now = datetime.now(UTC)
+    w = await mk_world(db, await mk_org(db))
+    user = await mk_user(db, w.org)
+    cust, ci = await mk_person(db, w.org, w.channel, "Khách hỏi giá")
+    mom, mi = await mk_person(db, w.org, w.channel, "Mẹ")
+    staff, si = await mk_person(db, w.org, w.channel, "Nhân viên")
+    other, oi = await mk_person(db, w.org, w.channel, "Người lạ")
+    replied, ri = await mk_person(db, w.org, w.channel, "Khách đã được trả lời")
+    await db.execute(text("UPDATE core.persons SET person_type = 'customer' WHERE id = ANY(:p)"), {"p": [cust, replied]})
+    await db.execute(text("UPDATE core.persons SET person_type = 'staff' WHERE id = :p"), {"p": staff})
+    mom_e = (await entities.ensure_person(db, w.org, mom)).id
+    await facts.assert_fact(db, mkfact(w.org, w.owner, None, T(1), predicate="owner_key_relation", object_entity=mom_e, cls="owner", confirmed_by=user))
+    raws = {}
+    for name, ident, ev in (("cust", ci, "AskedPrice"), ("mom", mi, "AskedStatus"), ("staff", si, "AskedStatus"), ("other", oi, "AskedPrice"),
+                            ("replied", ri, "AskedPrice")):
+        raws[name] = await mk_raw(db, w.org, w.channel, identity=ident, body=f"hỏi {name}?", at=now - timedelta(hours=3))
+        pid = {"cust": cust, "mom": mom, "staff": staff, "other": other, "replied": replied}[name]
+        await _unit(db, w.org, person_id=pid, event_type=ev, conclusion="hỏi", raw_id=raws[name])
+    await mk_raw(db, w.org, w.channel, identity=None, body="dạ em trả lời", direction="outbound", at=now - timedelta(hours=2), payload={"threadId": "x"})
+    ext = (await db.execute(text("SELECT external_id FROM core.person_identities WHERE id = :i"), {"i": ri})).scalar_one()
+    await mk_raw(db, w.org, w.channel, identity=None, body="dạ gửi anh báo giá", direction="outbound", at=now - timedelta(hours=2), payload={"threadId": ext})
+    await db.commit()
+    out = await questions.scan_units(db, w.org, now)
+    await db.commit()
+    rows = (await db.execute(text("SELECT facts ->> 'asker_kind' AS k, subject_id, detector FROM biz.alerts WHERE org_id = :o AND kind = 'cau_hoi_cho_xu_ly'"),
+                             {"o": w.org})).all()
+    assert len(out) == 2 and sorted((r.k, r.subject_id) for r in rows) == sorted([("customer", cust), ("kin", mom)])    # nhân viên/người lạ/đã trả lời: bỏ
+    assert len(await questions.scan_units(db, w.org, now)) == 2                                                      # chạy lại không nhân đôi
+    assert (await db.execute(text("SELECT count(*) FROM biz.alerts WHERE org_id = :o AND kind = 'cau_hoi_cho_xu_ly'"), {"o": w.org})).scalar_one() == 2
+    n = await queue_jobs._scan_slow_response(db, w.org)                                                              # cảnh báo cũ bỏ tin đã có tín hiệu
+    titles = [r.title for r in (await db.execute(text("SELECT title FROM biz.alerts WHERE alert_type = 'slow_response' AND org_id = :o"), {"o": w.org})).all()]
+    assert all("Khách hỏi giá" not in t and "Mẹ" not in t for t in titles), (n, titles)
+    assert any(f.__name__ == "intel_questions_scan" for f, _ in intel_jobs.JOBS)
+
+
+async def test_forgotten_deadline_scan_skips_rows_managed_by_t4(db) -> None:  # type: ignore[no-untyped-def]
+    from gh.biz.queue import jobs as queue_jobs
+    w = await mk_world(db, await mk_org(db))
+    p1, _ = await mk_person(db, w.org, w.channel, "Khách hứa")
+    p2, _ = await mk_person(db, w.org, w.channel, "Cũ")
+    ins = """INSERT INTO biz.promises (org_id, promiser_person_id, text, due_at, state, fact_id) VALUES (:o, :p, 'x', now() - interval '2 days', :s, :f) RETURNING id"""
+    t4_open = (await db.execute(text(ins), {"o": w.org, "p": p1, "s": "open", "f": uuid.uuid4()})).scalar_one()
+    t4_cond = (await db.execute(text(ins), {"o": w.org, "p": p1, "s": "conditional", "f": None})).scalar_one()
+    legacy = (await db.execute(text(ins), {"o": w.org, "p": p2, "s": "open", "f": None})).scalar_one()
+    await db.commit()
+    assert await queue_jobs._scan_forgotten_deadline(db, w.org) == 1
+    got = {r.id: r.broken for r in (await db.execute(text("SELECT id, broken FROM biz.promises WHERE org_id = :o"), {"o": w.org})).all()}
+    assert got[legacy] is True and got[t4_open] is None and got[t4_cond] is None
+    assert (await db.execute(text("SELECT count(*) FROM biz.alerts WHERE org_id = :o AND alert_type = 'forgotten_deadline'"), {"o": w.org})).scalar_one() == 1
+
+
+async def test_heat_scan_resolves_by_person_across_windows_and_filters_candidates_in_sql(db) -> None:  # type: ignore[no-untyped-def]
+    w, pid, iid, _ = await _customer(db, "Chị Hoa")
+    gid = await mk_group(db, w.org, w.channel)
+    await db.execute(text("INSERT INTO mem.group_contexts (org_id, group_id, context, source, is_primary) VALUES (:o, :g, 'kinh_doanh', 'owner', true)"),
+                     {"o": w.org, "g": gid})
+    await mk_raw(db, w.org, w.channel, identity=iid, body="lấy thêm nhé", group=gid, at=NOW - timedelta(days=15))
+    await _orders(db, w.org, pid, [39, 33, 27, 21, 15])
+    for i in range(heat_det.SCAN_LIMIT + 5):                                          # nhiều người KHÔNG phải khách/quan hệ không che khách thật
+        p, _ = await mk_person(db, w.org, w.channel, f"Người {i}")
+        await entities.ensure_person(db, w.org, p)
+    await db.commit()
+    assert (await heat_det.scan(db, w.org, NOW))["signals"] == 1
+    later = NOW + timedelta(days=20)                                                  # cửa sổ 14 ngày khác ⇒ khoá cửa sổ khác
+    await _orders(db, w.org, pid, [-19])
+    assert (await heat_det.scan(db, w.org, later))["resolved"] == 1
+    assert (await db.execute(text("SELECT status FROM biz.alerts WHERE org_id = :o"), {"o": w.org})).scalar_one() == "resolved"
+
+
+def test_joke_negation_and_leave_marker_in_any_customer_message() -> None:
+    assert conflicts.looks_like_joke("xách dao qua haha") and not conflicts.looks_like_joke("tôi nói thật, không phải đùa đâu, xách dao qua")
+    assert not conflicts.looks_like_joke("không đùa đâu 😂")
+
+
+async def test_from_rule_finds_leave_threat_in_later_customer_message(db) -> None:  # type: ignore[no-untyped-def]
+    w, pid, iid, _ = await _customer(db)
+    first = await mk_raw(db, w.org, w.channel, identity=iid, body="giao trễ quá", at=NOW - timedelta(hours=2))
+    second = await mk_raw(db, w.org, w.channel, identity=iid, body="thôi khỏi, lần sau lấy chỗ khác", at=NOW - timedelta(hours=1))
+    out = await conflicts.from_rule(db, w.org, event_ids=[first, second], person_id=pid, group_id=None, now=NOW)
+    assert out and len(out) == 2 and {s.kind for s in out} == {"xung_dot_khieu_nai", "quan_he_nong_nguoi"}
+
+
+async def test_leave_threat_pushes_only_one_red_per_case(db) -> None:  # type: ignore[no-untyped-def]
+    w, pid, iid, _ = await _customer(db, "Anh Bình")
+    raw = await mk_raw(db, w.org, w.channel, identity=iid, body="thôi khỏi, lần sau lấy chỗ khác", at=NOW - timedelta(hours=1))
+    await conflicts.emit(db, w.org, _complaint(raw, pid, public=False, said_will_leave=True, quote="lần sau lấy chỗ khác", span_end=20), NOW)
+    rows = (await db.execute(text("SELECT kind, level, delivery FROM biz.alerts WHERE org_id = :o"), {"o": w.org})).all()
+    assert [(r.kind, r.delivery == "push_now") for r in sorted(rows, key=lambda r: r.kind)] == [("quan_he_nong_nguoi", False), ("xung_dot_khieu_nai", True)]
+    assert all(r.level != "red" for r in rows if r.kind == "quan_he_nong_nguoi")

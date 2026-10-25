@@ -36,8 +36,14 @@ Tone = Literal["serious", "joke", "grumble"]
 Closure = Literal["none", "staff", "customer", "owner"]
 
 
+NOT_JOKE_MARKERS = ("không phải đùa", "không đùa", "chẳng đùa", "đâu có đùa", "đùa đâu", "nghiêm túc", "nói thật")
+
+
 def looks_like_joke(body: str | None) -> bool:
+    """Có dấu hiệu đùa — trừ khi khách NÓI RÕ không đùa ("không phải đùa đâu": phủ định của đùa, vẫn là khiếu nại thật)."""
     b = (body or "").lower()
+    if any(m in b for m in NOT_JOKE_MARKERS):
+        return False
     return any(m in b for m in JOKE_MARKERS)
 
 
@@ -123,13 +129,20 @@ async def _repeat_n(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID, c
     return max(int(n) + 1, claimed)
 
 
-async def _history(db: AsyncSession, org_id: uuid.UUID, case_key: str, new: levels.CaseEvent) -> list[levels.CaseEvent]:
-    r = (await db.execute(text("SELECT facts -> 'case_events' FROM biz.alerts WHERE org_id = :o AND case_key = :ck AND kind = :k "
-                               "ORDER BY created_at LIMIT 1"), {"o": org_id, "ck": case_key, "k": KIND})).scalar_one_or_none()
-    old = [levels.CaseEvent.model_validate(e) for e in (r or [])]
-    if not any(e.at == new.at and e.evt == new.evt for e in old):
-        old.append(new)
-    return sorted(old, key=lambda e: e.at)
+async def _open_case(db: AsyncSession, org_id: uuid.UUID, base_key: str) -> tuple[str, list[levels.CaseEvent]]:
+    """(khoá vụ, lịch sử) của vụ ĐANG MỞ mới nhất ứng với `base_key` (gồm các vụ mở lại `base_key|v<epoch>`). Chưa có vụ mở ⇒ (base_key, [])."""
+    r = (await db.execute(text("""SELECT case_key, facts -> 'case_events' AS ev FROM biz.alerts
+                                  WHERE org_id = :o AND kind = :k AND status IN ('open', 'acknowledged')
+                                    AND (case_key = :ck OR case_key LIKE :ck || '|v%') ORDER BY created_at DESC LIMIT 1"""),
+                          {"o": org_id, "k": KIND, "ck": base_key})).one_or_none()
+    if r is None:
+        return base_key, []
+    return r.case_key, [levels.CaseEvent.model_validate(e) for e in (r.ev or [])]
+
+
+def _last_closure(events: list[levels.CaseEvent]) -> datetime | None:
+    cl = [e.at for e in events if e.evt == "closure"]
+    return max(cl) if cl else None
 
 
 async def emit(db: AsyncSession, org_id: uuid.UUID, c: ComplaintIn, now: datetime) -> list[signals.Signal]:
@@ -137,11 +150,16 @@ async def emit(db: AsyncSession, org_id: uuid.UUID, c: ComplaintIn, now: datetim
     ent = (await entities.ensure_person(db, org_id, c.customer_person_id)).id
     if not await is_customer(db, org_id, c.customer_person_id, ent) or not await sent_by(db, org_id, c.raw_event_id, c.customer_person_id):
         return []
-    case_key = levels.case_key(KIND, at=c.sent_at, customer_entity_id=str(ent), reply_chain_id=c.reply_chain_id)
+    base_key = levels.case_key(KIND, at=c.sent_at, customer_entity_id=str(ent), reply_chain_id=c.reply_chain_id)
+    case_key, old_events = await _open_case(db, org_id, base_key)
+    closed_at = _last_closure(old_events)
+    if closed_at is not None and c.sent_at > closed_at:
+        # "Khách chê lại sau khi đóng là vụ MỚI" (§4.2.1): khoá mới + mốc vụ mới; vụ cũ (đóng bởi NV, còn mở) giữ nguyên closure của nó.
+        case_key, old_events = f"{base_key}|v{int(closed_at.timestamp())}", []
     ordered = c.ordered_after if c.ordered_after is not None else await _ordered_after(db, org_id, c.customer_person_id, c.sent_at)
     public, leave, closure = effective_flags(c, ordered)
     events = [levels.CaseEvent(at=c.sent_at, evt="complaint", public=public, said_will_leave=leave)]
-    hist = await _history(db, org_id, case_key, events[0])
+    hist = sorted([*old_events, *([] if any(e.at == events[0].at and e.evt == "complaint" for e in old_events) else events)], key=lambda e: e.at)
     if closure != "none" and not any(e.evt == "closure" for e in hist):
         hist.append(levels.CaseEvent(at=max(c.sent_at, now) if closure == "customer" else now, evt="closure"))
     repeat_n = await _repeat_n(db, org_id, c.customer_person_id, case_key, now, c.repeat_claimed)
@@ -153,7 +171,9 @@ async def emit(db: AsyncSession, org_id: uuid.UUID, c: ComplaintIn, now: datetim
     facts = {"case_events": [orjson.loads(e.model_dump_json()) for e in hist], "benign": benign(c), "ordered_after": ordered}
     out = [await signals.upsert(db, org_id, signals.UpsertIn(kind=KIND, title=c.title, level_input=li, facts=facts, **base), now)]
     if leave:
-        rel_li = li.model_copy(update={"kind": KIND_REL, "gate_candidate": levels.G3})
+        # Một vụ một 🔴 (Gen chốt): bản quan_he cùng khoá vụ KHÔNG mang cờ cổng ⇒ không push riêng, đi vào bản tin (🟠 `ongoing`).
+        rel_li = li.model_copy(update={"kind": KIND_REL, "gate_candidate": None, "ongoing": True, "harm_what": "",
+                                       "flags": levels.Flags(repeat_n=repeat_n)})
         out.append(await signals.upsert(db, org_id, signals.UpsertIn(kind=KIND_REL, title="Khách có thể bỏ đi", level_input=rel_li, facts=facts, **base), now))
     return out
 
@@ -169,7 +189,9 @@ async def close_case(db: AsyncSession, org_id: uuid.UUID, case_key: str, *, by: 
         li["closure"] = by
         hist = list(li.get("case_history") or []) + [{"at": now.isoformat(), "evt": "closure", "public": False, "said_will_leave": False}]
         li["case_history"] = hist
-        await db.execute(text("UPDATE biz.alerts SET level_input = CAST(:li AS jsonb) WHERE id = :i"), {"li": orjson.dumps(li).decode(), "i": r.id})
+        ev = list((r.facts or {}).get("case_events") or []) + [{"at": now.isoformat(), "evt": "closure", "public": False, "said_will_leave": False}]
+        await db.execute(text("UPDATE biz.alerts SET level_input = CAST(:li AS jsonb), facts = facts || CAST(:f AS jsonb) WHERE id = :i"),
+                         {"li": orjson.dumps(li).decode(), "f": orjson.dumps({"case_events": ev}).decode(), "i": r.id})
         out.append(await signals.relane(db, org_id, r.id, now))
     return out
 
@@ -180,12 +202,14 @@ async def from_rule(db: AsyncSession, org_id: uuid.UUID, *, event_ids: list[uuid
     người / không phải khách / không có tin chữ của chính khách) ⇒ bên gọi quay về `raise_alert` cũ. `public` = nhóm có > 2 thành viên."""
     if person_id is None or not event_ids:
         return None
-    r = (await db.execute(text("""SELECT e.id, e.occurred_at, e.body_text FROM raw.events e JOIN core.person_identities pi ON pi.id = e.sender_identity_id
+    rows = (await db.execute(text("""SELECT e.id, e.occurred_at, e.body_text FROM raw.events e JOIN core.person_identities pi ON pi.id = e.sender_identity_id
                                   WHERE e.org_id = :o AND e.id = ANY(:i) AND e.direction = 'inbound' AND pi.person_id = :p
-                                  AND e.body_text IS NOT NULL AND e.body_text <> '' ORDER BY e.occurred_at LIMIT 1"""),
-                          {"o": org_id, "i": event_ids, "p": person_id})).one_or_none()
-    if r is None:
+                                  AND e.body_text IS NOT NULL AND e.body_text <> '' ORDER BY e.occurred_at LIMIT 20"""),
+                          {"o": org_id, "i": event_ids, "p": person_id})).all()
+    if not rows:
         return None
+    # câu doạ bỏ có thể nằm ở BẤT KỲ tin nào của khách trong lô (không chỉ tin đầu): ưu tiên tin có marker, không có thì tin đầu
+    r = next((x for x in rows if says_leave(str(x.body_text))), rows[0])
     members = 0
     if group_id is not None:
         members = int((await db.execute(text("SELECT member_count FROM core.groups WHERE id = :g AND org_id = :o"),
