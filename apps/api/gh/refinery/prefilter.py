@@ -399,19 +399,25 @@ _ORDER_BEFORE = re.compile(r"(?:ma don|don hang|so don|ma van don|van don|mvd|ng
 _CLAUSE_SPLIT = re.compile(r"[.!?\n;]")
 
 
+_VND_MAX = 10**15   # trần hợp lý; chuỗi số cực dài (tin rác/tấn công) ⇒ None thay vì inf → OverflowError làm hỏng cả lượt
+
+
 def _vnd(num: str, unit: str) -> int | None:
     n = num.replace(" ", "")
+    if sum(c.isdigit() for c in n) > 18:
+        return None
     try:
         if unit in ("ty", "ti"):
-            return int(float(n.replace(",", ".")) * 1_000_000_000)
-        if unit in ("tr", "trieu"):
-            return int(float(n.replace(",", ".")) * 1_000_000)
-        digits = re.sub(r"[.,]", "", n) if re.fullmatch(r"\d{1,3}(?:[.,]\d{3})+", n) else n.replace(",", ".")
-        base = float(digits)
-        mult = {"nghin": 1_000, "ngan": 1_000, "k": 1_000}.get(unit, 1)
-        return int(base * mult)
-    except ValueError:
+            v = int(float(n.replace(",", ".")) * 1_000_000_000)
+        elif unit in ("tr", "trieu"):
+            v = int(float(n.replace(",", ".")) * 1_000_000)
+        else:
+            digits = re.sub(r"[.,]", "", n) if re.fullmatch(r"\d{1,3}(?:[.,]\d{3})+", n) else n.replace(",", ".")
+            mult = {"nghin": 1_000, "ngan": 1_000, "k": 1_000}.get(unit, 1)
+            v = int(float(digits) * mult)
+    except (ValueError, OverflowError):
         return None
+    return v if 0 <= v <= _VND_MAX else None
 
 
 def parse_amounts(text: str) -> list[int]:
