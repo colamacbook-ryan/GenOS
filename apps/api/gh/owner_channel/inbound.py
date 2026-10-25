@@ -53,7 +53,8 @@ def _when(value: Any) -> datetime:
 
 
 async def assistant_locked(db: AsyncSession, org_id: uuid.UUID) -> bool:
-    """v0.1.76 (T2): cờ "khoá trợ lý" (T10 `backup.lock_assistant`). Import muộn tránh vòng import với `gh.telegram.backup`."""
+    """v0.1.76 (T2): cờ "khoá trợ lý" (T10 `backup.lock_assistant`).
+    Import muộn tránh vòng import với `gh.telegram.backup`."""
     from gh.telegram import backup
 
     return await backup.is_locked(db, org_id)
