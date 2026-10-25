@@ -2,6 +2,8 @@
 
 `step.py` chạy pipeline thật của GenOS (replay → kho thô → lượt theo luồng → trích xuất → kiểm → ghi facts). Chỗ model do **bạn** làm: mỗi lần pipeline cần
 gọi model, nó ghi `prompt.json` rồi dừng chờ bạn.
+Từ Đợt 2 có thêm job đồng hồ của Tình báo chạy theo giờ dữ liệu; job lừa đảo có thể gọi model kiểm chéo (d2) — prompt `kind = "d2"`, khuôn trả lời khác
+`brain-out/1` (đọc trong chính prompt).
 
 ## Việc của bạn (lặp tới `DONE`)
 ```
@@ -14,7 +16,7 @@ $PY scripts/intel-eval/step.py submit <run_dir>/turn_NNN/answer.json       # in 
 1. **Chỉ đọc `prompt.json`.** `system` là kỹ năng tình báo (chỉ dẫn + khuôn đầu ra), `messages` là dữ liệu của lượt (Hồ sơ, chính sách, trí nhớ, tin ngữ cảnh,
    tin mới). Không đọc tệp nào khác trong `<run_dir>`, không đọc bộ dữ liệu gốc, đáp án, mã nguồn pipeline, lượt trước… — model thật cũng chỉ có đúng prompt.
    Mọi thứ cần biết nằm trong prompt, kể cả khuôn JSON.
-2. **Trả lời đúng định dạng prompt yêu cầu**: một JSON `brain-out/1` (một object, không kèm lời dẫn; khối ```json cũng được bóc). Ghi nguyên văn vào `answer.json`.
+2. **Trả lời đúng định dạng prompt yêu cầu** (`kind` extract/retry ⇒ `brain-out/1`; `d2` ⇒ khuôn kiểm chéo ghi trong prompt): một JSON `brain-out/1` (một object, không kèm lời dẫn; khối ```json cũng được bóc). Ghi nguyên văn vào `answer.json`.
    Trích dẫn (`quotes[].text`) phải chép từng chữ từ tin; mã tin (`m_…`) chỉ dùng mã có trong prompt.
 3. Chạy `submit`. Có 3 kết quả:
    - in `tiếp: …/prompt.json` → lượt kế (hoặc `DONE` → xong);
@@ -41,4 +43,16 @@ $PY scripts/intel-eval/gkb_score.py --data .../kbN --key <đáp án ngoài repo>
 - Một lượt kế hoạch của replay có thể thành nhiều lượt pipeline (an toàn/cổng chạy ngay, rồi lượt thường): `turn_NNN` đếm theo **lượt pipeline**; `outputs.jsonl` có thêm `plan_turn`.
 - Tiến trình nền chết (khởi động lại máy…) ⇒ `init --force` làm lại từ đầu (không có resume: id tin/sự thật là uuid sinh mới mỗi lần).
 - Token trong `stats`/`tokens.jsonl` là **ước tính** (ký tự / 3, cùng hệ số `retrieve.py`; sai số ±25%), không phải số đếm của tokenizer thật.
+- **Đợt 2 — job đồng hồ** (`ClockJobs`): job cron production của Tình báo (danh sách `CLOCK_JOBS`, lịch lấy từ `gh.biz.jobs()` — không chép tay) chạy
+  với `gh.refinery.clock` = giờ dữ liệu: trước mỗi tin (tới giờ gửi gốc), trước mỗi lượt, mỗi vòng xả, một lượt ở `now` cuối, rồi chạy tiếp tới bản
+  tin sáng kế (07:30). Mỗi mốc = một phút cron; job dày (mỗi phút/5 phút) gộp về mốc đầu + cuối khoảng, job giờ cố định chạy đủ từng lần; thêm mốc
+  ở `next_eval_at` của tín hiệu mở và ít nhất mỗi 60 phút khi im lặng (`GH_STEP_TICK_MAX_MIN`). Mỗi mốc gọi `ensure_scanned` (quét luật (a) của scheduler) trước.
+  Sau mỗi lượt pipeline: hook `market_signal_capture` (cầu → `catalog_match`). Khác production có chủ ý: `intel_fraud` bỏ trần 240 s/30 s và (d1)/(d2)
+  bỏ trần 60–90 s (agent chậm hơn model); `mem_heat_weekly` truyền `now=clock.now()`. Không chạy: giao tin (`intel_delivery`), watchdog/backup, duty,
+  `mem_consolidate`. Giới hạn: `received_at`/`created_at`/`now()` SQL vẫn là giờ thật (cửa sổ 30 phút theo `received_at` của lừa đảo/raw_tail ⇒ "mọi
+  tin đã vào"; cài mới: chưa cổng nào qua M1, tuổi cài đặt = 0 ⇒ cổng không bypass ra 🔴 bóng `digest_top`). `--intel-settings '{"ramp_gates": "push"}'` để đo chế độ đẩy thật.
+- **signals.json `gkb-step-signals/2`** (giữ nguyên mọi khoá của /1): `alerts` (trạng thái cuối lúc bản tin sáng: kind, level, gate/candidate, delivery,
+  lane, status, case_key, reasons, pushed_at, `raw_ids` = mã tin dữ liệu, `first_seen_at` giờ dữ liệu), `alerts_end` (lúc `now` cuối replay),
+  `pushed`/`shadow_pushed` (🔴 đã đẩy / 🔴 bóng, giờ dữ liệu), `alert_events` (mới/đổi mức-ngăn-trạng thái), `digest` (`digest.build` owner, only_new=false),
+  `clock` (số mốc, số lần mỗi job chạy, lỗi job, giây). Tệp gốc trong run_dir: `alerts_log.jsonl`, `alerts_end.json`, `alerts_final.json`, `digest.json`.
 - Dọn: `dropdb gh_step_<tên>` (DB lần chạy); khuôn `gh_step_tpl_*` giữ làm cache.

@@ -5,6 +5,9 @@
 Dùng CHÍNH pipeline thật: replay (L6: đồng hồ giả, chế độ nén, Seeder, IngestSink) → `raw.events` thật → `GroupTurns.ensure_scanned/plan/turn`
 (L2) → `extract.analyze_group_detailed` (L3: dựng prompt, parse hợp đồng, thử lại MỘT lần kèm lỗi) → `verify.check` → ghi `mem.facts`,
 `clean.meaning_units`… Chỗ DUY NHẤT khác: `ModelRouter.generate` được thay bằng "model ngoài" — ghi prompt ra tệp, chờ agent ghi câu trả lời.
+Đợt 2 (`ClockJobs`): job cron production của Tình báo (`intel_reeval` + `raw_tail`, lừa đảo, generic, lời hứa, câu hỏi, heat, catalog…, lịch lấy từ
+`gh.biz.jobs()`) chạy theo GIỜ DỮ LIỆU (`gh.refinery.clock` giả) giữa các tin/lượt và tới bản tin sáng sau `now` cuối; hook `market_signal_capture`
+sau mỗi lượt; `export` (gkb-step-signals/2) thêm `biz.alerts`, lịch sử 🔴 đã đẩy, bản tin (`digest.build`, owner).
 
     python3 scripts/intel-eval/step.py init   --dataset .../kb1 --out /tmp/run/kb1 [--contexts ctx.json] [--auto-stub]
     python3 scripts/intel-eval/step.py next   --out /tmp/run/kb1            # in đường dẫn prompt.json đang chờ, hoặc DONE
@@ -180,13 +183,14 @@ def cmd_init(a: argparse.Namespace) -> None:
     create_run_db(pg, tpl, db, force=True if a.force else False)
     prepare_redis(redis_url, force=a.force)
     cfg = {"dataset": str(Path(a.dataset).resolve()), "contexts": contexts, "pg": pg, "db": db, "redis": redis_url, "auto": "stub" if a.auto_stub else None,
+           "intel_settings": json.loads(a.intel_settings) if a.intel_settings else None,
            "profile_items": sum(len(v) for v in ctx["profile"].values()), "context_groups": sorted(contexts or ctx["groups"])}
     write_json(run / "config.json", cfg)
     write_state(run, status="starting", seq=0, pending=None, turn=0, calls=0, error=None, dataset=ds.name, messages=len(ds.msgs))
     log = open(run / "daemon.log", "ab")  # noqa: SIM115
-    p = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "_serve", "--out", str(run)], stdout=log, stderr=subprocess.STDOUT,  # noqa: S603
-                         stdin=subprocess.DEVNULL, start_new_session=True, close_fds=True)
-    write_state(run, pid=p.pid)
+    proc = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "_serve", "--out", str(run)], stdout=log, stderr=subprocess.STDOUT,  # noqa: S603
+                            stdin=subprocess.DEVNULL, start_new_session=True, close_fds=True)
+    write_state(run, pid=proc.pid)
     st = wait_state(run, lambda s: s["status"] in ("waiting", "done", "error"))
     plan = st.get("plan", {})
     print(json.dumps({"run_dir": str(run), "db": db, "status": st["status"], "dataset": ds.name, "messages": len(ds.msgs),
@@ -234,7 +238,9 @@ def cmd_submit(a: argparse.Namespace) -> None:
     (d / "answer.submitted").write_text(datetime.now().isoformat(), encoding="utf-8")
     st = wait_state(run, lambda s: (s["seq"] > seq and s["status"] != "running") or s["status"] in ("done", "error"))
     turn = int(re.match(r"turn_(\d+)", d.name).group(1))  # type: ignore[union-attr]
-    if st["status"] == "waiting" and st.get("turn") == turn:
+    if st["status"] == "waiting" and st.get("turn") == turn and st.get("kind") != "retry":
+        print(json.dumps({"turn": turn, "result": f"cùng lượt, lần gọi model kế ({st.get('kind')})"}, ensure_ascii=False))
+    elif st["status"] == "waiting" and st.get("turn") == turn:
         print(json.dumps({"turn": turn, "result": "gọi lại (câu trả lời trước sai hợp đồng hoặc JSON hỏng; pipeline thật thử lại MỘT lần kèm lỗi)"}, ensure_ascii=False))
     else:
         last = st.get("last") or {}
@@ -262,13 +268,13 @@ class Exchange:
         """Báo một lượt pipeline mới sắp chạy; số lượt (`turn_NNN`) chỉ tăng khi lượt đó THỰC SỰ gọi model (lần gọi đầu tiên)."""
         self.thread_ref, self.fresh = thread_ref, True
 
-    async def ask(self, purpose: str, messages: list[Any]) -> str:
+    async def ask(self, purpose: str, messages: list[Any], hint: str | None = None) -> str:
         if self.fresh:
             self.turn, self.k, self.fresh = self.turn + 1, 0, False
         self.k += 1
         self.calls += 1
         tail = purpose.rsplit(".", 1)[-1]
-        kind = tail if tail in ("d1", "d2") else ("extract" if self.k == 1 else "retry")
+        kind = hint or (tail if tail in ("d1", "d2") else ("extract" if self.k == 1 else "retry"))
         name = f"turn_{self.turn:03d}" + ("" if self.k == 1 else f"_c{self.k}")
         d = self.run / name
         d.mkdir(parents=True, exist_ok=True)
@@ -316,6 +322,7 @@ class PipelineAnalyzer:
         self.r, self.org, self.ex, self.captured = refinery, org, ex, captured
         self.records: list[dict[str, Any]] = []
         self.tk: dict[str, str] = {}
+        self.clock: ClockJobs | None = None        # Đợt 2: job đồng hồ + hook sau lượt (None ⇒ chỉ pipeline trích xuất như Đợt 1)
 
     async def thread_key(self, gk: str) -> str | None:
         if gk not in self.tk:
@@ -360,7 +367,10 @@ class PipelineAnalyzer:
         bản ghi riêng (`self.records`) để chấm; phần còn quá 60 tin / lượt lỗi hợp đồng (đang lùi nhịp) chờ lượt kế hoạch sau của luồng."""
         from gh.refinery import clock
 
-        clock.freeze(datetime.fromisoformat(inp.now_iso))      # giờ của lượt theo DỮ LIỆU (replay: clockplan.data_time), không phải đồng hồ nén
+        now = datetime.fromisoformat(inp.now_iso)
+        clock.freeze(now)                                      # giờ của lượt theo DỮ LIỆU (replay: clockplan.data_time), không phải đồng hồ nén
+        if self.clock is not None:
+            await self.clock.advance(now)                      # job đồng hồ tới hạn trước lượt (tin đến sau mốc cuối đã được job thấy ở IngestSink)
         tk = await self.thread_key(inp.thread_ref.removeprefix("g:"))
         empty = {"contract_version": "brain-out/1", "thread_ref": inp.thread_ref, "units": [], "facts_proposed": []}
         usage_sum = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0, "model": "agent-step", "calls": 0}
@@ -392,6 +402,7 @@ class PipelineAnalyzer:
 
     async def _pipeline_turn(self, ts: Any, reason: str, thread_ref: str, plan_turn: int | None, thread: str | None) -> dict[str, Any] | None:
         """MỘT lượt pipeline thật (`GroupTurns.turn`) + bản ghi để chấm; None nếu lượt không gọi model."""
+        from gh.refinery import clock
         from gh.refinery.runner import RunStats
 
         g = self.r.groups
@@ -399,7 +410,10 @@ class PipelineAnalyzer:
         self.ex.begin_turn(thread_ref)
         calls0 = self.ex.calls
         run_id = await self.r.start_run(self.org, "step")
-        await g.turn(self.org, RunStats(run_id, "step"), ts, reason)
+        st = RunStats(run_id, "step")
+        await g.turn(self.org, st, ts, reason)
+        if self.clock is not None:
+            await self.clock.after_turn(st.unit_ids, run_id, clock.now())
         if not self.captured:
             return None
         kind, v, w = self.captured[-1]
@@ -437,6 +451,8 @@ class PipelineAnalyzer:
         n = 0
         for _ in range(max_rounds):
             clock.advance(RETRY_BACKOFF + timedelta(minutes=1))
+            if self.clock is not None:
+                await self.clock.advance(clock.now())
             while await g.ensure_scanned(self.org) >= 500:
                 pass
             progressed = False
@@ -469,11 +485,303 @@ def write_error(info: dict[str, Any]) -> str | None:
     return ",".join(f"{c}×{codes.count(c)}" for c in dict.fromkeys(codes))
 
 
+# ─── Đợt 2: job đồng hồ + hook sau lượt, chạy theo GIỜ DỮ LIỆU ─────────────────────────────────────────────────────────
+
+#: Job định kỳ của production (`gh.biz.jobs()`, đúng lịch cron đã đăng ký) đổi `biz.alerts` hoặc nuôi tín hiệu. Lịch lấy từ registry, không chép tay.
+CLOCK_JOBS = ("intel_reeval", "intel_project_disputes", "intel_fraud", "intel_generic", "intel_promises", "intel_questions_clock",
+              "intel_questions_scan", "intel_units", "intel_outcomes", "intel_heat_scan", "matches_recompute", "mem_heat_weekly")
+#: Job `intel_*` của production CỐ Ý không chạy (lý do bên dưới). Mọi job `intel_*` khác PHẢI nằm trong CLOCK_JOBS — test canh
+#: (`test_every_intel_job_is_run_or_explicitly_skipped`) để job mới (vd `intel_units` của T12) không bị bỏ sót im lặng.
+SKIPPED_INTEL_JOBS = ("intel_delivery", "intel_weekly")
+#: Không chạy (lý do): intel_delivery/shadow_pack/intel_weekly — chỉ xếp tin ra kênh/đo lường, không đổi mức (🔴 đã đẩy đọc ở `pushed_at`);
+#: watchdog_tick/backup_flush — giám sát bridge thật (harness không có nhịp tim ⇒ báo động giả); duty — agent trực kênh (gọi model, ngoài Tình báo);
+#: mem_consolidate — cửa sổ giờ + `now()` của SQL theo giờ thật. Hook sau sàng lọc: chỉ `market_signal_capture` (cầu → `catalog_match`).
+POST_TURN_HOOKS = ("market_signal_capture",)
+TICK_MAX_GAP = timedelta(minutes=int(os.environ.get("GH_STEP_TICK_MAX_MIN", "60")))   # im lặng dài: vẫn có mốc ít nhất mỗi chừng này
+MAX_TICKS_PER_ADVANCE = 3000
+ALERT_COLS = ("code", "kind", "level", "gate", "candidate", "delivery", "lane", "status", "case_key", "pushed_at", "would_push_at")
+CronSpec = dict[str, Any]
+
+
+def _floor_min(t: datetime) -> datetime:
+    return t.replace(second=0, microsecond=0)
+
+
+def _cron_ok(spec: CronSpec, t: datetime) -> bool:
+    """`t` (giờ VN, đúng phút) khớp lịch arq `spec` (hour/minute/day/month/weekday; khoá khác — timeout… — bỏ qua)."""
+    vals = {"month": t.month, "day": t.day, "weekday": t.weekday(), "hour": t.hour, "minute": t.minute}
+    for k, v in vals.items():
+        want = spec.get(k)
+        if want is not None and v not in ({want} if isinstance(want, int) else want):
+            return False
+    return True
+
+
+def fire_times(spec: CronSpec, after: datetime, upto: datetime, tz: Any) -> list[datetime]:
+    """Các phút cron của `spec` trong (after, upto] — theo giờ `tz` của worker (VN), trả giờ có múi."""
+    out: list[datetime] = []
+    h = _floor_min(after.astimezone(tz)).replace(minute=0)
+    end = upto.astimezone(tz)
+    hours, minutes = spec.get("hour"), spec.get("minute")
+    mins = sorted({minutes} if isinstance(minutes, int) else (minutes if minutes is not None else range(60)))
+    while h <= end:
+        if hours is None or h.hour in ({hours} if isinstance(hours, int) else hours):
+            for m in mins:
+                x = h.replace(minute=m)
+                if after < x <= end and _cron_ok(spec, x):
+                    out.append(x)
+        h += timedelta(hours=1)
+    return out
+
+
+class ClockJobs:
+    """Thay arq cron + bus hook của worker production trong harness: đồng hồ là `gh.refinery.clock` (giả, GH_ENV=eval) đặt theo GIỜ DỮ LIỆU.
+
+    `advance(to)` chạy mọi job (CLOCK_JOBS) có phút cron rơi vào (con trỏ, to] — mỗi "mốc" (tick) là một phút cron: job dày (mỗi phút/5 phút)
+    gộp về mốc đầu + mốc cuối của khoảng, job theo giờ cố định (heat 01:55/07:55/19:55…) chạy ĐỦ từng lần; thêm mốc tại `next_eval_at` của tín
+    hiệu mở (hạn tới ⇒ leo cổng/quá cửa sổ) và ít nhất mỗi `TICK_MAX_GAP` khi im lặng dài. Mỗi mốc: `ensure_scanned` (bước quét luật (a) của
+    scheduler, chạy mỗi 5 s ở production) rồi các job tới hạn theo thứ tự registry. Ghi `alerts_log.jsonl` (đổi mức/ngăn/trạng thái, 🔴 đã đẩy)."""
+
+    def __init__(self, run: Path, refinery: Any, org: Any, ex: Exchange, ctx: dict[str, Any], start: datetime) -> None:
+        from gh import biz  # noqa: PLC0415
+        from gh.worker import WORKER_TZ  # noqa: PLC0415
+
+        self.run, self.r, self.org, self.ex, self.ctx, self.tz = run, refinery, org, ex, ctx, WORKER_TZ
+        reg = {fn.__name__: (fn, kw) for fn, kw in biz.jobs()}
+        missing = [n for n in CLOCK_JOBS if n not in reg]
+        if missing:
+            raise SystemExit(f"step: registry job production không còn {missing} — cập nhật CLOCK_JOBS")
+        override = {"intel_fraud": _intel_fraud_untimed, "mem_heat_weekly": _mem_heat_at_clock}
+        self.jobs: list[tuple[str, Any, CronSpec]] = [(n, override.get(n, reg[n][0]), reg[n][1]) for n in reg if n in CLOCK_JOBS]
+        self.hooks = [h for h in biz.hooks() if h.name in POST_TURN_HOOKS]
+        self.cursor = start
+        self.ticks = 0
+        self.deadline_ticks = 0
+        self.runs: dict[str, int] = {n: 0 for n, _, _ in self.jobs}
+        self.results: dict[str, dict[str, int]] = {n: {} for n, _, _ in self.jobs}
+        self.errors: dict[str, int] = {}
+        self.secs: dict[str, float] = {"ensure_scanned": 0.0, "observe": 0.0}
+        self.hook_runs = 0
+        self.seen: dict[str, dict[str, Any]] = {}
+        self.first_seen: dict[str, str] = {}
+        self.log = open(run / "alerts_log.jsonl", "a", encoding="utf-8")  # noqa: SIM115
+
+    async def _next_eval(self) -> datetime | None:
+        from sqlalchemy import text  # noqa: PLC0415
+
+        async with self.r.sm() as db:
+            return (await db.execute(text("SELECT min(next_eval_at) FROM biz.alerts WHERE org_id = :o AND status IN ('open', 'acknowledged') "
+                                          "AND next_eval_at > :c"), {"o": self.org, "c": self.cursor})).scalar_one_or_none()
+
+    async def advance(self, to: datetime) -> None:
+        from gh.refinery import clock  # noqa: PLC0415
+
+        static: set[datetime] = set()
+        for _name, _fn, spec in self.jobs:
+            fs = fire_times(spec, self.cursor, to, self.tz)
+            if fs:
+                static.update(fs if spec.get("hour") is not None else (fs[0], fs[-1]))
+        g = _floor_min(self.cursor + TICK_MAX_GAP)
+        while g < to:
+            static.add(g)
+            g += TICK_MAX_GAP
+        queue = sorted(static)
+        n = 0
+        while n < MAX_TICKS_PER_ADVANCE:
+            queue = [q for q in queue if q > self.cursor]
+            d = await self._next_eval()
+            dl = None
+            if d is not None:
+                dl = _floor_min(d) + (timedelta(minutes=1) if d != _floor_min(d) else timedelta(0))
+                if not self.cursor < dl <= to or (queue and queue[0] <= dl):
+                    dl = None
+            if dl is None and not queue:
+                break
+            t = dl if dl is not None else queue[0]
+            self.deadline_ticks += dl is not None
+            await self.tick(t)
+            n += 1
+        else:
+            print(f"step: cảnh báo — quá {MAX_TICKS_PER_ADVANCE} mốc đồng hồ trong một khoảng tới {to.isoformat()}; bỏ phần còn lại", flush=True)
+        clock.freeze(to)
+        if to > self.cursor:
+            self.cursor = to
+
+    async def tick(self, t: datetime) -> None:
+        import traceback  # noqa: PLC0415
+
+        from gh.refinery import clock  # noqa: PLC0415
+
+        clock.freeze(t)
+        t0 = time.monotonic()
+        while await self.r.groups.ensure_scanned(self.org) >= 500:
+            pass
+        self.secs["ensure_scanned"] += time.monotonic() - t0
+        for name, fn, spec in self.jobs:
+            if not fire_times(spec, self.cursor, t, self.tz):
+                continue
+            self.ex.begin_turn(f"job:{name}")
+            calls0 = self.ex.calls
+            t0 = time.monotonic()
+            try:
+                res = await fn(self.ctx)
+            except Exception as e:  # noqa: BLE001 — như worker: job lỗi được ghi + đếm, lượt đồng hồ chạy tiếp (traceback ra daemon.log)
+                self.errors[name] = self.errors.get(name, 0) + 1
+                print(f"step: job {name} lỗi lúc {t.isoformat()}: {type(e).__name__}\n{traceback.format_exc()[-2000:]}", flush=True)
+                continue
+            finally:
+                self.secs[name] = self.secs.get(name, 0.0) + time.monotonic() - t0
+            self.runs[name] += 1
+            for k, v in (res or {}).items() if isinstance(res, dict) else ():
+                if isinstance(v, int):
+                    self.results[name][k] = self.results[name].get(k, 0) + v
+            if self.ex.calls > calls0:
+                write_state(self.run, last={"turn": self.ex.turn, "job": name, "calls": self.ex.calls - calls0, "at": t.astimezone(self.tz).isoformat()})
+        self.cursor = t
+        self.ticks += 1
+        t0 = time.monotonic()
+        await self.observe(t, "tick")
+        self.secs["observe"] += time.monotonic() - t0
+        if self.ticks % 50 == 0:
+            write_state(self.run, clock={**self.stats(), "at": t.astimezone(self.tz).isoformat()})
+
+    async def after_turn(self, unit_ids: list[str], run_id: Any, at: datetime) -> None:
+        """Hook sau sàng lọc (`gh.clean.ready` ở production, mỗi lượt có đơn vị mới) — gọi đúng `Hook.fn` đã đăng ký."""
+        from gh.biz.hooks import HookCtx  # noqa: PLC0415
+
+        if unit_ids:
+            import uuid  # noqa: PLC0415
+
+            hc = HookCtx(org_id=self.org, unit_ids=[uuid.UUID(u) for u in unit_ids], run_id=run_id, sm=self.r.sm, redis=self.r.redis,
+                         bus=self.r.bus, router=self.ctx["model_router"])
+            for h in self.hooks:
+                await h.fn(hc)
+                self.hook_runs += 1
+        await self.observe(at, "turn")
+
+    async def observe(self, at: datetime, why: str) -> None:
+        """So trạng thái `biz.alerts` với lần trước: tín hiệu mới / đổi mức-ngăn-trạng thái / 🔴 đẩy (pushed_at mới) / 🔴 bóng (would_push_at mới)."""
+        ats = at.astimezone(self.tz).isoformat()            # mọi mốc trong nhật ký theo giờ VN
+        for a in await alerts_snapshot(self.r.sm, self.org):
+            old = self.seen.get(a["id"])
+            if old is None:
+                self.first_seen[a["id"]] = ats
+            ch = {k: [old.get(k) if old else None, a[k]] for k in ALERT_COLS if old is None or old.get(k) != a[k]}
+            if not ch:
+                continue
+            self.seen[a["id"]] = a
+            ev = {"at": ats, "by": why, "id": a["id"], "code": a["code"], "kind": a["kind"], "event": "new" if old is None else "change", "changes": ch}
+            self.log.write(json.dumps(ev, ensure_ascii=False) + "\n")
+            for col, typ in (("pushed_at", "push"), ("would_push_at", "shadow_push")):
+                if a[col] and (old is None or old.get(col) != a[col]):
+                    self.log.write(json.dumps({"at": ats, "by": why, "id": a["id"], "code": a["code"], "kind": a["kind"], "event": typ,
+                                               "level": a["level"], "gate": a["gate"], "case_key": a["case_key"], col: a[col]}, ensure_ascii=False) + "\n")
+        self.log.flush()
+
+    def stats(self) -> dict[str, Any]:
+        return {"ticks": self.ticks, "deadline_ticks": self.deadline_ticks, "tick_max_gap_min": TICK_MAX_GAP.total_seconds() / 60,
+                "job_runs": self.runs, "job_results": self.results, "job_errors": self.errors, "hook_runs": self.hook_runs,
+                "seconds": {k: round(v, 1) for k, v in self.secs.items()},
+                "jobs": [n for n, _, _ in self.jobs], "hooks": [h.name for h in self.hooks]}
+
+
+async def _intel_fraud_untimed(ctx: dict[str, Any]) -> dict[str, int]:
+    """= `fraud.intel_fraud` (cùng `run_and_commit`, cùng caller (d2) `refinery.safety` tier strong, cùng `RedisSeen`) — chỉ bỏ hai trần thời gian
+    THẬT (wait_for 240 s / lượt, 30 s quét): agent đóng vai model trả lời (d2) chậm hơn model thật, trần đó sẽ huỷ lượt và quét lại vô hạn."""
+    from sqlalchemy import text  # noqa: PLC0415
+
+    from gh.biz.intel.detectors import fraud  # noqa: PLC0415
+    from gh.db import sessionmaker  # noqa: PLC0415
+    from gh.refinery import budget, clock  # noqa: PLC0415
+    from gh.refinery.extract import router_caller  # noqa: PLC0415
+
+    now, sm = clock.now(), sessionmaker()
+    seen = fraud.RedisSeen(ctx["redis_bus"])
+    res = {"signals": 0}
+    async with sm() as db:
+        orgs = (await db.execute(text("SELECT id FROM core.organizations"))).scalars().all()
+    for org in orgs:
+        call = router_caller(ctx["model_router"], org, purpose=budget.PURPOSE[budget.KIND_SAFETY], tier="strong")
+        async with sm() as db:
+            res["signals"] += len(await fraud.run_and_commit(db, org, now, call=call, seen=seen, budget_s=1e9))
+    return res
+
+
+async def _mem_heat_at_clock(ctx: dict[str, Any]) -> dict[str, int]:
+    """= `job_heat.mem_heat_weekly`, nhưng truyền `now=clock.now()` cho `heat.rebuild` (job production để `now` mặc định = giờ thật)."""
+    from sqlalchemy import text  # noqa: PLC0415
+
+    from gh.biz.mem import heat  # noqa: PLC0415
+    from gh.db import sessionmaker  # noqa: PLC0415
+    from gh.refinery import clock  # noqa: PLC0415
+
+    sm = sessionmaker()
+    tot: dict[str, int] = {}
+    async with sm() as db:
+        orgs = (await db.execute(text("SELECT id FROM core.organizations"))).scalars().all()
+    for org in orgs:
+        async with sm() as db:
+            for k, v in (await heat.rebuild(db, org, now=clock.now())).items():
+                tot[k] = tot.get(k, 0) + v
+            await db.commit()
+    return tot
+
+
+async def alerts_snapshot(sm: Any, org: Any) -> list[dict[str, Any]]:
+    """Trạng thái `biz.alerts` (mọi loại, cả system) — id tin gốc để thô (uuid), `export` đổi sang mã tin dữ liệu qua idmap."""
+    from sqlalchemy import text  # noqa: PLC0415
+
+    async with sm() as db:
+        rows = (await db.execute(text("""
+            SELECT a.id, a.code, a.alert_type, a.kind, a.detector, a.level, a.gate, a.candidate, a.delivery, a.lane, a.status, a.case_key,
+                   a.privacy, a.reasons, a.title, a.pushed_at, a.would_push_at, a.capped_at, a.due_at, a.next_eval_at, a.raw_event_ids,
+                   a.evidence, a.thread_key, g.external_id AS group_ext
+            FROM biz.alerts a LEFT JOIN core.groups g ON g.id = a.group_id WHERE a.org_id = :o ORDER BY a.created_at, a.code"""), {"o": org})).all()
+
+    def iso(v: Any) -> str | None:
+        return v.isoformat() if v is not None else None
+
+    out = []
+    for r in rows:
+        ev = r.evidence if isinstance(r.evidence, list) else []
+        out.append({"id": str(r.id), "code": r.code, "alert_type": r.alert_type, "kind": r.kind, "detector": r.detector, "level": r.level, "gate": r.gate,
+                    "candidate": r.candidate, "delivery": r.delivery, "lane": r.lane, "status": r.status, "case_key": r.case_key, "privacy": r.privacy,
+                    "reasons": list(r.reasons or []), "title": r.title, "pushed_at": iso(r.pushed_at), "would_push_at": iso(r.would_push_at),
+                    "capped_at": iso(r.capped_at), "due_at": iso(r.due_at), "next_eval_at": iso(r.next_eval_at), "thread_key": r.thread_key,
+                    "group": r.group_ext, "raw_event_ids": [str(x) for x in (r.raw_event_ids or [])],
+                    "evidence_types": sorted({str(e.get("type")) for e in ev if isinstance(e, dict)})})
+    return out
+
+
+async def build_digest(sm: Any, org: Any, at: datetime) -> dict[str, Any]:
+    """`digest.build(audience='owner', only_new=False)` lúc `at` (harness không chạy `intel_delivery` nên không có dấu `digest_at` của bản tin trước)."""
+    from dataclasses import asdict  # noqa: PLC0415
+
+    from gh.biz.intel import digest  # noqa: PLC0415
+
+    async with sm() as db:
+        d = await digest.build(db, org, at, audience="owner", only_new=False)
+    return {"at": at.isoformat(), "audience": "owner", "only_new": False, "counts": d.counts, "system_question": d.system_question,
+            "items": [{k: v for k, v in asdict(it).items() if k != "state_at_build"} for it in d.items]}
+
+
+def next_morning_digest(after: datetime, tz: Any) -> datetime:
+    """Mốc bản tin sáng (khung 07:30 của `gen.briefing.SLOTS`) đầu tiên SAU `after`."""
+    from gh.gen.briefing import SLOTS  # noqa: PLC0415
+
+    h, m, _ = SLOTS[0]
+    loc = after.astimezone(tz)
+    at = loc.replace(hour=h, minute=m, second=0, microsecond=0)
+    return at if at > loc else at + timedelta(days=1)
+
+
 class IngestSink:
-    """Đổ tin vào `raw.events` bằng `ingest_message` thật (đúng nơi bus `gh.bridge.inbound` cuối cùng đi tới)."""
+    """Đổ tin vào `raw.events` bằng `ingest_message` thật (đúng nơi bus `gh.bridge.inbound` cuối cùng đi tới). Có `clock` (ClockJobs) ⇒ trước mỗi
+    tin, chạy job đồng hồ tới giờ gửi GỐC của tin (job ở mốc T chỉ thấy tin đã đến trước T, như production)."""
 
     def __init__(self, org: Any) -> None:
         self.org, self.inserted, self.dropped = org, 0, 0
+        self.clock: ClockJobs | None = None
 
     async def emit(self, stream: str, type: str, payload: dict[str, Any]) -> None:
         from gh.data import ingest  # noqa: PLC0415
@@ -481,6 +789,10 @@ class IngestSink:
 
         if (stream, type) != ("gh.bridge.inbound", "message"):
             return
+        if self.clock is not None and payload.get("occurred_at"):
+            at = datetime.fromisoformat(str(payload["occurred_at"]).replace("Z", "+00:00"))
+            if at.tzinfo is not None and at > self.clock.cursor:
+                await self.clock.advance(at)
         async with sessionmaker()() as db:
             eid = await ingest.ingest_message(db, self.org, payload)
             await db.commit()
@@ -543,7 +855,7 @@ async def serve(run: Path) -> None:
         """Thay `ModelRouter` (chỉ phần pipeline gọi): `generate` = hỏi agent; `embed` = không có embedding."""
 
         async def generate(self, org_id: Any, *, agent_key: str, purpose: str, messages: list[Any], json_mode: bool = True, temperature: float = 0.2, **kw: Any) -> Any:
-            text_ = await ex.ask(purpose, messages)
+            text_ = await ex.ask(purpose, messages, "d2" if kw.get("tier") == "strong" else None)   # (d2) của job lừa đảo: tier strong
             chars = sum(len(m.content) for m in messages)
             return Routed(text_, "agent", "agent-step", est_tokens(chars), est_tokens(len(text_)))
 
@@ -562,6 +874,10 @@ async def serve(run: Path) -> None:
         return a
 
     runner.AGY_BACKGROUND_TIMEOUT_S = 1e9          # `turn()` đặt wait_for theo hằng này: chờ agent không được coi là hết giờ model
+    from gh.refinery import crosscheck  # noqa: PLC0415
+
+    crosscheck.D1_TIMEOUT_S = 1e9                   # (d1)/(d2) cũng chờ agent, không coi là hết giờ (model thật: 90 s / 60 s ⇒ fail-high)
+    crosscheck.verify_strong.__kwdefaults__["time_limit_s"] = 1e9  # type: ignore[index]
     app = create_app()
     try:
         async with app.router.lifespan_context(app):
@@ -569,18 +885,36 @@ async def serve(run: Path) -> None:
                 await do_setup(client)
                 org = app.state.org_id
                 sm = sessionmaker()
+                if cfg.get("intel_settings"):
+                    async with sm() as db:
+                        await db.execute(text("""UPDATE core.organizations SET settings = jsonb_set(COALESCE(settings, '{}'::jsonb), '{intel}',
+                                                 COALESCE(settings -> 'intel', '{}'::jsonb) || CAST(:j AS jsonb)) WHERE id = :o"""),
+                                         {"j": json.dumps(cfg["intel_settings"]), "o": org})
+                        await db.commit()
                 # nhóm có sẵn TRƯỚC khi seed nhãn bối cảnh (replay chỉ gán nhãn cho nhóm đã có tin tới lượt đầu)
                 async with sm() as db:
                     ch = await channel_row(db, org, "zalo")
                     for gk, gname in ds.groups.items():
                         await upsert_group(db, org, ch, gk, gname)
                     await db.commit()
-                refinery = runner.Refinery(sm, app.state.redis, ExchangeRouter(), app.state.bus, time_budget_s=1e9, part_worst_s=0.0, analyzer=capture)  # type: ignore[arg-type]
+                router = ExchangeRouter()
+                refinery = runner.Refinery(sm, app.state.redis, router, app.state.bus, time_budget_s=1e9, part_worst_s=0.0, analyzer=capture)  # type: ignore[arg-type]
                 an = PipelineAnalyzer(refinery, org, ex, captured)
                 sink = IngestSink(org)
+                cj = ClockJobs(run, refinery, org, ex, {"redis": app.state.redis, "redis_bus": app.state.redis, "model_router": router}, start=ds.msgs[0].ts)
+                an.clock = sink.clock = cj
                 summary = await replay.run_replay(ds, run, mode="compressed", analyzer=an, sink=sink, seeder=StepSeeder(client), contexts=cfg["contexts"],
                                                   engine=replay.FakeMediaEngine(), label="step")
                 summary["drain_turns"] = await an.drain()
+                # Đợt 2: lượt đồng hồ cuối ở `now` cuối của replay, rồi chạy tiếp tới bản tin sáng kế (07:30) và dựng bản tin như Sếp sẽ thấy
+                end = clock.now()
+                await cj.advance(end)
+                write_json(run / "alerts_end.json", {"at": end.astimezone(cj.tz).isoformat(), "alerts": await alerts_snapshot(sm, org)})
+                dig_at = next_morning_digest(end, cj.tz)
+                await cj.advance(dig_at)
+                write_json(run / "digest.json", await build_digest(sm, org, dig_at))
+                write_json(run / "alerts_final.json", {"at": dig_at.isoformat(), "alerts": await alerts_snapshot(sm, org), "first_seen": cj.first_seen})
+                summary["clock"] = cj.stats()
                 # idmap: m_<uuid kho thô> → id dữ liệu (bộ chấm chuẩn hoá id trích dẫn qua đây)
                 idmap = json.loads((run / "idmap.json").read_text(encoding="utf-8"))
                 async with sm() as db:
@@ -590,7 +924,7 @@ async def serve(run: Path) -> None:
                 write_records(run, an.records, idmap, summary)
                 clock.reset()
                 write_state(run, status="done", pending=None, ingested=sink.inserted, dropped=sink.dropped, plan_turns=summary["turns_n"], pipeline_turns=len(an.records),
-                            seeded=summary["seeded"], _daemon=True)
+                            seeded=summary["seeded"], clock=summary["clock"], _daemon=True)
     except BaseException as e:
         write_state(run, status="error", error=f"{type(e).__name__}: {str(e)[:400]}", _daemon=True)
         raise
@@ -630,6 +964,28 @@ def db_counts(cfg: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def export_dot2(run: Path, idmap: dict[str, str]) -> dict[str, Any]:
+    """Phần Đợt 2 của signals.json, từ tệp tiến trình nền ghi (`alerts_final.json`, `alerts_end.json`, `alerts_log.jsonl`, `digest.json`). Mã tin gốc
+    (`raw_event_ids` uuid kho thô) đổi về mã tin dữ liệu qua idmap (`m_<uuid>`). Lần chạy cũ (chưa có Đợt 2) ⇒ danh sách rỗng."""
+    def load(name: str) -> Any:
+        p = run / name
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+
+    final, end = load("alerts_final.json") or {}, load("alerts_end.json") or {}
+    first = final.get("first_seen") or {}
+
+    def m(a: dict[str, Any]) -> dict[str, Any]:
+        return {**{k: v for k, v in a.items() if k != "raw_event_ids"}, "raw_ids": [idmap.get(f"m_{x}", x) for x in a["raw_event_ids"]],
+                "first_seen_at": first.get(a["id"])}
+
+    log = [json.loads(x) for x in (run / "alerts_log.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()] if (run / "alerts_log.jsonl").exists() else []
+    st = read_state(run)
+    return {"alerts_at": final.get("at"), "alerts": [m(a) for a in final.get("alerts") or []],
+            "alerts_end_at": end.get("at"), "alerts_end": [m(a) for a in end.get("alerts") or []],
+            "pushed": [e for e in log if e["event"] == "push"], "shadow_pushed": [e for e in log if e["event"] == "shadow_push"],
+            "alert_events": [e for e in log if e["event"] in ("new", "change")], "digest": load("digest.json"), "clock": st.get("clock")}
+
+
 def cmd_export(a: argparse.Namespace) -> None:
     import gkb_score  # noqa: PLC0415
 
@@ -645,11 +1001,14 @@ def cmd_export(a: argparse.Namespace) -> None:
     def js(u: dict[str, Any]) -> dict[str, Any]:
         return {k: (sorted(v) if isinstance(v, set) else v) for k, v in u.items()}
 
-    write_json(out, {"format": "gkb-step-signals/1", "dataset": st.get("dataset"), "turns": r.turns, "contract_errors": r.contract_errors,
+    d2 = export_dot2(run, r.idmap)
+    write_json(out, {"format": "gkb-step-signals/2", "dataset": st.get("dataset"), "turns": r.turns, "contract_errors": r.contract_errors,
                      "contract_retries": r.contract_retries, "turn_errors": r.turn_errors, "write_errors": r.write_errors, "unreadable": r.unreadable,
-                     "units": [js(u) for u in r.units], "facts": [js(f) for f in r.facts], "db": db_counts(cfg),
-                     "note": "định dạng nội bộ của gkb_score.Run; chấm đầy đủ: gkb_score.py --runs <run_dir> --key <đáp án ngoài repo>"})
-    print(f"đã ghi {out}: {len(r.units)} đơn vị ({len(r.signals)} có kind), {len(r.facts)} sự thật đề xuất, {r.contract_errors} lỗi hợp đồng, {len(r.write_errors)} lượt lỗi ghi / {r.turns} lượt")
+                     "units": [js(u) for u in r.units], "facts": [js(f) for f in r.facts], "db": db_counts(cfg), **d2, "intel_settings": cfg.get("intel_settings"),
+                     "note": "units/facts/turns…: định dạng nội bộ của gkb_score.Run (như /1); /2 thêm alerts (cuối, lúc bản tin sáng), alerts_end (cuối replay), "
+                             "pushed/shadow_pushed (🔴 đã đẩy / 🔴 bóng, giờ dữ liệu), alert_events, digest, clock. Chấm: gkb_score.py --runs <run_dir> --key <đáp án ngoài repo>"})
+    print(f"đã ghi {out}: {len(r.units)} đơn vị ({len(r.signals)} có kind), {len(r.facts)} sự thật đề xuất, {r.contract_errors} lỗi hợp đồng, {len(r.write_errors)} lượt lỗi ghi / {r.turns} lượt; "
+          f"{len(d2['alerts'])} biz.alerts, {len(d2['pushed'])} lần 🔴 đẩy, {len(d2['shadow_pushed'])} 🔴 bóng, bản tin {len((d2['digest'] or {}).get('items') or [])} mục")
     db = db_counts(cfg)
     stuck = db["event_state"].get("pending", 0) + db["event_state"].get("processing", 0)
     if r.write_errors or stuck:
@@ -680,6 +1039,7 @@ def _cli() -> None:
     p.add_argument("--out", required=True)
     p.add_argument("--contexts", help="JSON {Gk: mã bối cảnh}; bỏ trống ⇒ chỉ nhãn trong context.md (nếu có), không có ⇒ bối cảnh chưa xác nhận")
     p.add_argument("--auto-stub", action="store_true", help="tự trả brain-out rỗng hợp lệ (đếm lượt/kích thước prompt, kiểm hạ tầng); KHÔNG dùng để chấm")
+    p.add_argument("--intel-settings", help='JSON gộp vào settings.intel của tổ chức sau setup (vd \'{"ramp_gates": "push"}\'); mặc định = cài mới')
     p.add_argument("--pg", default=os.environ.get("GH_STEP_PG", PG_DEFAULT))
     p.add_argument("--redis-url", default=os.environ.get("GH_STEP_REDIS", REDIS_DEFAULT))
     p.add_argument("--force", action="store_true")
@@ -696,6 +1056,9 @@ def _cli() -> None:
     p.add_argument("--out", required=True)
     a = ap.parse_args()
     if a.cmd == "_serve":
+        import logging  # noqa: PLC0415
+
+        logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(name)s %(levelname)s %(message)s")   # lỗi job production (tự bắt + log) hiện ở daemon.log
         asyncio.run(serve(Path(a.out).resolve()))
     else:
         {"init": cmd_init, "next": cmd_next, "submit": cmd_submit, "export": cmd_export, "stats": cmd_stats}[a.cmd](a)
