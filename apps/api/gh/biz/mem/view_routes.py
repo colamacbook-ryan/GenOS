@@ -1,5 +1,5 @@
 # ruff: noqa: E501
-"""Các đường xem mặt "Tôi" / Đối tượng / Bằng chứng (L4, spec §7.2b, Đợt 1; bỏ `/overview`, `/contexts/{code}` = 2d/T9).
+"""Các đường xem mặt "Tôi" / Đối tượng / Bằng chứng (L4, spec §7.2b, Đợt 1; `/overview`, `/contexts/{code}`, `/me/profile/items/{id}/signals` thêm ở v0.1.76 gói T9, logic ở `overview.py`).
 `gh.biz.mem.routes` gắn router này vào router chung của cụm. Chỉ API — giao diện là Bước 2 (INT-17/18).
 
 Quyền: Owner. MỌI truy vấn kèm `org_id` của người gọi (id đoán của tổ chức khác ⇒ 404, không lộ). Mọi response có `breadcrumb`;
@@ -20,8 +20,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gh.auth import service
-from gh.auth.deps import require_owner
-from gh.biz.mem import disputes, entities, facts, heat, profile, profile_read
+from gh.auth.deps import require, require_owner
+from gh.biz.mem import disputes, entities, facts, heat, overview, profile, profile_read
 from gh.chassis import actionlog
 from gh.data.common import RAW_SELECT, iso, outbound_to_sql, raw_item
 from gh.db import DB
@@ -453,3 +453,23 @@ async def get_evidence_raw(raw_id: uuid.UUID, around: int = Query(5, ge=0, le=20
             "context": {"before": before, "after": after}, "facts": list(fact_refs.values()),
             "fact_ids": list(fact_refs), "evidence_ids": [h["evidence_id"] for h in hl if h.get("evidence_id")], "hidden_pin_n": hidden,
             "occurred_at": iso(own.occurred_at)}
+
+
+# ─── Toàn cảnh / Bối cảnh / tín hiệu của mục Hồ sơ (T9) ─────────────────────
+# LƯU Ý đường dẫn: spec ghi `GET /overview`, nhưng `/overview` đã là Tổng quan Console (`biz/queue/routes.py`, quyền `overview.read`) ⇒ Toàn cảnh đặt ở `/overview/map`.
+# Quyền đọc như `/signals` (`queue.read`, mọi vai): vai khác Owner chỉ thấy nhóm theo `view_scope`, không thấy `console_pin`, không có vòng người.
+
+@router.get("/overview/map")
+async def get_overview(weeks: int = Query(default=8, ge=1, le=heat.MAX_WEEKS), user: service.CurrentUser = Depends(require("queue.read")),
+                       db: AsyncSession = DB) -> dict[str, Any]:
+    return await overview.overview(db, user, weeks)
+
+
+@router.get("/contexts/{code}")
+async def get_context(code: str, user: service.CurrentUser = Depends(require("queue.read")), db: AsyncSession = DB) -> dict[str, Any]:
+    return await overview.context_detail(db, user, code)
+
+
+@router.get("/me/profile/items/{fact_id}/signals")
+async def get_profile_item_signals(fact_id: uuid.UUID, user: service.CurrentUser = Depends(require_owner), db: AsyncSession = DB) -> dict[str, Any]:
+    return await overview.profile_item_signals(db, user, fact_id)
