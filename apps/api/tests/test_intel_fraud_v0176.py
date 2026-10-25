@@ -272,8 +272,11 @@ async def test_fraud_flood_401_then_scam_caught_first_run(db: AsyncSession) -> N
         await fraud.run_and_commit(db, w.org, w.now + timedelta(minutes=2), seen=store)
     finally:
         mp.undo()
-    # chỉ những tin CHƯA quét ở lượt đầu (402 tin trong cửa sổ + tin lịch sử của helper − 400 đã quét), mỗi tin một lần
-    assert sorted(calls) == ["chào cả nhà", "hàng về chưa anh 0", "hàng về chưa anh 1"], calls
+    # chỉ những tin CHƯA quét ở lượt đầu (402 tin trong cửa sổ + tin lịch sử của helper − 400 đã quét), mỗi tin một lần.
+    # 401 tin cùng received_at (một transaction) ⇒ thứ tự hoà do s.id (uuid) quyết, nên 2 tin "hàng về" còn lại là bất kỳ —
+    # chỉ khẳng định bất biến: đúng 3 tin, không tin nào quét hai lần, có tin lịch sử.
+    assert len(calls) == 3 and len(set(calls)) == 3 and "chào cả nhà" in calls, calls
+    assert sum(c.startswith("hàng về chưa anh ") for c in calls) == 2, calls
 
 
 async def test_fraud_run_budget_leaves_rest_for_next_run(db: AsyncSession) -> None:
