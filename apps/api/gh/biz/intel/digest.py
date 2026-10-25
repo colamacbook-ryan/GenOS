@@ -47,6 +47,7 @@ class DigestItem:
     ask_id: str | None = None
     ask_code: str | None = None
     cluster_ids: list[str] = field(default_factory=list)
+    state_at_build: dict[str, tuple[str, str]] = field(default_factory=dict)   # id -> (level, delivery) lúc dựng; `mark_sent` đối chiếu
 
 
 @dataclass
@@ -105,11 +106,13 @@ async def build(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, audience:
             clusters.setdefault(r.kind, []).append(r)
             continue
         items.append(DigestItem(len(items) + 1, str(r.id), r.code, r.kind, r.level, r.delivery, r.gate, r.candidate, r.title,
-                                _facts_line(r), _quote(r.evidence), str(r.ask_id) if r.ask_id else None, r.ask_code))
+                                _facts_line(r), _quote(r.evidence), str(r.ask_id) if r.ask_id else None, r.ask_code,
+                                state_at_build={str(r.id): (r.level, r.delivery)}))
     for kind, rs in sorted(clusters.items()):
         first = rs[0]
         items.append(DigestItem(len(items) + 1, str(first.id), first.code, kind, "grey", "digest_low", None, None,
-                                f"{len(rs)} mục {kind.replace('_', ' ')}", [], None, cluster_ids=[str(x.id) for x in rs]))
+                                f"{len(rs)} mục {kind.replace('_', ' ')}", [], None, cluster_ids=[str(x.id) for x in rs],
+                                state_at_build={str(x.id): (x.level, x.delivery) for x in rs}))
     q = (await db.execute(text("""SELECT id, code, summary FROM ops.asks WHERE org_id = :o AND state = 'open'
                                   AND source IN ('profile', 'identity', 'question') AND (expires_at IS NULL OR expires_at > :now)
                                   ORDER BY created_at LIMIT 1"""), {"o": org_id, "now": now})).one_or_none()
@@ -120,10 +123,15 @@ async def build(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, audience:
 
 
 async def mark_sent(db: AsyncSession, org_id: uuid.UUID, digest: Digest, now: datetime) -> int:
-    """Sau khi kênh gửi xong: đánh dấu `digest_at` (mục không lặp lại ở bản tin sau)."""
-    ids = [uuid.UUID(i) for it in digest.items for i in (it.cluster_ids or [it.signal_id])]
-    if not ids:
+    """Sau khi kênh gửi xong: đánh dấu `digest_at` (mục không lặp lại ở bản tin sau). CHỈ đánh dấu mục còn đúng mức/phân phối như lúc dựng —
+    mục đã đổi giữa lúc dựng và lúc gửi xong (vd leo lên nhóm đầu bản tin) chưa được Sếp thấy đúng dạng mới ⇒ để bản tin kế."""
+    state = {i: st for it in digest.items for i, st in it.state_at_build.items()}
+    if not state:
         return 0
-    r = await db.execute(text("UPDATE biz.alerts SET digest_at = :now WHERE org_id = :o AND id = ANY(:ids) AND digest_at IS NULL"),
-                         {"now": now, "o": org_id, "ids": ids})
+    ids = list(state)
+    r = await db.execute(text("""
+        UPDATE biz.alerts a SET digest_at = :now
+        FROM unnest(CAST(:ids AS uuid[]), CAST(:lv AS text[]), CAST(:dl AS text[])) AS v(id, level, delivery)
+        WHERE a.org_id = :o AND a.id = v.id AND a.level = v.level AND a.delivery = v.delivery AND a.digest_at IS NULL"""),
+        {"now": now, "o": org_id, "ids": [uuid.UUID(i) for i in ids], "lv": [state[i][0] for i in ids], "dl": [state[i][1] for i in ids]})
     return int(r.rowcount)  # type: ignore[attr-defined]

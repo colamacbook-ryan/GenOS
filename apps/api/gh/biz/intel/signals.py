@@ -32,14 +32,17 @@ from typing import Any, Literal
 import orjson
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gh.biz.intel import asks, levels, mutes
 from gh.biz.mem import contexts, profile_read
 from gh.chassis import actionlog
 from gh.data.common import mask_text
+from gh.refinery import clock
 
 log = logging.getLogger("gh.intel.signals")
+ERROR_BACKOFF = timedelta(minutes=15)                       # dòng lỗi của job đồng hồ được thử lại sau chừng này
 TERMINAL = ("resolved", "broken", "expired", "dismissed")
 OPEN = ("open", "acknowledged")
 INTEL_KINDS = levels.KINDS
@@ -190,13 +193,17 @@ def _quiet_of(s: dict[str, Any], org_id: uuid.UUID) -> levels.QuietHours:
     return levels.QuietHours(start=_hhmm(s, "quiet_start", "22:00", org_id), end=_hhmm(s, "quiet_end", "07:00", org_id))
 
 
-async def cap_lock(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> date:
+async def cap_lock(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, wait: bool = True) -> date | None:
     """Khoá tư vấn giữ chỗ trần theo (org, ngày-trần), giữ tới hết transaction. THỨ TỰ KHOÁ (chống deadlock): mọi đường ghi tín hiệu
     (`upsert`/`transition`/`feedback`/`relane`/`reevaluate_due`) lấy khoá này TRƯỚC mọi khoá dòng `biz.alerts` và trước `core.next_code`.
-    Lấy lại trong cùng transaction là no-op (khoá tư vấn tái nhập)."""
+    Lấy lại trong cùng transaction là no-op (khoá tư vấn tái nhập). `wait=False` (job đồng hồ): không lấy được ngay ⇒ trả None, không chờ."""
     day = cap_day(now, await _quiet(db, org_id))
-    await db.execute(text("SELECT pg_advisory_xact_lock(hashtext('intel_cap:' || :o || ':' || :d))"), {"o": str(org_id), "d": day.isoformat()})
-    return day
+    key = {"o": str(org_id), "d": day.isoformat()}
+    if wait:
+        await db.execute(text("SELECT pg_advisory_xact_lock(hashtext('intel_cap:' || :o || ':' || :d))"), key)
+        return day
+    got = (await db.execute(text("SELECT pg_try_advisory_xact_lock(hashtext('intel_cap:' || :o || ':' || :d))"), key)).scalar_one()
+    return day if got else None
 
 
 async def delivery_state(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, exclude: uuid.UUID | None = None) -> levels.DeliveryState:
@@ -339,6 +346,52 @@ def _weak_key(ck: str | None) -> bool:
     return ck.split(":", 1)[1].startswith(("raw|", "anon|"))
 
 
+def _merge_row_input(row: Any, li: levels.SignalIn) -> levels.SignalIn:
+    """Hợp đầu vào mức của dòng đã có (fail-high) và giữ riêng tư DÍNH."""
+    if row is not None and row.level_input is not None:
+        li = merge_level_input(levels.SignalIn.model_validate(row.level_input), li)   # HỢP, không thay thế (fail-high)
+    if row is not None and row.privacy == "console_pin":
+        li = li.model_copy(update={"privacy": "console_pin"})   # riêng tư DÍNH: chặt nhất thắng, gộp không bao giờ hạ (§8.1)
+    return li
+
+
+async def _open_weak_rows(db: AsyncSession, org_id: uuid.UUID, kind: str, keep_id: uuid.UUID, raw_ids: list[str]) -> list[Any]:
+    """Dòng đang mở mang khoá DỰ PHÒNG (raw|/anon|) có tin gốc trùng `raw_ids`, trừ dòng chính."""
+    if not raw_ids:
+        return []
+    rows = (await db.execute(text("""
+        SELECT id, case_key, evidence, fact_ids, raw_event_ids, privacy, level_input, case_state FROM biz.alerts
+        WHERE org_id = :o AND kind = :k AND status IN ('open', 'acknowledged') AND id <> :i
+          AND raw_event_ids && CAST(:raw AS uuid[]) ORDER BY created_at, id FOR UPDATE"""),
+        {"o": org_id, "k": kind, "i": keep_id, "raw": raw_ids})).all()
+    return [r for r in rows if _weak_key(r.case_key)]
+
+
+async def _absorb_weak(db: AsyncSession, w: Any, into: uuid.UUID, now: datetime) -> None:
+    """Đóng dòng raw|/anon| đã gộp vào dòng mạnh; thẻ đã đẩy (`case_state`) chuyển sang dòng mạnh để KHÔNG leo thang 🔴 lần hai."""
+    if w.case_state:
+        await db.execute(text("""UPDATE biz.alerts SET case_state = CAST(:w AS jsonb) || COALESCE(case_state, '{}'::jsonb)
+                                 WHERE id = :i"""), {"w": orjson.dumps(w.case_state).decode(), "i": into})
+    await db.execute(text("""UPDATE biz.alerts SET status = 'dismissed', delivery = 'none', next_eval_at = NULL, resolved_at = :now,
+                                    updated_at = now() WHERE id = :i"""), {"now": now, "i": w.id})
+
+
+async def _update_row(db: AsyncSession, row_id: uuid.UUID, common: dict[str, Any], merged: list[dict[str, Any]], li: levels.SignalIn,
+                      inp: UpsertIn, raw_ids: list[str], new_ck: str | None) -> None:
+    await db.execute(text("""
+        UPDATE biz.alerts SET case_key = COALESCE(:nck, case_key),
+               evidence = CAST(:ev AS jsonb), evidence_n = :n, summary = COALESCE(:su, summary),
+               suggested_action = COALESCE(:sa, suggested_action), level_input = CAST(:li AS jsonb),
+               fact_ids = ARRAY(SELECT DISTINCT unnest(fact_ids || CAST(:fi AS uuid[]))),
+               raw_event_ids = ARRAY(SELECT DISTINCT unnest(raw_event_ids || CAST(:raw AS uuid[]))),
+               owner_fact_ids = CAST(:of AS uuid[]), facts = facts || CAST(:fx AS jsonb), due_at = COALESCE(:due, due_at),
+               privacy = CASE WHEN privacy = 'console_pin' OR :pv = 'console_pin' THEN 'console_pin' ELSE 'chat_ok' END,
+               personnel_related = personnel_related OR :pv = 'console_pin',
+               expires_at = GREATEST(expires_at, :ex), detector_version = COALESCE(:dv, detector_version), updated_at = now()
+        WHERE id = :i"""), {**common, "ev": orjson.dumps(merged).decode(), "n": len(merged), "fi": inp.fact_ids, "raw": raw_ids,
+                             "pv": li.privacy, "i": row_id, "nck": new_ck})
+
+
 async def upsert(db: AsyncSession, org_id: uuid.UUID, inp: UpsertIn, now: datetime) -> Signal:
     if inp.kind not in INTEL_KINDS + NON_INTEL_KINDS:
         raise SignalError(f"loại tín hiệu không hợp lệ: {inp.kind}")
@@ -353,15 +406,19 @@ async def upsert(db: AsyncSession, org_id: uuid.UUID, inp: UpsertIn, now: dateti
     li = inp.level_input.model_copy(update={"kind": inp.kind})
     await cap_lock(db, org_id, now)                        # khoá trần TRƯỚC khoá dòng / next_code (F1)
     row = (await db.execute(text("""
-        SELECT id, case_key, evidence, fact_ids, raw_event_ids, privacy, level_input FROM biz.alerts
+        SELECT id, case_key, evidence, fact_ids, raw_event_ids, privacy, level_input, case_state FROM biz.alerts
         WHERE org_id = :o AND kind = :k AND status IN ('open', 'acknowledged')
           AND (case_key = :ck OR (cardinality(CAST(:raw AS uuid[])) > 0 AND raw_event_ids && CAST(:raw AS uuid[])))
         ORDER BY (case_key = :ck) DESC, created_at LIMIT 1 FOR UPDATE"""),
         {"o": org_id, "k": inp.kind, "ck": inp.case_key, "raw": raw_ids})).one_or_none()
-    if row is not None and row.level_input is not None:
-        li = merge_level_input(levels.SignalIn.model_validate(row.level_input), li)   # HỢP, không thay thế (fail-high)
-    if row is not None and row.privacy == "console_pin":
-        li = li.model_copy(update={"privacy": "console_pin"})   # riêng tư DÍNH: chặt nhất thắng, gộp không bao giờ hạ (§8.1)
+    absorbed: list[Any] = []                               # dòng raw|/anon| cùng tin gốc bị gộp vào dòng chính (một vụ một 🔴)
+    if row is not None and not _weak_key(row.case_key):
+        absorbed = await _open_weak_rows(db, org_id, inp.kind, row.id, raw_ids)
+    for w in absorbed:
+        ev = _merge_evidence(list(w.evidence or []), ev)
+        raw_ids = list(dict.fromkeys([*raw_ids, *(str(x) for x in w.raw_event_ids)]))
+        li = _merge_row_input(w, li)
+    li = _merge_row_input(row, li)
     level_input = li.model_dump(mode="json")
     expires = inp.expires_at or (now + timedelta(days=DEFAULT_TTL.get(inp.kind, 7)))
     common = {"su": inp.summary, "sa": inp.suggested_action, "li": orjson.dumps(level_input).decode(),
@@ -373,19 +430,29 @@ async def upsert(db: AsyncSession, org_id: uuid.UUID, inp: UpsertIn, now: dateti
         # Vụ đang mang khoá DỰ PHÒNG (raw|/anon| — đường nhanh) mà tin mới có khoá mạnh (STK, mạo danh…) ⇒ nâng khoá: tin sau cùng vụ
         # tìm thấy vụ theo khoá mạnh, không đẻ tín hiệu thứ hai/🔴 thứ hai (F2). Đã khoá trần ⇒ không ai chen INSERT cùng khoá mạnh.
         new_ck = inp.case_key if (row.case_key != inp.case_key and _weak_key(row.case_key) and not _weak_key(inp.case_key)) else None
-        await db.execute(text("""
-            UPDATE biz.alerts SET case_key = COALESCE(:nck, case_key),
-                   evidence = CAST(:ev AS jsonb), evidence_n = :n, summary = COALESCE(:su, summary),
-                   suggested_action = COALESCE(:sa, suggested_action), level_input = CAST(:li AS jsonb),
-                   fact_ids = ARRAY(SELECT DISTINCT unnest(fact_ids || CAST(:fi AS uuid[]))),
-                   raw_event_ids = ARRAY(SELECT DISTINCT unnest(raw_event_ids || CAST(:raw AS uuid[]))),
-                   owner_fact_ids = CAST(:of AS uuid[]), facts = facts || CAST(:fx AS jsonb), due_at = COALESCE(:due, due_at),
-                   privacy = CASE WHEN privacy = 'console_pin' OR :pv = 'console_pin' THEN 'console_pin' ELSE 'chat_ok' END,
-                   personnel_related = personnel_related OR :pv = 'console_pin',
-                   expires_at = GREATEST(expires_at, :ex), detector_version = COALESCE(:dv, detector_version), updated_at = now()
-            WHERE id = :i"""), {**common, "ev": orjson.dumps(merged).decode(), "n": len(merged), "fi": inp.fact_ids, "raw": raw_ids,
-                                 "pv": li.privacy, "i": row.id, "nck": new_ck})
         sid = row.id
+        try:
+            async with db.begin_nested():                  # savepoint: va chạm khoá mạnh không làm hỏng cả transaction
+                await _update_row(db, row.id, common, merged, li, inp, raw_ids, new_ck)
+        except IntegrityError:
+            # Lượt khác (ngày-trần khác ⇒ khoá trần khác) vừa nâng một dòng khác lên đúng khoá mạnh này ⇒ gộp vào dòng mạnh đó, dòng
+            # raw| của ta bị gộp theo (không đẻ vụ thứ hai).
+            strong = (await db.execute(text("""
+                SELECT id, case_key, evidence, fact_ids, raw_event_ids, privacy, level_input, case_state FROM biz.alerts
+                WHERE org_id = :o AND kind = :k AND case_key = :ck AND status IN ('open', 'acknowledged') FOR UPDATE"""),
+                {"o": org_id, "k": inp.kind, "ck": inp.case_key})).one_or_none()
+            if strong is None:
+                raise
+            absorbed.append(row)
+            li = _merge_row_input(strong, li)
+            merged = _merge_evidence(list(strong.evidence or []), merged)
+            raw_ids = list(dict.fromkeys([*raw_ids, *(str(x) for x in strong.raw_event_ids)]))
+            sid = strong.id
+            common = {**common, "li": orjson.dumps(li.model_dump(mode="json")).decode()}
+            await _update_row(db, strong.id, common, merged, li, inp, raw_ids, None)
+        for w in absorbed:
+            if w.id != sid:
+                await _absorb_weak(db, w, sid, now)
     else:
         code = (await db.execute(text("SELECT core.next_code('ALR')"))).scalar_one()
         owner = (await db.execute(text("""
@@ -460,7 +527,9 @@ async def relane(db: AsyncSession, org_id: uuid.UUID, signal_id: uuid.UUID, now:
 
 async def _relane(db: AsyncSession, org_id: uuid.UUID, signal_id: uuid.UUID, now: datetime, *, skip_locked: bool) -> Signal | None:
     """`skip_locked` (job đồng hồ): dòng đang bị lượt khác khoá ⇒ bỏ qua (trả None), lượt đó tự relane khi xong."""
-    day = await cap_lock(db, org_id, now)                  # khoá trần TRƯỚC khoá dòng (F1)
+    day = await cap_lock(db, org_id, now, wait=not skip_locked)   # khoá trần TRƯỚC khoá dòng (F1); job đồng hồ không chờ
+    if day is None:
+        return None                                        # trần đang bị lượt khác giữ ⇒ để lượt sau
     r = (await db.execute(text(f"""
         SELECT id, kind, status, lane, level, gate, delivery, case_key, thread_key, group_id, detector, level_input, case_state, pushed_at,
                would_push_at, capped_at, cap_day, suggested_action, facts, expires_at, ask_id
@@ -687,6 +756,11 @@ async def reevaluate_due(db: AsyncSession, now: datetime, *, org_id: uuid.UUID |
         except Exception as e:                              # noqa: BLE001 — một dòng lỗi không chặn dòng/tổ chức khác
             await db.rollback()
             log.error("reevaluate_due: bỏ qua tín hiệu %s (org %s): %s", r.id, r.org_id, type(e).__name__)
+            # dời mốc (transaction riêng) để dòng hỏng không chiếm đầu hàng `limit` mỗi phút
+            await db.execute(text("""UPDATE biz.alerts SET next_eval_at = :t WHERE next_eval_at <= :now
+                                AND id IN (SELECT id FROM biz.alerts WHERE id = :i FOR UPDATE SKIP LOCKED)"""),
+                             {"t": now + ERROR_BACKOFF, "i": r.id, "now": now})
+            await db.commit()
             continue
         if sig is not None and (sig.level, sig.delivery) != (r.level, r.delivery):
             changed.append(sig)
@@ -802,7 +876,7 @@ LEGACY_MAP: dict[str, tuple[str, str, int | None, int | None, str | None]] = {
 async def record_legacy(db: AsyncSession, org_id: uuid.UUID, *, alert_type: str, priority: str, title: str, summary: str | None,
                         suggested: str | None = None, subject_type: str | None = None, subject_id: Any = None,
                         evidence: list[dict[str, Any]] | None = None, personnel_related: bool = False,
-                        recipient_user_id: uuid.UUID | None = None) -> uuid.UUID:
+                        recipient_user_id: uuid.UUID | None = None, now: datetime | None = None) -> uuid.UUID:
     """Ghi một cảnh báo của bên gọi CŨ (chỉ có `alert_type` + `priority`): loại/riêng tư/trục theo bảng §4B.2 (loại lạ ⇒ legacy,
     console_pin, low). Loại tình báo mà bằng chứng chưa `verified` ⇒ `legacy` (Console thấy, không lên Zalo — §8.1). Ngoài 6 cổng nên
     tối đa 🟠: 🟠 khi impact ≥ 2 và urgency ≥ 2, còn lại ⚪. Một nơi ghi mức/ngăn vẫn là module này."""
@@ -822,6 +896,7 @@ async def record_legacy(db: AsyncSession, org_id: uuid.UUID, *, alert_type: str,
         level, delivery = ("grey", "none")
     else:
         level, delivery = ("amber", "digest") if (imp or 0) >= 2 and (urg or 0) >= 2 else ("grey", "digest_low")
+    await cap_lock(db, org_id, now or clock.now())         # khoá trần TRƯỚC core.next_code (cùng thứ tự với upsert)
     code = (await db.execute(text("SELECT core.next_code('ALR')"))).scalar_one()
     return (await db.execute(text("""
         INSERT INTO biz.alerts (org_id, code, alert_type, priority, recipient_user_id, subject_type, subject_id, title, summary,

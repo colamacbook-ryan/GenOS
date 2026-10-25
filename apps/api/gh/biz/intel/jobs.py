@@ -58,8 +58,8 @@ async def intel_reeval(ctx: dict[str, Any]) -> dict[str, int]:
             async with sm() as db:
                 out["raw_tail"] += len(await raw_tail.tail(db, org, now))
                 await db.commit()
-        except Exception:                                       # noqa: BLE001 — một tổ chức lỗi không dừng tổ chức khác
-            log.exception("intel_reeval: raw_tail lỗi ở một tổ chức")
+        except Exception as e:                                  # noqa: BLE001 — một tổ chức lỗi không dừng tổ chức khác
+            log.error("intel_reeval: raw_tail lỗi ở một tổ chức: %s", type(e).__name__)   # không traceback/thông điệp (có thể chứa chuỗi kết nối)
             out["errors"] += 1
     return out
 
@@ -78,8 +78,8 @@ async def intel_project_disputes(ctx: dict[str, Any]) -> dict[str, int]:
             async with sm() as db:
                 n += len(await signals.project_disputes(db, org, clock.now()))
                 await db.commit()
-        except Exception:                                       # noqa: BLE001
-            log.exception("intel_project_disputes lỗi ở một tổ chức")
+        except Exception as e:                                  # noqa: BLE001
+            log.error("intel_project_disputes lỗi ở một tổ chức: %s", type(e).__name__)
     return {"projected": n}
 
 
