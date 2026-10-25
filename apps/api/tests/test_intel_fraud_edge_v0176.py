@@ -53,10 +53,17 @@ CASES: list[tuple[str, str, str, int | str, str | None]] = [
     ("otp7", "Mẹ em đã nhập OTP vào trang giả rồi", "staff", 10, "red"),
     ("otp8", "Em cung cấp mật khẩu với mã OTP cho nhân viên ngân hàng rồi chị ơi", "customer", 40, "red"),
     ("otp_dm", "anh ơi em lỡ gửi mã OTP cho người ta rồi", "staff", "dm", "red"),
+    # T12 (G-KB, câu thật của Ngọc): > 3 từ giữa "đăng nhập" và "rồi", rồi "gửi mã OTP … bảo nhập" ⇒ đang bị dụ nhập OTP ⇒ 🔴
+    ("otp_ngoc", "Chị ơi em đăng nhập bằng tài khoản portal đại lý của mình rồi, giờ nó gửi mã OTP về máy em bảo nhập để nhận quà, em nhập luôn nhé?",
+     "staff", 40, "red"),
+    ("otp_long_gap", "Em đã điền thông tin tài khoản đại lý vào trang đó rồi, nó hỏi thêm mã OTP", "staff", 40, "red"),
     # — suýt: CHƯA nhập / cảnh báo ⇒ không 🔴 —
     ("otp_no1", "Đừng ai nhập OTP vào link lạ nha mọi người", "staff", 40, None),
     ("otp_no2", "Em chưa nhập mã OTP, giờ làm sao chặn ạ", "staff", 40, None),
     ("otp_no3", "Ngân hàng không bao giờ hỏi mật khẩu đâu", "member", 40, None),
+    ("otp_no4", "Ngân hàng gửi mã OTP về máy, bảo không được nhập vào link lạ nhé mọi người", "staff", 40, None),
+    ("otp_no5", "Em chưa đăng nhập bằng tài khoản portal đại lý của mình đâu, nó gửi mã OTP về máy bảo nhập", "staff", 40, None),
+    ("otp_no6", "Hôm qua em đăng nhập app ngân hàng rồi, chuyển khoản tiền hàng cho NCC xong xuôi cả", "staff", 40, None),
     # — mạo danh NCC đòi đổi STK ⇒ 🔴 —
     ("imp1", "Anh ơi bên em đổi số tài khoản nhận tiền sang 0123456789 MB nhé, anh chuyển vào số này giúp em", "imp_ncc", 120, "red"),
     ("imp2", "Từ nay chuyển vào tài khoản mới 0123456789 Techcombank giúp em nha, số cũ bị khoá", "imp_ncc", 500, "red"),

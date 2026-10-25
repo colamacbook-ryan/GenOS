@@ -159,10 +159,14 @@ _QTY = re.compile(r"\b(\d{2,6})\s*(?:thung|bao|tan|cai|chiec|may|kg|container|co
                   r"cay|met|m2|m3|tui|phan|suat|ly|coc)\b")
 _UNC = re.compile(r"\b(?:giao dich thanh cong|chuyen khoan thanh cong|chuyen tien thanh cong|ck thanh cong|chuyen thanh cong|"
                   r"giao dich hoan tat|da chuyen khoan|da ck|da chuyen tien|transfer successful|successful transaction)\b")
+#: "đã điền/đăng nhập … rồi" (≤ 10 từ chen giữa — câu thật "đăng nhập bằng tài khoản portal đại lý của mình rồi", T12) rồi bị (a) hỏi/đòi
+#: OTP/thẻ/mật khẩu, hoặc (b) "gửi mã OTP … bảo nhập" (bị dụ nhập tiếp mã vừa về máy).
+_CRED_SECRET = r"(?:so the|ma the|ma otp|otp|mat khau|cvv|cvc|ma pin|pin|ma xac (?:thuc|minh|nhan)|thong tin the)\b"
 _CRED_FORM = re.compile(
-    rf"\b(?:dien|nhap|dang nhap|login|dien form|dien thong tin|khai)\b{_g(0, 3)}[\s,]+(?:roi|xong)\b.{{0,80}}?"
-    rf"\b(?:hoi|doi|yeu cau|bat|xin|can|bao nhap|bao dien|nhap tiep|dien tiep|hoi them|doi them)\b{_g(0, 4)}[\s,]+"
-    r"(?:so the|ma the|ma otp|otp|mat khau|cvv|cvc|ma pin|pin|ma xac (?:thuc|minh|nhan)|thong tin the)\b")
+    rf"\b(?:dien|nhap|dang nhap|login|dien form|dien thong tin|khai)\b{_g(0, 10)}[\s,]+(?:roi|xong)\b.{{0,80}}?"
+    rf"(?:\b(?:hoi|doi|yeu cau|bat|xin|can|bao nhap|bao dien|nhap tiep|dien tiep|hoi them|doi them)\b{_g(0, 4)}[\s,]+{_CRED_SECRET}"
+    rf"|\b(?:gui|nhan|ve|bao ve)\b{_g(0, 2)}[\s,]+(?:ma otp|otp|ma xac (?:thuc|minh|nhan)|ma pin)\b.{{0,60}}?"
+    r"\b(?:bao nhap|bat nhap|yeu cau nhap|doi nhap|bao dien|bat dien)\b)")
 _NEG = re.compile(r"\b(?:chua|khong|ko|dung|dung co|chang)\s+(?:dien|nhap|dang nhap|login|khai)\b")
 _ADDRESS = re.compile(r"(?i:(?<![\w])(anh|chị|chi|em|cô|co|chú|chu|bác|bac|ông|ong|bà|ba|sếp|sep|boss|a|c))\s+(\w+(?:\s+\w+)?)")
 #: Chủ ngữ ngôi thứ ba ("mẹ em đã nhập") — đồng bộ ý với `prefilter._THIRD` (L2).
