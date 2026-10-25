@@ -7,9 +7,10 @@ import logging
 import re
 import time
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import orjson
 from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -59,7 +60,8 @@ KIND_LABELS = {"nghia vu loi hua": "nghia_vu_loi_hua", "nghia vu": "nghia_vu_loi
                "thi truong thong tin": "thi_truong_thong_tin", "thi truong": "thi_truong_thong_tin"}
 USAGE_QUIET = "Cách dùng: «giờ yên lặng 22:00-07:00» (giờ bắt đầu - giờ kết thúc, giờ Việt Nam)."
 _FB = {"sai": "wrong", "dung": "correct", "khong can bao": "unimportant", "sot": "missed"}
-_FB_RX = re.compile(r"^(?:(sai|dung|khong can bao|sot) (\d{1,2})|(\d{1,2}) (sai|dung|khong can bao|sot))$")
+_FB_RX = re.compile(r"^(?:(sai|dung|khong can bao|sot) (\d{1,2})|(\d{1,2}) (sai|dung|khong can bao|sot))(?: #([a-z0-9]{4}))?$")
+STALE = timedelta(hours=48)
 _MUTE_RX = re.compile(r"^(?:tat|dung|ngung) bao (loai|nhom) (.+?)(?: nua)?$")
 _TIME_RX = re.compile(r"(\d{1,2})(?:[:h](\d{2})?)?")
 
@@ -81,6 +83,18 @@ def _hhmm(h: str, m: str | None) -> str | None:
     return f"{hh:02d}:{mm:02d}" if hh < 24 and mm < 60 else None
 
 
+MAX_QUIET_MIN = 12 * 60
+
+
+def _quiet_ok(start: str | None, end: str | None) -> bool:
+    """Giờ yên lặng đặt từ chat: > 0 và ≤ 12 giờ (kẻ chiếm tài khoản không đặt "yên lặng" gần cả ngày để bịt bản tin)."""
+    if not start or not end:
+        return False
+    a = int(start[:2]) * 60 + int(start[3:])
+    b = int(end[:2]) * 60 + int(end[3:])
+    return 0 < (b - a) % 1440 <= MAX_QUIET_MIN
+
+
 def parse_intel(raw: str) -> tuple[str, Any] | None:
     """Nhận diện lệnh tình báo; None ⇒ không phải (đi tiếp đường cũ). Hàm thuần."""
     raw = raw.strip()
@@ -96,7 +110,7 @@ def parse_intel(raw: str) -> tuple[str, Any] | None:
     f = _fold(raw)
     m = _FB_RX.match(f)
     if m:
-        return "feedback", (_FB[m.group(1) or m.group(4)], int(m.group(2) or m.group(3)))
+        return "feedback", (_FB[m.group(1) or m.group(4)], int(m.group(2) or m.group(3)), (m.group(5) or "").upper() or None)
     m = _MUTE_RX.match(f)
     if m:
         return "mute", (m.group(1), m.group(2))
@@ -106,24 +120,40 @@ def parse_intel(raw: str) -> tuple[str, Any] | None:
     if m:
         times = _TIME_RX.findall(m.group(1) or "")
         pair = [_hhmm(h, mm) for h, mm in times]
-        return "quiet", (pair[0], pair[1]) if len(pair) == 2 and all(pair) else None
-    if re.fullmatch(r"(?:che do bong|chay thu|chay that|bong)(?: bat| tat)?", f):
+        return "quiet", (pair[0], pair[1]) if len(pair) == 2 and all(pair) and _quiet_ok(pair[0], pair[1]) else None
+    if re.fullmatch(r"(?:che do bong|chay thu)(?: bat| tat)?|chay that", f):
         return "mode", None
     return None
 
 
-async def _last_refs(db: AsyncSession, org_id: uuid.UUID) -> list[dict[str, Any]]:
-    r = (await db.execute(text("""SELECT refs FROM ops.owner_outbox WHERE org_id = :o AND kind IN ('digest', 'alert', 'ask') AND sent_at IS NOT NULL
-                                  AND jsonb_array_length(refs) > 0 ORDER BY sent_at DESC, created_at DESC LIMIT 1"""), {"o": org_id})).scalar_one_or_none()
-    return [x for x in (r or []) if isinstance(x, dict)]
+async def _resolve_ref(db: AsyncSession, org_id: uuid.UUID, n: int, code: str | None) -> tuple[dict[str, Any] | None, str | None]:
+    """(ref, lỗi). Có `code` ⇒ đúng bản tin mang mã đó; không mã ⇒ bản tin gần nhất và CHỈ khi còn mới (≤ 48 giờ)."""
+    if code:
+        row = (await db.execute(text("""SELECT refs FROM ops.owner_outbox WHERE org_id = :o AND kind IN ('digest', 'alert', 'ask') AND sent_at IS NOT NULL
+                                        AND refs @> CAST(:c AS jsonb) ORDER BY sent_at DESC LIMIT 1"""),
+                                {"o": org_id, "c": orjson.dumps([{"code": code}]).decode()})).scalar_one_or_none()
+        if row is None:
+            return None, f"Em không thấy bản tin #{code}."
+    else:
+        r = (await db.execute(text("""SELECT refs, sent_at FROM ops.owner_outbox WHERE org_id = :o AND kind IN ('digest', 'alert', 'ask') AND sent_at IS NOT NULL
+                                      AND jsonb_array_length(refs) > 0 ORDER BY sent_at DESC, created_at DESC LIMIT 1"""), {"o": org_id})).one_or_none()
+        if r is None:
+            return None, NOT_FOUND_REF.format(n=n)
+        if clock.now() - r.sent_at > STALE:
+            return None, f"Bản tin gần nhất đã cũ (quá 48 giờ). Sếp nêu mã bản tin ở dòng đầu: «sai {n} #MÃ»."
+        row = r.refs
+    ref = next((x for x in row if isinstance(x, dict) and x.get("n") == n), None)
+    return ref, None if ref is not None else NOT_FOUND_REF.format(n=n)
 
 
-async def _feedback(db: AsyncSession, org_id: uuid.UUID, owner: Any, verdict: str, n: int) -> str:
-    ref = next((x for x in await _last_refs(db, org_id) if x.get("n") == n), None)
+async def _feedback(db: AsyncSession, org_id: uuid.UUID, owner: Any, verdict: str, n: int, code: str | None = None) -> str:
+    ref, err = await _resolve_ref(db, org_id, n, code)
     if ref is None:
-        return NOT_FOUND_REF.format(n=n)
-    if verdict == "missed" or not (ref.get("cluster_ids") or ref.get("signal_id")):
+        return err or NOT_FOUND_REF.format(n=n)
+    if not (ref.get("cluster_ids") or ref.get("signal_id")):
         return await _sample_item(db, org_id, owner, verdict, n, ref)
+    if verdict == "missed":
+        return f"Mục {n} là chuyện em đã báo rồi. Chuyện em bỏ sót Sếp nhắn «em sót: …» (kể lại hoặc dán tin) ạ."
     ids = [uuid.UUID(str(i)) for i in (ref.get("cluster_ids") or [ref.get("signal_id")]) if i]
     defensive = False
     for sid in ids:
@@ -174,9 +204,11 @@ async def _missed(db: AsyncSession, org_id: uuid.UUID, owner: Any, kind_word: st
 async def _correct(db: AsyncSession, org_id: uuid.UUID, owner: Any, n: int | None, value: str) -> str:
     if n is None or not value:
         return "Sếp nói rõ mục nào và đúng là gì: «sửa 2: <giá trị đúng>» (số mục theo bản tin gần nhất)."
-    ref = next((x for x in await _last_refs(db, org_id) if x.get("n") == n), None)
+    ref, err = await _resolve_ref(db, org_id, n, None)
     if ref is None:
-        return NOT_FOUND_REF.format(n=n)
+        return err or NOT_FOUND_REF.format(n=n)
+    if not ref.get("signal_id") and not ref.get("cluster_ids"):
+        return f"Mục {n} là mẫu kiểm tra, không có sự thật nào để sửa ạ."
     if ref.get("cluster_ids"):
         return "Mục này gộp nhiều chuyện — Sếp sửa trên Console (mặt «Tôi») giúp em."
     fids = (await db.execute(text("SELECT fact_ids FROM biz.alerts WHERE id = :i AND org_id = :o"),
@@ -212,8 +244,10 @@ async def _mute(db: AsyncSession, org_id: uuid.UUID, oi: Any, owner: Any, what: 
     g = await group_cmds._find_group(db, org_id, oi.channel, name)
     if g is None:
         return "Em không tìm thấy nhóm đó. Gõ /nhom để xem mã nhóm."
-    await mutes.create(db, org_id, scope_type="group", scope_value=str(g.id), source="chat", user_id=owner.id)
-    return f"Đã tắt báo nhóm «{str(g.name)[:60]}» từ giờ (lừa đảo/an toàn trong nhóm em vẫn báo)."
+    # Tắt báo cả NHÓM có thể làm im cả vụ lừa đảo/an toàn không "fail-high" trong nhóm ⇒ hạ phòng thủ: qua strong_confirm (fail-closed ⇒ Console,
+    # Nhật ký + báo kênh phụ). Chỉ nới khi `levels` bảo đảm mute qua chat không đụng lừa đảo/an toàn (T1).
+    res = await strong_confirm.require(db, org_id, "mute_defensive")
+    return "Tắt báo cả nhóm có thể làm em bỏ sót cảnh báo lừa đảo/an toàn trong nhóm đó. " + getattr(res, "reason", CONSOLE)
 
 
 async def intel_command(db: AsyncSession, org_id: uuid.UUID, oi: Any, cmd: tuple[str, Any]) -> str:
@@ -228,7 +262,7 @@ async def intel_command(db: AsyncSession, org_id: uuid.UUID, oi: Any, cmd: tuple
         return owner_core.no_owner_text(oi.channel)
     kind, arg = cmd
     if kind == "feedback":
-        return await _feedback(db, org_id, owner, arg[0], arg[1])
+        return await _feedback(db, org_id, owner, arg[0], arg[1], arg[2])
     if kind == "sot":
         return await _missed(db, org_id, owner, arg[0], arg[1])
     if kind == "sua":
@@ -282,7 +316,7 @@ async def build_reply(sm: async_sessionmaker[AsyncSession], redis: Redis, router
     ctx = owner_core.Context(sm=sm, redis=redis, router=router, org_id=org_id, owner_user_id=oi.owner_user_id, app=app,
                              hoi_fn=gen_chat.hoi)
     reply = await owner_core.handle(cmd, ctx)
-    text_ = delivery.display_mask(reply.plain())     # tool Owner giữ nguyên STK/SĐT tới model (Q9) ⇒ che hiển thị ở cửa ra Zalo (§8.1)
+    text_ = delivery.mask_reply(reply.plain())     # tool Owner giữ nguyên STK/SĐT tới model (Q9) ⇒ che hiển thị ở cửa ra Zalo (§8.1)
     if kind in ("start", "tro_giup", "help"):
         text_ += GROUP_HELP
     return text_

@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import logging
 import re
+import secrets
+import unicodedata
 import uuid
 from datetime import datetime, timedelta
 from typing import Any
@@ -26,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gh.biz.hooks import CronJob
 from gh.biz.intel import digest as digest_mod
+from gh.biz.intel import levels, mutes
 from gh.biz.intel.pipes import coverage, watchdog
 from gh.owner_channel import reports
 from gh.owner_channel.identity import CHANNELS, owner_ids
@@ -39,14 +42,17 @@ HINT = "Trả lời: «1 ok» · «2 sai» · «3 không cần báo» · «em s�
 QUIET_DAY = "Hôm nay yên, không có gì cần Sếp ra tay."
 URGENT_HEAD = "Điểm gấp trong ngày"
 MARK = {"red": "🔴", "amber": "🟠", "grey": "⚪"}
-_LONGNUM = re.compile(r"(?<!\d)(\d[\d .-]{6,22}\d)(?!\d)")
+_LONGNUM = re.compile(r"(?<!\d)(\d[\d .,/_\-]{6,22}\d)(?!\d)")
+_INVISIBLE = re.compile("[\u00ad\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]")
+_FRAME = re.compile(r"(——— nội dung ———\n.*?\n——— hết ———)", re.S)
+CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 _WS = re.compile(r"\s+")
 _MONEY_SHAPE = re.compile(r"[1-9]\d{0,2}(?:[., ]\d{3})+")           # nhóm hàng nghìn: 25.000.000
 _MONEY_AFTER = re.compile(r"\s{0,2}(?:đ|₫|vnd|vnđ|k|tr|triệu|tỷ|ty|nghìn|nghin|ngàn|ngan)(?![\w])", re.I)
 _MONEY_BEFORE = re.compile(r"(?:vnd|vnđ|₫|số tiền|giá)\s{0,2}[:=]?\s{0,2}$", re.I)
 _ACCOUNT_KW = re.compile(r"(?:stk|tk\b|tài khoản|tai khoan|số tk|so tk|thẻ|the\b|card|ngân hàng|ngan hang)", re.I)
 MONEY_MAX_DIGITS = 12
-_DATE = re.compile(r"\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[.-]\d{1,2}[.-]\d{4}")
+_DATE = re.compile(r"\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[./-]\d{1,2}[./-]\d{4}")
 
 
 def display_mask(s: str) -> str:
@@ -54,6 +60,8 @@ def display_mask(s: str) -> str:
     MẶC ĐỊNH CHE. Miễn che CHỈ khi đủ cả hai: (1) hình dạng số tiền (nhóm hàng nghìn «25.000.000», ≤ 12 chữ số, không bắt đầu bằng 0 / 84 /
     +84) và (2) ngữ cảnh tiền sát bên (đ/VND/k/tr/triệu/tỷ sau số, hoặc «giá / số tiền / VND» trước số) mà trong 30 ký tự phía trước KHÔNG có
     từ khoá tài khoản (STK, tài khoản, thẻ, card…). Hoặc là ngày tháng."""
+    s = _INVISIBLE.sub("", unicodedata.normalize("NFKC", s))      # chống lách: chữ số toàn chiều, NBSP/khoảng trắng lạ, ký tự vô hình
+
     def sub(m: re.Match[str]) -> str:
         raw = m.group(1)
         d = re.sub(r"\D", "", raw)
@@ -67,6 +75,18 @@ def display_mask(s: str) -> str:
         return raw if money else f"{d[:4]}…{d[-3:]}"
 
     return _LONGNUM.sub(sub, s)
+
+
+def mask_reply(s: str) -> str:
+    """Che hiển thị câu trả lời gửi Sếp, TRỪ khung nguyên văn đề xuất GỬI TIN («——— nội dung ———» … «——— hết ———»): Sếp phải thấy đủ từng
+    ký tự tin sẽ gửi (luật «OK riêng từng tin, nêu rõ nội dung»); phần còn lại vẫn che."""
+    parts = _FRAME.split(s)
+    return "".join(p if i % 2 else display_mask(p) for i, p in enumerate(parts))
+
+
+def new_code() -> str:
+    """Mã bản tin ngắn (4 ký tự, không I/O/0/1) — «sai 2 #K7F2» gắn đúng bản tin được tham chiếu."""
+    return "".join(secrets.choice(CODE_ALPHABET) for _ in range(4))
 
 
 def _one_line(s: str, limit: int) -> str:
@@ -107,9 +127,9 @@ def _item_line(it: digest_mod.DigestItem) -> str:
 
 
 def render(d: digest_mod.Digest, *, label: str, shadow: bool, hidden_console: int, coverage_line: str, recovered: list[str],
-           urgent_only: bool = False) -> tuple[str, list[digest_mod.DigestItem]]:
+           urgent_only: bool = False, code: str = "") -> tuple[str, list[digest_mod.DigestItem]]:
     """Bản chữ Zalo + các mục thật sự nằm trong tin (refs chỉ gồm các mục này, đúng số thứ tự)."""
-    head = (URGENT_HEAD if urgent_only else "Bản tin") + f" {label}" + (" [chạy thử]" if shadow else "")
+    head = (URGENT_HEAD if urgent_only else "Bản tin") + f" {label}" + (" [chạy thử]" if shadow else "") + (f" #{code}" if code else "")
     tail = [_one_line(r, 120) for r in recovered[:2]]
     if hidden_console:
         tail.append(f"Có {hidden_console} mục cần xem trên Console.")
@@ -146,7 +166,7 @@ async def _hidden_console(db: AsyncSession, org_id: uuid.UUID) -> int:
     return int((await db.execute(text("""
         SELECT count(*) FROM biz.alerts WHERE org_id = :o AND privacy = 'console_pin' AND status IN ('open', 'acknowledged')
           AND delivery = ANY(:d) AND kind NOT IN ('system', 'legacy') AND digest_at IS NULL"""),
-        {"o": org_id, "d": list(digest_mod.SHOWN)})).scalar_one())
+        {"o": org_id, "d": [*digest_mod.SHOWN, "push_now"]})).scalar_one())
 
 
 async def _since(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> datetime:
@@ -196,11 +216,13 @@ async def deliver_digest(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> 
     cov = await coverage.line(db, org_id, now)
     rec = [] if off else await watchdog.recovered_lines(db, org_id, since=await _since(db, org_id, now))
     hidden = 0 if off else await _hidden_console(db, org_id)
+    code = new_code()
     body, shown = render(d, label=slot.label, shadow=cfg.get("mode") == "shadow", hidden_console=hidden, coverage_line=cov,
-                         recovered=rec, urgent_only=off)
+                         recovered=rec, urgent_only=off, code=code)
     shown_d = digest_mod.Digest(d.org_id, d.at, shown, d.counts, d.system_question)
+    defensive = any((it.gate or it.candidate) in levels.BYPASS_GATES or it.kind in mutes.DEFENSIVE_KINDS for it in shown)
     ok = await reports.enqueue(db, org_id, ch, kind="digest", severity="important", text_=body, dedupe_key=f"digest:{slot.at.isoformat()}",
-                               refs=shown_d.refs(), now=now)
+                               refs=[{**r, "code": code} for r in shown_d.refs()], now=now, bypass_quiet=defensive or None)
     if not ok:
         return "locked" if await backup.is_locked(db, org_id) else "no_channel"
     await db.execute(text("""INSERT INTO ops.job_watermarks (org_id, job, last_at, updated_at) VALUES (:o, :j, :s, now())
@@ -213,23 +235,32 @@ async def deliver_digest(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> 
 # ─── 🔴 tức thì ──────────────────────────────────────────────────────────────
 
 async def push_alerts(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> int:
-    """Xếp tin 🔴 cho tín hiệu `push_now` chưa gửi (mỗi lần đẩy/leo thang một khoá riêng). Chỉ `chat_ok`; khoá trợ lý ⇒ 0. Trả số tin đã xếp."""
+    """Xếp tin 🔴 cho tín hiệu `push_now` chưa gửi (mỗi lần đẩy/leo thang một khoá riêng). `chat_ok` ⇒ tin 3 dòng; `console_pin` ⇒ tin 🔴 KHÔNG nội dung (mở Console); khoá trợ lý ⇒ 0. Trả số tin đã xếp."""
     ch = await _channel(db, org_id)
     if ch is None or await backup.is_locked(db, org_id):
         return 0
+    # Chỉ lấy dòng CHƯA có tin (khoá `signal:{id}:{pushed_at}`), mới nhất trước: không bị ≥ 10 tín hiệu cũ chiếm chỗ (bỏ đói).
     rows = (await db.execute(text("""
-        SELECT id, title, summary, suggested_action, evidence, pushed_at FROM biz.alerts
-        WHERE org_id = :o AND delivery = 'push_now' AND privacy = 'chat_ok' AND pushed_at IS NOT NULL
-          AND status IN ('open', 'acknowledged') AND kind NOT IN ('system', 'legacy') ORDER BY pushed_at LIMIT 10"""), {"o": org_id})).all()
+        SELECT a.id, a.title, a.summary, a.suggested_action, a.evidence, a.pushed_at, a.privacy FROM biz.alerts a
+        WHERE a.org_id = :o AND a.delivery = 'push_now' AND a.pushed_at IS NOT NULL
+          AND a.status IN ('open', 'acknowledged') AND a.kind NOT IN ('system', 'legacy')
+          AND NOT EXISTS (SELECT 1 FROM ops.owner_outbox x WHERE x.org_id = a.org_id AND x.channel_type = :c
+                            AND x.dedupe_key = 'signal:' || a.id::text || ':' || floor(extract(epoch FROM a.pushed_at))::bigint::text)
+        ORDER BY a.pushed_at DESC LIMIT 10"""), {"o": org_id, "c": ch})).all()
     n = 0
     for r in rows:
-        why = _one_line(r.summary or "Vụ này cần Sếp xem ngay.", 160)
-        quote = digest_mod._quote(r.evidence)
-        lines = [f"🔴 {_one_line(r.title, 110)}" + (f" «{_one_line(quote, QUOTE_MAX)}»" if quote else ""), f"Vì sao: {why}",
-                 f"Đề xuất: {_one_line(r.suggested_action or 'Sếp xem chi tiết trên Console.', 160)}", "Trả lời: «1 ok» · «1 sai» · «1 không cần báo»"]
-        refs = [{"n": 1, "signal_id": str(r.id), "ask_id": None, "ask_code": None, "cluster_ids": None}]
-        if await reports.enqueue(db, org_id, ch, kind="alert", severity="urgent", text_=display_mask("\n".join(lines)),
-                                 dedupe_key=f"signal:{r.id}:{int(r.pushed_at.timestamp())}", refs=refs, now=now, bypass_quiet=True):
+        code = new_code()
+        key = f"signal:{r.id}:{int(r.pushed_at.timestamp())}"
+        if r.privacy != "chat_ok":              # 🔴 riêng tư (console_pin): tin 🔴 KHÔNG nội dung, không refs
+            body, refs = f"🔴 Có 1 vụ khẩn cần xem trên Console (mã PIN). #{code}", []
+        else:
+            why = _one_line(r.summary or "Vụ này cần Sếp xem ngay.", 160)
+            quote = digest_mod._quote(r.evidence)
+            lines = [f"🔴 {_one_line(r.title, 110)}" + (f" «{_one_line(quote, QUOTE_MAX)}»" if quote else "") + f" #{code}", f"Vì sao: {why}",
+                     f"Đề xuất: {_one_line(r.suggested_action or 'Sếp xem chi tiết trên Console.', 160)}", "Trả lời: «1 ok» · «1 sai» · «1 không cần báo»"]
+            body = display_mask("\n".join(lines))
+            refs = [{"n": 1, "signal_id": str(r.id), "ask_id": None, "ask_code": None, "cluster_ids": None, "code": code}]
+        if await reports.enqueue(db, org_id, ch, kind="alert", severity="urgent", text_=body, dedupe_key=key, refs=refs, now=now, bypass_quiet=True):
             n += 1
     return n
 

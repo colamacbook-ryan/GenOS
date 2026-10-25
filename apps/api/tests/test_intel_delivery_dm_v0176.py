@@ -31,8 +31,8 @@ from tests.test_watchdog_backup_v0176 import _telegram
 SM = sessionmaker
 
 
-async def put_refs(db: Any, org: uuid.UUID, ids: list[uuid.UUID], kind: str = "digest") -> None:
-    refs = [{"n": i, "signal_id": str(s), "ask_id": None, "ask_code": None, "cluster_ids": None} for i, s in enumerate(ids, 1)]
+async def put_refs(db: Any, org: uuid.UUID, ids: list[uuid.UUID], kind: str = "digest", code: str = "TEST") -> None:
+    refs = [{"n": i, "signal_id": str(s), "ask_id": None, "ask_code": None, "cluster_ids": None, "code": code} for i, s in enumerate(ids, 1)]
     await db.execute(text("""INSERT INTO ops.owner_outbox (org_id, channel_type, kind, severity, dedupe_key, text, created_at, sent_at, refs)
                              VALUES (:o, 'zalo', :k, 'important', :d, 'bản tin', now(), now(), CAST(:r AS jsonb))"""),
                      {"o": org, "k": kind, "d": uuid.uuid4().hex, "r": orjson.dumps(refs).decode()})
@@ -128,10 +128,9 @@ async def test_mute_regular_kind_and_group_record_scope_and_source_chat(chat: Ch
     await set_quiet(db, chat.org, now_quiet=False)
     assert "đã tắt" in (await chat.say("tắt báo loại sự kiện")).lower()
     code = (await db.execute(text("SELECT code FROM core.groups WHERE id = :g"), {"g": world["group"]})).scalar_one()
-    assert "đã tắt" in (await chat.say(f"tắt báo nhóm {code}")).lower()
+    assert "Console" in await chat.say(f"tắt báo nhóm {code}")        # nhóm: qua strong_confirm (xem test M4)
     rows = (await db.execute(text("SELECT scope_type, scope_value, source FROM biz.signal_mutes ORDER BY created_at"))).all()
-    assert [(r.scope_type, r.source) for r in rows] == [("kind", "chat"), ("group", "chat")]
-    assert rows[0].scope_value == "su_kien_dip" and rows[1].scope_value == str(world["group"])
+    assert [(r.scope_type, r.source) for r in rows] == [("kind", "chat")] and rows[0].scope_value == "su_kien_dip"
     assert "không tìm thấy" in (await chat.say("tắt báo nhóm KHONGCO-9")).lower()
 
 
@@ -219,3 +218,108 @@ async def test_locked_assistant_sends_nothing_even_for_queued_dm(chat: Chat, db:
     res = await dm.handle_dm(SM(), chat.redis, chat.bus, None, chat.org, p, chat.app)
     assert res == "ignored:locked" and not chat.bus.on(BRIDGE_OUTBOUND)
     assert await feedback(db) == []
+
+
+# ─── review T3: M1, M4, m1–m5, thiếu test defensive ──────────────────────────
+
+async def test_outbound_frame_in_chat_reply_is_not_masked(chat: Chat, db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """M1: Sếp phải thấy đủ từng ký tự nguyên văn tin gửi khách (đường tấn công: STK kẻ gian bị che giống STK thật)."""
+    async def fake(cmd: Any, ctx: Any) -> owner_core.Reply:
+        return owner_core.Reply("Đề xuất #A1B2 gửi Lan; STK ngoài khung 0123456789012\n——— nội dung ———\n│ Chuyển vào STK 0987654321098 nhé\n——— hết ———")
+
+    monkeypatch.setattr(gen_chat, "hoi", fake)
+    reply = await chat.say("soạn tin cho Lan")
+    assert "│ Chuyển vào STK 0987654321098 nhé" in reply
+    assert "0123456789012" not in reply and "0123…012" in reply
+
+
+async def test_group_mute_from_chat_needs_console_until_levels_fixed(chat: Chat, db: Any, world: dict[str, Any]) -> None:
+    """M4: tắt báo NHÓM từ chat có thể làm im lừa đảo/an toàn không fail-high ⇒ qua strong_confirm (fail-closed ⇒ Console); không hứa sai."""
+    await set_quiet(db, chat.org, now_quiet=False)
+    code = (await db.execute(text("SELECT code FROM core.groups WHERE id = :g"), {"g": world["group"]})).scalar_one()
+    reply = await chat.say(f"tắt báo nhóm {code}")
+    assert "Console" in reply and "vẫn báo" not in reply
+    assert (await db.execute(text("SELECT count(*) FROM biz.signal_mutes"))).scalar_one() == 0
+    n = (await db.execute(text("SELECT count(*) FROM ops.action_log WHERE action = 'strong_confirm.chat_command' AND detail->>'target' = 'mute_defensive'"))).scalar_one()
+    assert n == 1
+
+
+async def test_kind_mute_reply_promises_only_what_is_true(chat: Chat, db: Any) -> None:
+    await set_quiet(db, chat.org, now_quiet=False)
+    reply = await chat.say("tắt báo loại sự kiện")
+    assert "lừa đảo/an toàn thì em vẫn luôn báo" in reply          # loại thường: mute loại không đụng loại phòng thủ
+
+
+async def _two_digests(chat: Chat, db: Any) -> dict[str, Any]:
+    await _install(db, chat.org)
+    await set_quiet(db, chat.org, now_quiet=False)
+    old = await _sig(db, chat.org, "cau_hoi_cho_xu_ly", "old", impact_base=2, deadline_at=NOW + timedelta(hours=10))
+    new = await _sig(db, chat.org, "cau_hoi_cho_xu_ly", "new", impact_base=2, deadline_at=NOW + timedelta(hours=10))
+    await put_refs(db, chat.org, [old.id], code="OLD1")
+    await db.execute(text("UPDATE ops.owner_outbox SET sent_at = now() - interval '3 hours', created_at = now() - interval '3 hours'"))
+    await put_refs(db, chat.org, [new.id], code="NEW2")
+    return {"old": old, "new": new}
+
+
+async def test_feedback_by_digest_code_targets_the_right_message(chat: Chat, db: Any) -> None:
+    """m1: «sai 1 #MÃ» gắn với đúng bản tin; không mã ⇒ bản tin gần nhất."""
+    s = await _two_digests(chat, db)
+    await chat.say("sai 1 #OLD1")
+    assert (await sig_row(db, s["old"].id)).status == "dismissed" and (await sig_row(db, s["new"].id)).status == "open"
+    assert "không thấy bản tin" in (await chat.say("sai 1 #ZZZ9")).lower()
+    await chat.say("1 sai")
+    assert (await sig_row(db, s["new"].id)).status == "dismissed"
+
+
+async def test_feedback_without_code_refuses_stale_digest(chat: Chat, db: Any) -> None:
+    s = await _two_digests(chat, db)
+    await db.execute(text("UPDATE ops.owner_outbox SET sent_at = now() - interval '3 days', created_at = now() - interval '3 days'"))
+    await db.commit()
+    assert "đã cũ" in (await chat.say("sai 1")).lower()
+    assert (await sig_row(db, s["new"].id)).status == "open"
+
+
+async def test_correct_on_sample_item_is_friendly(chat: Chat, db: Any) -> None:
+    """m2: mục mẫu (signal_id=None) không ném lỗi."""
+    refs = [{"n": 1, "signal_id": None, "raw_event_id": None, "tier": "t2", "p": 0.5}]
+    await db.execute(text("""INSERT INTO ops.owner_outbox (org_id, channel_type, kind, severity, dedupe_key, text, sent_at, refs)
+                             VALUES (:o, 'zalo', 'ask', 'important', 'x', 'gói', now(), CAST(:r AS jsonb))"""), {"o": chat.org, "r": orjson.dumps(refs).decode()})
+    await db.commit()
+    assert "mẫu" in (await chat.say("sửa 1: Hà Nội")).lower()
+
+
+@pytest.mark.parametrize("cmd", ["giờ yên lặng 08:00-22:00", "giờ yên lặng 07:00-07:00", "giờ yên lặng 06:00-19:00"])
+async def test_quiet_hours_longer_than_twelve_hours_refused(chat: Chat, db: Any, cmd: str) -> None:
+    """m3: kẻ chiếm tài khoản không đặt "yên lặng" gần cả ngày."""
+    await set_quiet(db, chat.org, now_quiet=False)
+    before = (await db.execute(text("SELECT settings->'intel' FROM core.organizations WHERE id = :o"), {"o": chat.org})).scalar_one()
+    assert "Cách dùng" in await chat.say(cmd)
+    assert (await db.execute(text("SELECT settings->'intel' FROM core.organizations WHERE id = :o"), {"o": chat.org})).scalar_one() == before
+
+
+def test_parse_intel_only_exact_syntax() -> None:
+    """m4: chỉ đúng cú pháp lệnh, không bắt câu thường có chữ "chạy thử"/"bóng"."""
+    for text_ in ("chạy thử cái app mới giúp anh nhé", "bóng đá tối nay mấy giờ", "bóng", "chế độ bóng của camera là gì", "sai rồi em ơi", "tắt báo cái đèn"):
+        assert dm.parse_intel(text_) is None, text_
+    assert dm.parse_intel("chạy thử bật") == ("mode", None) and dm.parse_intel("chế độ bóng") == ("mode", None)
+
+
+async def test_missed_on_regular_digest_item_is_not_recorded_as_sample(chat: Chat, db: Any) -> None:
+    """m5: «N sót» trên mục bản tin thường (đã có tín hiệu) không thành sót mẫu."""
+    s = await setup(chat, db)
+    reply = await chat.say("2 sót")
+    assert "em sót:" in reply and await feedback(db) == [] and (await sig_row(db, s["amber"].id)).status == "open"
+
+
+@pytest.mark.parametrize("kind,gate,candidate", [("suc_khoe_an_toan", None, None), ("cau_hoi_cho_xu_ly", "an_toan", None), ("cau_hoi_cho_xu_ly", None, "lua_dao_dang_dien_ra")])
+async def test_defensive_gate_covers_kind_without_gate_and_gate_with_other_kind(chat: Chat, db: Any, kind: str, gate: str | None, candidate: str | None) -> None:
+    """Cổng defensive của `_feedback`: kind phòng thủ KHÔNG có gate, hoặc gate/candidate G1/G2 đi với kind khác — «sai» vẫn cần Console."""
+    await _install(db, chat.org)
+    await set_quiet(db, chat.org, now_quiet=False)
+    s = await _sig(db, chat.org, "cau_hoi_cho_xu_ly", "d1", impact_base=2, deadline_at=NOW + timedelta(hours=10))
+    await db.execute(text("UPDATE biz.alerts SET kind = :k, gate = :g, candidate = :c WHERE id = :i"), {"k": kind, "g": gate, "c": candidate, "i": s.id})
+    await db.commit()
+    await put_refs(db, chat.org, [s.id])
+    for cmd in ("sai 1", "1 không cần báo"):
+        assert "Console" in await chat.say(cmd), cmd
+    assert (await sig_row(db, s.id)).status == "open" and await feedback(db) == []

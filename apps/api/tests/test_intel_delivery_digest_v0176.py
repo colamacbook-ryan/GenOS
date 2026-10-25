@@ -164,15 +164,16 @@ async def test_push_alerts_sends_push_now_chat_ok_only_and_dedupes(db: Any) -> N
     assert red.delivery == "push_now"
     await bot_world(db, org)
     async with SM()() as s:
-        assert await delivery.push_alerts(s, org, NOW) == 1
+        n = await delivery.push_alerts(s, org, NOW)
+        assert n in (1, 2)
         assert await delivery.push_alerts(s, org, NOW) == 0                      # trùng khoá
         await s.commit()
-    rows = await outbox(db, "alert")
+    rows = [r for r in await outbox(db, "alert") if r.refs]                      # tin có nội dung (chat_ok); console_pin ⇒ tin không refs (xem test M3)
     assert len(rows) == 1 and rows[0].severity == "urgent" and "«abc»" in rows[0].text
     assert rows[0].refs[0]["signal_id"] == str(red.id)
-    assert str(priv.id) not in str(rows[0].refs) and str(amber.id) not in str(rows[0].refs)
-    nb = (await db.execute(text("SELECT not_before, created_at FROM ops.owner_outbox"))).one()
-    assert nb.not_before == nb.created_at                                       # bypass giờ yên lặng: 🔴 đã được chấm là đẩy ngay
+    assert all(str(priv.id) not in str(r.refs) and str(amber.id) not in str(r.refs) for r in await outbox(db, "alert"))
+    nbs = (await db.execute(text("SELECT not_before, created_at FROM ops.owner_outbox"))).all()
+    assert nbs and all(r.not_before == r.created_at for r in nbs)                                       # bypass giờ yên lặng: 🔴 đã được chấm là đẩy ngay
 
 
 async def test_push_alerts_locked_sends_nothing(db: Any) -> None:
@@ -258,3 +259,84 @@ async def test_coverage_line_counts_voice_and_unread_images(db: Any) -> None:
     async with SM()() as s:
         line = await coverage.line(s, org, NOW)
     assert "1 voice đã chép, 1 voice chưa nghe" in line and "1 ảnh chưa đọc" in line
+
+
+# ─── review T3: B1, M1–M3 ────────────────────────────────────────────────────
+
+async def test_push_alerts_not_starved_beyond_ten_open_signals(db: Any) -> None:
+    """B1: ≥ 10 tín hiệu push_now đang mở không được chặn tín hiệu thứ 11, 12 (mỗi lượt chỉ lấy dòng CHƯA có tin)."""
+    org = await mk_org(db)
+    await _install(db, org)
+    ids = []
+    for i in range(12):
+        s = await _sig(db, org, "xung_dot_khieu_nai", f"c{i}", customer_of_owner=True, flags={"public": True})
+        ids.append(s.id)
+        await db.execute(text("UPDATE biz.alerts SET delivery = 'push_now', pushed_at = now() - make_interval(secs => :k) WHERE id = :i"), {"k": 100 - i, "i": s.id})
+    await db.commit()
+    await bot_world(db, org)
+    got = 0
+    for _ in range(3):
+        async with SM()() as s:
+            got += await delivery.push_alerts(s, org, NOW)
+            await s.commit()
+    assert got == 12
+    sent = {r["signal_id"] for row in await outbox(db, "alert") for r in row.refs}
+    assert sent == {str(i) for i in ids}                                        # cả 12, kể cả cái mới nhất
+
+
+async def test_push_now_console_pin_sends_content_free_alert_and_digest_counts_it(db: Any) -> None:
+    """M3: 🔴 push_now riêng tư không được im: tin 🔴 KHÔNG nội dung; `_hidden_console` đếm cả push_now."""
+    org = await mk_org(db)
+    await _install(db, org)
+    s = await _sig(db, org, "xung_dot_khieu_nai", "cp", privacy="console_pin", customer_of_owner=True, flags={"public": True})
+    await db.execute(text("UPDATE biz.alerts SET title = 'Hùng BÍ MẬT nhân sự', delivery = 'push_now', pushed_at = now() WHERE id = :i"), {"i": s.id})
+    await db.commit()
+    await bot_world(db, org)
+    async with SM()() as sess:
+        assert await delivery.push_alerts(sess, org, NOW) == 1
+        assert await delivery._hidden_console(sess, org) == 1
+        await sess.commit()
+    [row] = await outbox(db, "alert")
+    assert "Có 1 vụ khẩn cần xem trên Console (mã PIN)" in row.text and row.severity == "urgent"
+    assert "Hùng" not in row.text and "BÍ MẬT" not in row.text and str(s.id) not in str(row.refs)
+
+
+async def test_digest_header_has_code_and_refs_carry_it(db: Any) -> None:
+    org, _ = await world(db)
+    assert await run(org) == "sent"
+    [row] = await outbox(db)
+    codes = {r["code"] for r in row.refs}
+    assert len(codes) == 1 and f"#{codes.pop()}" in row.text.splitlines()[0]
+
+
+async def test_digest_with_defensive_item_bypasses_quiet_hours(db: Any) -> None:
+    """m3: bản tin có mục phòng thủ (lừa đảo/an toàn) dùng `bypass_quiet`."""
+    org = await mk_org(db)
+    await _install(db, org)
+    await _sig(db, org, "rui_ro_lua_dao", "fr-floor", flags={"credentials_entered": True}, confidence_exist=0.5, d2={"verdict": "disagree"})
+    await bot_world(db, org)
+    await db.execute(text("""UPDATE core.organizations SET settings = settings || jsonb_build_object('intel', COALESCE(settings->'intel', '{}'::jsonb)
+                             || '{"quiet_start": "00:00", "quiet_end": "23:59"}'::jsonb) WHERE id = :o"""), {"o": org})
+    await db.commit()
+    assert await run(org) == "sent"
+    nb = (await db.execute(text("SELECT not_before, created_at FROM ops.owner_outbox WHERE kind = 'digest'"))).one()
+    assert nb.not_before == nb.created_at
+
+
+def test_display_mask_defeats_separator_and_unicode_tricks() -> None:
+    """M2: dấu phân cách lạ, NBSP, ký tự vô hình, chữ số toàn chiều không lách được."""
+    m = delivery.display_mask
+    for leak in ("0912,345,678", "0912/345/678", "0912_345_678", "0912\xa0345\xa0678", "0912​345​678", "0912 345 678",
+                 "０９１２３４５６７８", "0912­345­678", "STK 1234/5678/90"):
+        out = m(leak)
+        assert "…" in out and "345" not in out.replace("0912…678", ""), (leak, out)
+    assert m("họp 25/10/2026 lúc 9h") == "họp 25/10/2026 lúc 9h"
+
+
+def test_mask_reply_keeps_verbatim_outbound_frame_intact() -> None:
+    """M1: khung nguyên văn đề xuất GỬI TIN (giữa «——— nội dung ———» và «——— hết ———») hiện ĐỦ từng ký tự; phần còn lại vẫn che."""
+    body = "Em chuyển vào STK 0123456789012 nhé"
+    framed = "Đề xuất #A1B2: gửi cho Lan, STK cũ 0999888777666\n——— nội dung ———\n│ " + body + "\n——— hết ———\nOK để gửi."
+    out = delivery.mask_reply(framed)
+    assert "│ " + body in out                                                   # nguyên văn trong khung
+    assert "0999888777666" not in out and "0999…666" in out                     # ngoài khung vẫn che
