@@ -119,6 +119,9 @@ async def test_recovered_line_appears_in_next_digest(db: Any) -> None:
     org, _ = await world(db)
     await health.raise_once(db, org, key="agent.session:zalo", kind="agent.session", severity="bad", title="Phiên Zalo của trợ lý bị đăng xuất", body="x", link=None)
     await health.clear(db, org, "agent.session:zalo")
+    # T10 (review vòng 2): sự cố `agent.*` chỉ thành dòng «Đã hồi phục» khi watchdog đóng vì hồi phục — lý do đóng ở `fingerprint`.
+    await db.execute(text("UPDATE ops.health_alerts SET fingerprint = 'closed:recovered' WHERE org_id = :o AND key = 'agent.session:zalo'"),
+                     {"o": org})
     await db.commit()
     assert await run(org) == "sent"
     [row] = await outbox(db)

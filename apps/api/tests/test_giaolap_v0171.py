@@ -104,7 +104,7 @@ async def test_duty_context_line_masks_outsider_text() -> None:
     assert "25.000.000" in line and line.startswith("C1 ")
 
 
-async def test_briefing_summary_prompt_masks_outsider_lines(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+async def test_briefing_summary_prompt_keeps_phone_stk_but_masks_credentials(app, db, redis) -> None:  # type: ignore[no-untyped-def]
     org = await org_id(db)
     seen: list[list[Message]] = []
 
@@ -116,7 +116,11 @@ async def test_briefing_summary_prompt_masks_outsider_lines(app, db, redis) -> N
     out = await briefing._summarize(_R(), org,  # type: ignore[arg-type]
                                     [{"title": "Cơ hội", "count": "1", "lines": [SECRET_MSG]}])
     assert out == "tóm tắt" and seen
-    _no_secret("\n".join(m.content for m in seen[0]))
+    prompt = "\n".join(m.content for m in seen[0])
+    # v0.1.76 (Q9, CNS-081; thay v0.1.71 P2-3): bản tin gửi model nguyên văn SĐT/STK/tiền; OTP / mật khẩu vẫn luôn che.
+    for leak in ("482913", "abc12345xyz"):
+        assert leak not in prompt, leak
+    assert "0912 345 678" in prompt and "1234 5678 9012 3456" in prompt
     assert "25.000.000" in seen[0][-1].content
 
 
