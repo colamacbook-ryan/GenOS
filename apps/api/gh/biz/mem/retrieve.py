@@ -17,16 +17,21 @@ Phạm vi hiện của sự thật (fix-gkb3, `fact_visible`): spec §4A.2 chỉ
 sự thật sinh ở nhóm X được hiện ở nhóm Y nào. Chủ thể hay gặp nhất là chính Sếp (người gửi của mọi nhóm) nên "cùng thực thể" thành
 "mọi nhóm": lời hứa với con ở nhóm gia đình, lương nhân viên hiện ở nhóm giao thương 120 người lạ (G-KB kb4). Áp MẶC ĐỊNH AN TOÀN:
 (1) sự thật hiện ở luồng nguồn của bằng chứng (nhóm / 1-1 có tin bằng chứng, kể cả bằng chứng của bản cũ mà Sếp đã sửa);
-(2) ở luồng khác CHỈ khi: luồng hiện tại là nhóm Sếp đã xác nhận bối cảnh (≠ `khac`), không đông người (≤ `CROSS_GROUP_MAX_MEMBERS`),
-    sự thật `sensitivity='normal'`, và MỌI bối cảnh nguồn đều là bối cảnh đã xác nhận của nhóm hiện tại (nhóm nguồn chưa xác nhận ⇒ không);
-    hệ quả: sự thật gia đình/bạn bè/nhân viên/học tập không bao giờ sang nhóm giao thương, công việc…; sức khoẻ, SĐT, STK, nhân sự
-    (sensitivity ≠ normal) không bao giờ xuyên luồng.
-Áp cho khối "Sự thật đã biết" và cạnh sự thật của khối "Quan hệ"; cạnh nóng chỉ giữ người cùng luồng.
+(2) sang NHÓM khác chỉ khi: nhóm đích có ĐÚNG MỘT nhãn bối cảnh Sếp đã xác nhận (≠ `khac`), `member_count` đã biết và
+    ≤ `CROSS_GROUP_MAX_MEMBERS`, sự thật `sensitivity='normal'`, mọi nhóm nguồn đã xác nhận bối cảnh và mọi nhãn nguồn = nhãn đích
+    hoặc thuộc cặp một chiều `CROSS_CONTEXT_ALLOW` (kinh_doanh → nhan_vien; Gen quyết 25/10/2026); quy tắc tiền: `promised_to`/`owes`
+    dính tiền/giá không đi giữa hai nhóm `kinh_doanh` (giá riêng khách A không sang nhóm khách B);
+(3) sang 1-1 với P chỉ sự thật `normal` về P hoặc do P nói, từ nhóm đã xác nhận bối cảnh, không phải gia_dinh/ban_be;
+(4) bằng chứng 1-1 không bao giờ sang luồng khác.
+Hệ quả: sự thật gia đình/bạn bè/nhân viên/học tập không sang nhóm giao thương, công việc…; sức khoẻ, SĐT, STK, nhân sự
+(sensitivity ≠ normal) không bao giờ xuyên luồng. Áp cho khối "Sự thật đã biết" và cạnh sự thật của khối "Quan hệ" (bước 2 cần cạnh
+bước 1 cũng hiện được); cạnh nóng chỉ giữ người là thành viên của chính nhóm.
 """
 
 from __future__ import annotations
 
 import math
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -44,9 +49,18 @@ CHARS_PER_TOKEN = 3
 HISTORY_DAYS = 90
 HISTORY_TOP = 10
 RELATED_MAX_NODES = 20
+RELATED_WALK_CAP = 500                            # trần dòng đi bộ 1–2 bước trước khi lọc phạm vi (Sếp là nút trung tâm)
 RRF_K = 60
 TRGM_MIN = 0.05                                   # sàn độ giống trigram (chỉ bỏ cặp gần như không chung chữ)
 CROSS_GROUP_MAX_MEMBERS = 50                      # nhóm đông hơn ⇒ không nhận sự thật từ luồng khác (spec r6.6.1 §14.11 #7: lõi khách ≤ 50)
+#: Cặp bối cảnh (nguồn → đích) được xuyên nhóm ngoài "cùng bối cảnh" — MỘT CHIỀU. Gen quyết 25/10/2026: nhóm nội bộ nhân viên cần
+#: biết lời hứa với khách mà người của Sếp đã nhận; chiều ngược (nhan_vien → kinh_doanh: lương, nhân sự) KHÔNG.
+CROSS_CONTEXT_ALLOW: frozenset[tuple[str, str]] = frozenset({("kinh_doanh", "nhan_vien")})
+DM_PRIVATE_CONTEXTS = frozenset({"gia_dinh", "ban_be"})   # 1-1 với P không nhận sự thật từ nhóm gia đình/bạn bè
+MONEY_PREDICATES = frozenset({"promised_to", "owes"})
+MONEY_GUARD_CONTEXTS = frozenset({"kinh_doanh"})          # tiền/giá không đi giữa hai nhóm cùng bối cảnh này
+_MONEY_WORDS = re.compile(r"\b(giá|tiền|triệu|nghìn|ngàn|đồng|vnd|vnđ|usd|chiết khấu|giảm giá|cọc|công nợ|thanh toán|chuyển khoản)\b")
+_MONEY_NUM = re.compile(r"\d[\d.,]*\s*(k|tr|đ|%|\$)(?!\w)|\$\s*\d")
 SUPERSEDE_DEPTH = 20                              # đi ngược chuỗi `supersedes` (bản Sếp sửa) tìm bằng chứng gốc
 PREDICATE_PRIORITY = {"promised_to": 0, "owes": 0, "deadline": 0, "asked_waiting": 0, "scheduled_event": 1,
                       "health_event": 1}
@@ -160,15 +174,28 @@ class Scope:
     unit_cond: str
     params: dict[str, Any]
     contexts: frozenset[str]                      # bối cảnh Sếp đã xác nhận của nhóm hiện tại (rỗng = chưa xác nhận / 1-1)
-    members: int | None
+    members: int | None                           # `core.groups.member_count` (None = không biết ⇒ không xuyên luồng)
+    dm_entities: frozenset[uuid.UUID] = frozenset()   # 1-1: thực thể của người đối thoại (gồm bản đã gộp)
+
+
+@dataclass(frozen=True)
+class FactRef:
+    """Thông tin một sự thật mà bộ lọc phạm vi cần (không đọc lại DB)."""
+    id: uuid.UUID
+    sensitivity: str
+    context_code: str | None = None
+    predicate: str = ""
+    value_text: str = ""
+    subject: uuid.UUID | None = None
+    attributed_to: uuid.UUID | None = None
 
 
 async def scope_of(db: AsyncSession, org_id: uuid.UUID, thread_key: str, pol: contexts.Policy) -> Scope:
     gid = contexts.group_of(thread_key)
     if gid is not None:
-        n = (await db.execute(text("""
-            SELECT coalesce(g.member_count, (SELECT count(*) FROM core.group_members m WHERE m.group_id = g.id AND m.left_at IS NULL))
-            FROM core.groups g WHERE g.id = :g AND g.org_id = :o"""), {"g": gid, "o": org_id})).scalar_one_or_none()
+        # CHỈ số bridge báo: core.group_members chỉ có người đã từng nhắn ⇒ đếm nó coi nhóm 120 người là nhóm nhỏ (review fix-gkb3 #2)
+        n = (await db.execute(text("SELECT member_count FROM core.groups WHERE id = :g AND org_id = :o"),
+                              {"g": gid, "o": org_id})).scalar_one_or_none()
         return Scope(thread_key, gid, None, "e.group_id = :sg", "m.group_id = :sg", {"sg": gid},
                      frozenset(pol.contexts) if pol.confirmed else frozenset(), None if n is None else int(n))
     pid = None
@@ -186,17 +213,32 @@ async def scope_of(db: AsyncSession, org_id: uuid.UUID, thread_key: str, pol: co
         b = str(r.external_id or "").split("@", 1)[0]
         if b:
             ext.append(b)
+    ents: frozenset[uuid.UUID] = frozenset()
+    try:
+        ents = frozenset(await entities.members(db, (await entities.ensure_person(db, org_id, pid)).id))
+    except entities.EntityError:
+        pass
     raw = (f"(e.group_id IS NULL AND (e.sender_identity_id = ANY(CAST(:sids AS uuid[])) OR "
            f"{outbound_to_sql('e', 'CAST(:sids AS uuid[])', 'CAST(:sext AS text[])')}))")
     return Scope(thread_key, None, pid, raw, "(m.group_id IS NULL AND m.person_id = :sp)", {"sids": ids, "sext": ext, "sp": pid},
-                 frozenset(), None)
+                 frozenset(), None, ents)
 
 
-async def fact_visible(db: AsyncSession, org_id: uuid.UUID, scope: Scope, facts_: list[tuple[uuid.UUID, str, str | None]]) -> set[uuid.UUID]:
-    """Lọc phạm vi hiện (xem docstring module). `facts_` = [(fact_id, sensitivity, context_code)]. Trả các id được hiện ở `scope`."""
+def mentions_money(text_: str) -> bool:
+    """Giá trị có dính tiền/giá (số kèm đơn vị tiền, %, hoặc từ giá/tiền/chiết khấu…) — quy tắc tiền (Gen quyết 25/10/2026)."""
+    t = " " + text_.lower() + " "
+    return bool(_MONEY_WORDS.search(t) or _MONEY_NUM.search(t))
+
+
+def _allowed_sources(target: str) -> frozenset[str]:
+    return frozenset({target} | {src for src, dst in CROSS_CONTEXT_ALLOW if dst == target})
+
+
+async def fact_visible(db: AsyncSession, org_id: uuid.UUID, scope: Scope, facts_: list[FactRef]) -> set[uuid.UUID]:
+    """Lọc phạm vi hiện (xem docstring module). Trả các id được hiện ở `scope`."""
     if not facts_:
         return set()
-    ids = [f[0] for f in facts_]
+    ids = [f.id for f in facts_]
     rows = (await db.execute(text(f"""
         WITH RECURSIVE ch(root, id, d) AS (
             SELECT f.id, f.id, 0 FROM mem.facts f WHERE f.org_id = :o AND f.id = ANY(CAST(:ids AS uuid[]))
@@ -220,9 +262,15 @@ async def fact_visible(db: AsyncSession, org_id: uuid.UUID, scope: Scope, facts_
             same.add(r.root)
         src.setdefault(r.root, set()).add(r.group_id)
     out = set(same)
-    cross_ok = (scope.group_id is not None and bool(scope.contexts - {"khac"})
-                and (scope.members is None or scope.members <= CROSS_GROUP_MAX_MEMBERS))
-    if not cross_ok:
+    target: str | None = None
+    if scope.group_id is not None:
+        # nhóm đích nhiều nhãn ⇒ không nhận gì từ luồng khác (an toàn: "Tiệm nhà mình + khách quen" không hút cả giày của con lẫn lương
+        # nhân viên — review fix-gkb3 #1); số người không biết hoặc đông ⇒ không (review #2)
+        if (len(scope.contexts) != 1 or "khac" in scope.contexts or scope.members is None
+                or scope.members > CROSS_GROUP_MAX_MEMBERS):
+            return out
+        target = next(iter(scope.contexts))
+    elif scope.dm_person is None or not scope.dm_entities:
         return out
     groups = {g for s in src.values() for g in s if g is not None}
     gctx: dict[uuid.UUID, set[str]] = {}
@@ -231,19 +279,28 @@ async def fact_visible(db: AsyncSession, org_id: uuid.UUID, scope: Scope, facts_
                                            WHERE org_id = :o AND source = 'owner' AND group_id = ANY(CAST(:g AS uuid[]))"""),
                                    {"o": org_id, "g": list(groups)})).all():
             gctx.setdefault(r.group_id, set()).add(r.context)
-    allowed = scope.contexts - {"khac"}
-    for fid, sens, ctx_code in facts_:
-        if fid in out or sens != "normal":
+    for f in facts_:
+        if f.id in out or f.sensitivity != "normal":
             continue
-        s = src.get(fid, set())
-        if None in s:                              # có bằng chứng 1-1 ⇒ chuyện riêng một người, không xuyên luồng
+        s = src.get(f.id, set())
+        if None in s:                              # có bằng chứng 1-1 (luồng khác) ⇒ chuyện riêng một người, không xuyên luồng
             continue
-        if s:
-            ok = all(bool(gctx.get(g)) and gctx[g] <= allowed for g in s if g is not None)
+        srcs = [gctx.get(g, set()) for g in s if g is not None]
+        if any(not c for c in srcs):               # nhóm nguồn chưa xác nhận bối cảnh
+            continue
+        if target is None:
+            # 1-1 với P (review #3): sự thật về P hoặc do P nói, từ nhóm đã xác nhận, không phải gia đình/bạn bè
+            ok = (bool(srcs) and (f.subject in scope.dm_entities or f.attributed_to in scope.dm_entities)
+                  and all(not (c & DM_PRIVATE_CONTEXTS) for c in srcs))
         else:
-            ok = ctx_code is not None and ctx_code in allowed
+            allowed = _allowed_sources(target)
+            ok = all(c <= allowed for c in srcs) if srcs else (f.context_code is not None and f.context_code in allowed)
+            # quy tắc tiền: lời hứa/nợ dính tiền/giá không đi giữa hai nhóm khách (giá riêng khách A ≠ nhóm khách B)
+            if ok and target in MONEY_GUARD_CONTEXTS and f.predicate in MONEY_PREDICATES and mentions_money(f.value_text) \
+                    and (any(c & MONEY_GUARD_CONTEXTS for c in srcs) or f.context_code in MONEY_GUARD_CONTEXTS):
+                ok = False
         if ok:
-            out.add(fid)
+            out.add(f.id)
     return out
 
 
@@ -253,6 +310,7 @@ async def _facts(db: AsyncSession, org_id: uuid.UUID, anchors: list[uuid.UUID], 
     members: list[uuid.UUID] = []
     for a in anchors:
         members.extend(await entities.members(db, a))
+    # 1-1 với P: lấy cả sự thật do P nói (`attributed_to`) dù chủ thể là người khác (review fix-gkb3 #3)
     rows = (await db.execute(text("""
         SELECT f.id, f.predicate, f.status, f.object_value, f.object_entity_id, f.source_class, f.attributed_to,
                f.valid_from, f.valid_to, f.sensitivity, f.context_code, coalesce(s.merged_into, s.id) AS subj, s.display_name AS subj_name,
@@ -260,10 +318,12 @@ async def _facts(db: AsyncSession, org_id: uuid.UUID, anchors: list[uuid.UUID], 
                (SELECT array_agg(x.raw_event_id) FROM mem.fact_evidence x WHERE x.fact_id = f.id AND x.raw_event_id IS NOT NULL) AS ev
         FROM mem.facts f JOIN mem.entities s ON s.id = f.subject_id
         LEFT JOIN mem.entities o ON o.id = f.object_entity_id LEFT JOIN mem.entities a ON a.id = f.attributed_to
-        WHERE f.org_id = :o AND f.subject_id = ANY(:m) AND f.status IN ('owner_confirmed', 'asserted', 'disputed')
+        WHERE f.org_id = :o AND (f.subject_id = ANY(:m) OR f.attributed_to = ANY(CAST(:dmm AS uuid[]))) AND f.status IN ('owner_confirmed', 'asserted', 'disputed')
           AND f.valid_from <= :n AND (f.valid_to IS NULL OR f.valid_to > :n) AND f.evidence_n >= 1
-          AND f.predicate NOT LIKE 'owner\\_%'"""), {"o": org_id, "m": members, "n": now})).all()
-    vis = await fact_visible(db, org_id, scope, [(r.id, r.sensitivity, r.context_code) for r in rows])
+          AND f.predicate NOT LIKE 'owner\\_%'"""), {"o": org_id, "m": members, "n": now, "dmm": list(scope.dm_entities)})).all()
+    vis = await fact_visible(db, org_id, scope, [
+        FactRef(r.id, r.sensitivity, r.context_code, r.predicate, profile_read.value_text(r.object_value) if r.object_value is not None else "",
+                r.subj, r.attributed_to) for r in rows])
     rows = [r for r in rows if r.id in vis]
 
     def rank(r: Any) -> tuple[int, int, int, float]:
@@ -368,19 +428,21 @@ async def _related(db: AsyncSession, org_id: uuid.UUID, anchors: list[uuid.UUID]
           WHERE f.org_id = :o AND f.status IN ('owner_confirmed', 'asserted') AND f.object_entity_id IS NOT NULL
             AND f.predicate NOT LIKE 'owner\\_%' AND (f.valid_to IS NULL OR f.valid_to > now())
         ), walk AS (
-          SELECT e.fact_id, e.sensitivity, e.context_code, CAST(NULL AS uuid) AS parent, e.a AS frm, e.b AS node, e.predicate, 1 AS depth
+          SELECT e.fact_id, e.sensitivity, e.context_code, e.a AS subj, CAST(NULL AS uuid) AS parent, e.a AS frm, e.b AS node, e.predicate,
+                 1 AS depth
           FROM edges e WHERE e.a = ANY(:an)
           UNION
-          SELECT e.fact_id, e.sensitivity, e.context_code, CAST(NULL AS uuid), e.b, e.a, e.predicate, 1 FROM edges e WHERE e.b = ANY(:an)
+          SELECT e.fact_id, e.sensitivity, e.context_code, e.a, CAST(NULL AS uuid), e.b, e.a, e.predicate, 1 FROM edges e WHERE e.b = ANY(:an)
           UNION
-          SELECT e.fact_id, e.sensitivity, e.context_code, w.fact_id, w.node, CASE WHEN e.a = w.node THEN e.b ELSE e.a END, e.predicate,
+          SELECT e.fact_id, e.sensitivity, e.context_code, e.a, w.fact_id, w.node, CASE WHEN e.a = w.node THEN e.b ELSE e.a END, e.predicate,
                  w.depth + 1
           FROM walk w JOIN edges e ON (e.a = w.node OR e.b = w.node) WHERE w.depth < 2 AND NOT (w.node = ANY(:an))
         )
-        SELECT w.fact_id, w.sensitivity, w.context_code, w.parent, w.node, w.predicate, w.depth, n.display_name, fr.display_name AS frm_name
+        SELECT w.fact_id, w.sensitivity, w.context_code, w.subj, w.parent, w.node, w.predicate, w.depth, n.display_name, fr.display_name AS frm_name
         FROM walk w JOIN mem.entities n ON n.id = w.node JOIN mem.entities fr ON fr.id = w.frm
-        WHERE NOT (w.node = ANY(:an)) AND n.forgotten_at IS NULL"""), {"o": org_id, "an": anchors})).all()
-    vis = await fact_visible(db, org_id, scope, list({(r.fact_id, r.sensitivity, r.context_code) for r in walk}))
+        WHERE NOT (w.node = ANY(:an)) AND n.forgotten_at IS NULL
+        ORDER BY w.depth, w.fact_id DESC LIMIT :cap"""), {"o": org_id, "an": anchors, "cap": RELATED_WALK_CAP})).all()
+    vis = await fact_visible(db, org_id, scope, list({FactRef(r.fact_id, r.sensitivity, r.context_code, r.predicate, "", r.subj) for r in walk}))
     best: dict[uuid.UUID, Any] = {}
     for r in sorted(walk, key=lambda r: (r.depth, str(r.fact_id))):
         if r.fact_id in vis and (r.parent is None or r.parent in vis) and r.node not in best:
