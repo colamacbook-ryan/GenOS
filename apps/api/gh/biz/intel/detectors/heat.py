@@ -154,5 +154,6 @@ async def intel_heat_scan(ctx: dict[str, Any]) -> dict[str, int]:
 
 
 HOOKS: list[Hook] = []
-# 01:55 (sau `mem_heat_weekly` 01:40 của L4) rồi mỗi 6 giờ: khách im theo nhịp đặt hàng phải ra tín hiệu trong ngày, không đợi đêm sau.
-JOBS: list[CronJob] = [(intel_heat_scan, {"hour": {1, 7, 13, 19}, "minute": {55}})]
+# 01:55 (sau `mem_heat_weekly` 01:40 của L4), 07:55 (trước giờ làm: khách im theo nhịp đặt hàng ra tín hiệu ngay đầu ngày) và 19:55.
+# Không chạy 08:00–18:00: job quét mọi khách theo tổ chức là job nặng theo giờ cố định (test_worker_schedule_v0136).
+JOBS: list[CronJob] = [(intel_heat_scan, {"hour": {1, 7, 19}, "minute": {55}})]
