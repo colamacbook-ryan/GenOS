@@ -247,11 +247,14 @@ async def act_inbox_item(item_id: uuid.UUID, request: Request, body: ActIn | Non
     if r.item_type == "draft":
         raise ApiError(409, "USE_WORKBENCH", "Duyệt bản nháp này ở Bàn làm việc")
     if r.item_type == "alert":
-        row = (await db.execute(text("""UPDATE biz.alerts SET status = 'acknowledged'
-                                        WHERE id = :i AND org_id = :o AND status = 'open' RETURNING id"""),
-                                {"i": item_id, "o": user.org_id})).first()
-        if row is None:
-            raise ApiError(409, "ALERT_DECIDED", "Cảnh báo này đã được xử lý")
+        # v0.1.76 (T1): chỉ gh.biz.intel.signals đổi level/lane/status (r4 §4.3) — `/act` đi qua `signals.transition`.
+        from gh.biz.intel import signals
+        from gh.refinery import clock
+
+        try:
+            await signals.transition(db, user.org_id, item_id, "acknowledged", now=clock.now(), actor_id=user.actor_id)
+        except signals.SignalError:
+            raise ApiError(409, "ALERT_DECIDED", "Cảnh báo này đã được xử lý") from None
         await actionlog.record(db, org_id=user.org_id, actor_type="user", actor_id=user.actor_id,
                                action="alert.acknowledged", target_type="alert", target_id=str(item_id),
                                target_label=r.title, result="ok")

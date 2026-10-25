@@ -273,6 +273,8 @@ PERSON_REFS: tuple[PersonRef, ...] = (
     PersonRef("core.assignments", "subject_id", "person"),
     # v0.1.68: sự kiện «người lạ nhắn riêng lần đầu» của Nhật ký lắng nghe — gộp xong hiện đúng hồ sơ giữ lại.
     PersonRef("ops.listen_events", "person_id"),
+    # v0.1.76 (T1, 0044): STK đã biết của một người — gộp xong đi theo hồ sơ giữ lại (chỉ lưu digest + 3 số cuối).
+    PersonRef("biz.payment_identifiers", "person_id"),
 )
 PERSON_REFS_COLUMNS: tuple[tuple[str, str], ...] = tuple((r.table, r.col) for r in PERSON_REFS)
 #: Cột trỏ về người KHÔNG dời bằng PERSON_REFS (kèm lý do).

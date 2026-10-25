@@ -595,3 +595,59 @@ async def run_crosscheck(s: levels.SignalIn, unit: Any, raw_ctx: Any, *, call: A
         res1 = await crosscheck.verify(unit, s.kind or "", raw_ctx, call=call, secrets=secrets)
         return apply_crosscheck(s, d1=res1)
     return s, False
+
+
+# ─── bên gọi `raise_alert` cũ (bảng alert_type §4B.2) ─────────────────────────
+
+LEGACY_MAP: dict[str, tuple[str, str, int | None, int | None, str | None]] = {
+    "customer_cooling": ("quan_he_nong_nguoi", "chat_ok", 2, 1, "medium"),
+    "slow_response": ("cau_hoi_cho_xu_ly", "chat_ok", 2, 2, "high"),
+    "unclaimed_opportunity": ("co_hoi_ket_noi", "chat_ok", 2, 2, "medium"),
+    "opportunity_signal": ("co_hoi_ket_noi", "chat_ok", 2, 1, "medium"),
+    "competitor": ("thi_truong_thong_tin", "chat_ok", 1, 1, "medium"),
+    "forgotten_deadline": ("viec_han", "chat_ok", 2, 3, "medium"),
+    "repeated_complaint": ("xung_dot_khieu_nai", "chat_ok", 2, 2, "medium"),
+    "people_signal": ("legacy", "console_pin", 1, 1, "medium"),
+    "rule_alert": ("legacy", "chat_ok", 1, 1, "low"),
+    "data_conflict": ("system", "chat_ok", None, None, None),
+    "model_quota_low": ("system", "chat_ok", None, None, None),
+    "model_chain_exhausted": ("system", "chat_ok", None, None, None),
+    "model_chain_agy_only": ("system", "chat_ok", None, None, None),
+}
+
+
+async def record_legacy(db: AsyncSession, org_id: uuid.UUID, *, alert_type: str, priority: str, title: str, summary: str | None,
+                        suggested: str | None = None, subject_type: str | None = None, subject_id: Any = None,
+                        evidence: list[dict[str, Any]] | None = None, personnel_related: bool = False,
+                        recipient_user_id: uuid.UUID | None = None) -> uuid.UUID:
+    """Ghi một cảnh báo của bên gọi CŨ (chỉ có `alert_type` + `priority`): loại/riêng tư/trục theo bảng §4B.2 (loại lạ ⇒ legacy,
+    console_pin, low). Loại tình báo mà bằng chứng chưa `verified` ⇒ `legacy` (Console thấy, không lên Zalo — §8.1). Ngoài 6 cổng nên
+    tối đa 🟠: 🟠 khi impact ≥ 2 và urgency ≥ 2, còn lại ⚪. Một nơi ghi mức/ngăn vẫn là module này."""
+    kind, privacy, imp, urg, conf = LEGACY_MAP.get(alert_type, ("legacy", "console_pin", 1, 1, "low"))
+    ev = list(evidence or [])
+    if personnel_related:
+        privacy = "console_pin"
+    if kind in INTEL_KINDS:
+        mu_ids = [str(e.get("id")) for e in ev if isinstance(e, dict) and e.get("type") == "meaning_unit" and e.get("id")]
+        verified = bool(mu_ids) and (await db.execute(text("""
+            SELECT bool_and(e.quote_status = 'verified') FROM clean.evidence e JOIN clean.meaning_units m
+              ON m.id = e.meaning_unit_id AND m.observed_at = e.meaning_observed_at
+            WHERE m.org_id = :o AND e.meaning_unit_id::text = ANY(:ids)"""), {"o": org_id, "ids": mu_ids})).scalar_one() is True
+        if not verified:
+            kind = "legacy"
+    if kind in NON_INTEL_KINDS:
+        level, delivery = ("grey", "none")
+    else:
+        level, delivery = ("amber", "digest") if (imp or 0) >= 2 and (urg or 0) >= 2 else ("grey", "digest_low")
+    code = (await db.execute(text("SELECT core.next_code('ALR')"))).scalar_one()
+    return (await db.execute(text("""
+        INSERT INTO biz.alerts (org_id, code, alert_type, priority, recipient_user_id, subject_type, subject_id, title, summary,
+                                suggested_action, evidence, evidence_n, personnel_related, kind, privacy, impact, urgency, confidence_level,
+                                level, delivery, lane, detector, dedupe_key)
+        VALUES (:o, :c, :t, :p, :u, :st, :si, :ti, :su, :sa, CAST(:ev AS jsonb), :n, :pr, :k, :pv, :im, :ur, :cl, :lv, :dl, :ln,
+                'legacy_' || :t, NULL)
+        RETURNING id"""),
+        {"o": org_id, "c": code, "t": alert_type, "p": priority, "u": recipient_user_id, "st": subject_type, "si": subject_id,
+         "ti": title, "su": summary, "sa": suggested, "ev": orjson.dumps(ev).decode(), "n": len(ev), "pr": personnel_related,
+         "k": kind, "pv": privacy, "im": imp, "ur": urg, "cl": conf, "lv": level, "dl": delivery,
+         "ln": _lane("open", level, False, False, "fyi")})).scalar_one()  # type: ignore[no-any-return]

@@ -354,3 +354,29 @@ def test_intel_cap_day_evening_quiet_counts_next_day() -> None:
     assert signals.cap_day(datetime(2026, 10, 23, 22, 30, tzinfo=levels.VN), q).day == 24
     assert signals.cap_day(datetime(2026, 10, 23, 21, 59, tzinfo=levels.VN), q).day == 23
     assert signals.wilson_low(9, 10) < 0.6 <= signals.wilson_low(10, 10)
+
+
+async def test_intel_cap_reservation_is_atomic_across_parallel_sessions(db: AsyncSession) -> None:
+    """Giữ chỗ trần nguyên tử (CNS-126): đã 2/3 🔴 hôm nay, hai lượt SONG SONG cùng ra 🔴 ⇒ đúng MỘT được push_now, lượt kia bị trần."""
+    import asyncio
+
+    from gh.db import sessionmaker
+
+    org = await mk_org(db)
+    await _install(db, org)
+    for i in range(2):
+        li = _li("xung_dot_khieu_nai", customer_of_owner=True, flags={"public": True})
+        await signals.upsert(db, org, _up("xung_dot_khieu_nai", li, await _raw(db, org), f"case3:pre{i}|x"), NOW)
+    raws = [await _raw(db, org) for _ in range(2)]
+    await db.commit()
+
+    async def one(i: int) -> signals.Signal:
+        async with sessionmaker()() as s:
+            li = _li("xung_dot_khieu_nai", customer_of_owner=True, flags={"public": True})
+            out = await signals.upsert(s, org, _up("xung_dot_khieu_nai", li, raws[i], f"case3:par{i}|x"), NOW)
+            await asyncio.sleep(0.2)                       # giữ transaction (và khoá trần) một lúc
+            await s.commit()
+            return out
+
+    a, b = await asyncio.gather(one(0), one(1))
+    assert sorted([a.delivery, b.delivery]) == ["digest_top", "push_now"]
