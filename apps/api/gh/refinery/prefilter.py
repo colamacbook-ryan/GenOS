@@ -334,10 +334,11 @@ CRED_LURE = re.compile(r"\b(?:nhan qua|qua tang|tang qua|trung thuong|trung giai
                        r"cap nhat thong tin|mo khoa|bi khoa|link|duong dan|trang (?:do|web|la|gia|kia|nay)|http|www|ben do|ben kia|"
                        r"nguoi la|so la|nick la|tong dai|nhan vien ngan hang|goi toi|goi den|goi dien|hoi la|la lam|lua dao|nghi lua|"
                        r"bi lua|tru tien|mat tien|bay mat|no bao|cho no)\b")
-_CRED_OWN_SPECIFIC = re.compile(r"\b(?:he thong|phan mem|may tinh|may in|may pos|wifi|ke toan|chu ky so|file|excel|quay|"
-                                r"email cong ty|tai khoan cong ty)\b")
+_CRED_OWN_SPECIFIC = re.compile(r"\b(?:may tinh|may in|may pos|wifi|ke toan|chu ky so|email cong ty|tai khoan cong ty|o quay|tai quay|"
+                                r"quay giao dich|quay thu ngan)\b")
+#: Từ chung (app, zalo, ngân hàng, hệ thống, phần mềm, file…) chỉ tính khi đứng sát (≤ 4 từ) SAU động từ đăng nhập của người nói.
 _CRED_OWN_LOGIN = re.compile(r"\b(?:dang nhap|login)\b(?:\W+\w+){0,4}?\W+(?:app|ung dung|zalo|facebook|messenger|email|gmail|"
-                             r"internet banking|ngan hang)\b")
+                             r"internet banking|ngan hang|he thong|phan mem|file|excel)\b")
 #: Luật L2 được phép hạ mềm: CHỈ "nhập/điền xong … (rồi bị hỏi) mã" — bí mật CHƯA chắc đã đưa. Không bao giờ hạ `cred_enter`,
 #: `cred_secret_gave`, `cred_secret_sent`, `cred_enter_done`, `cred_enter_luon` (bí mật đã thực sự nhập/đưa), cũng không hạ luật bị trừ tiền / link lạ.
 CRED_SOFTENABLE = frozenset({"cred_enter_done2"})
@@ -351,7 +352,9 @@ def sentence(fold: str, a: int, b: int) -> str:
 
 
 def cred_own(fold: str, a: int, b: int) -> bool:
-    s = sentence(fold, a, b)
+    """Ngữ cảnh app/thiết bị của chính mình — CHỈ trong câu chứa động từ đăng nhập/nhập (đầu khớp `a`); khớp vắt qua câu sau không kéo
+    ngữ cảnh của câu khác vào (`b` không dùng — giữ chữ ký)."""
+    s = sentence(fold, a, a)
     return _CRED_OWN_SPECIFIC.search(s) is not None or _CRED_OWN_LOGIN.search(s) is not None
 
 

@@ -504,3 +504,18 @@ async def test_fraud_soft_candidate_not_lost_when_d2_budget_exhausted_or_errors(
         marked.append(len(keys2))
     assert all(o == [] for o in outs[:-1]) and [s.level for s in outs[-1]] == ["amber"]
     assert marked[-1] == marked[0] + 1                                   # chỉ lượt cuối (đủ MAX_FAILS) mới đánh dấu tin
+
+
+async def test_fraud_soft_candidate_written_low_when_org_safety_budget_exhausted(db: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Security review vòng cuối: (d2) bị chặn vì lý do KHÁC trần của chính lượt (tổ chức hết trần lượt an toàn trong ngày) ⇒ ghi mức thấp
+    ngay (≤ 🟠, không cờ), không bỏ mãi."""
+    async def denied(*a: Any, **k: Any) -> bool:
+        return False
+
+    monkeypatch.setattr(fraud, "_d2_allowed", denied)
+    w = await world(db)
+    await w.group("nv", "Nhóm NV", 20)
+    _p, iid = await w.person("Nhân viên", ptype="staff", group="nv", history_days_ago=60)
+    await w.raw(FP_STAFF[1], sender=iid, group="nv")
+    out = await fraud.run(db, w.org, w.now, call=_confirm_call(["credentials_entered"]))
+    assert [s.level for s in out] == ["amber"]

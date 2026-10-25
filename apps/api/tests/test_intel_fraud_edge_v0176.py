@@ -276,3 +276,23 @@ def test_prefilter_never_softens_secret_given_rules() -> None:
     assert prefilter.CRED_SOFTENABLE == frozenset({"cred_enter_done2"})
     c = next(c for c in prefilter.scan_text("em lỡ đưa mã OTP cho nó rồi, đang dùng app ngân hàng") if c.flag == "credentials_entered")
     assert c.hard_rule_hit == "credentials_entered"
+
+
+# — security review vòng cuối: ngữ cảnh "của mình" chỉ trong câu chứa ĐỘNG TỪ đăng nhập; token mơ hồ không hạ mềm —
+CRED_STILL_HARD_2 = [
+    "Em dùng máy tính công ty. Em đăng nhập rồi, nó hỏi mã OTP",
+    "Em đăng nhập rồi. Máy tính công ty hỏi mã OTP luôn",
+    "Em đăng nhập rồi, nó hỏi mã OTP, hệ thống báo lỗi gì đó",
+    "Em nhập xong rồi, nó hỏi mã PIN, lát em quay lại",
+    "Em đăng nhập rồi, nó hỏi mật khẩu file excel",
+]
+
+
+@pytest.mark.parametrize("body", CRED_STILL_HARD_2)
+def test_fraud_cred_own_only_in_login_sentence_and_no_vague_tokens(body: str) -> None:
+    d = F.decide(F.scan(body), CTX["staff"])
+    assert d is not None and F.H_CRED in d.hard, body
+
+
+def test_fraud_cred_link_lure_after_own_context_sentence_not_softened() -> None:
+    assert F.scan("Em dùng máy tính công ty. Nó bảo đăng nhập link này rồi gửi mã OTP").cred_soft is None

@@ -1245,15 +1245,16 @@ async def run(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, call: Any =
                 if processed is not None:
                     processed.append(_seen_key(row))
                 continue
-            want_d2 = d2_left > 0 and await _d2_allowed(db, org_id, p.upsert.thread_key or "", now)
+            allowed = d2_left > 0 and await _d2_allowed(db, org_id, p.upsert.thread_key or "", now)
+            want_d2 = allowed
             if p.decision.rules == ("credentials_suspect",):
                 # Ứng viên MỀM (T12) — không fail-open: (d2) đồng ý ⇒ ghi (🔴 chỉ khi xác nhận cờ `credentials_entered`); (d2)
-                # KHÔNG đồng ý ⇒ bỏ; không có bộ định tuyến ⇒ ghi ngay mức thấp (không cờ ⇒ tối đa 🟠); hết trần (d2) lượt này ⇒ KHÔNG đánh
+                # KHÔNG đồng ý ⇒ bỏ; không bộ định tuyến / tổ chức hết trần lượt an toàn ⇒ ghi ngay mức thấp (không cờ ⇒ tối đa 🟠); hết trần (d2) lượt này ⇒ KHÔNG đánh
                 # dấu "đã quét" (lượt sau thử lại); (d2) lỗi ⇒ đếm lỗi, đủ `MAX_FAILS` ⇒ ghi mức thấp.
-                if call is None:
-                    out.append(await _write(db, org_id, p, now))
+                if call is None or (d2_left > 0 and not allowed):
+                    out.append(await _write(db, org_id, p, now))   # không chạy được (d2) (không định tuyến / hết trần lượt an toàn) ⇒ ≤ 🟠
                 elif not want_d2:
-                    continue
+                    continue                                       # chỉ hết trần (d2) của CHÍNH lượt này ⇒ để lượt sau
                 else:
                     d2_left -= 1
                     p = await run_d2(db, org_id, p, call)
