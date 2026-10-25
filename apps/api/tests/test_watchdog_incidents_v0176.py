@@ -254,6 +254,7 @@ async def _session_heartbeat(db: Any, at: datetime) -> None:
 async def test_deadman_when_briefing_not_sent_by_slot_plus_ten_minutes(db: Any) -> None:
     org = await mk_org(db)
     await _telegram(db, org)
+    await _owner(db, org)
     slot = datetime(2026, 10, 24, 0, 30, tzinfo=UTC)                   # 07:30 giờ VN
     await db.execute(text("""INSERT INTO ops.telegram_outbox (org_id, kind, dedupe_key, text, created_at)
                              VALUES (:o, 'briefing', :d, 'Bản tin', :t)"""), {"o": org, "d": f"briefing:{slot.astimezone(watchdog.VN).isoformat()}", "t": slot})
@@ -276,7 +277,8 @@ async def test_deadman_silent_when_no_briefing_expected(db: Any) -> None:
 
 async def test_deadman_fires_when_briefing_never_generated(db: Any) -> None:
     org = await mk_org(db)
-    await _telegram(db, org)                                            # đã nối Telegram nhận bản tin nhưng bản tin không được tạo
+    await _telegram(db, org)
+    await _owner(db, org)                                            # đã nối Telegram nhận bản tin nhưng bản tin không được tạo
     await _tick(db, org, datetime(2026, 10, 24, 0, 50, tzinfo=UTC))
     assert [a.key for a in await _alerts(db)] == ["agent.digest_late"]
 
@@ -339,3 +341,134 @@ async def test_health_collect_intel_shows_missing_backup_channel_and_lock(db: An
     await backup.lock_assistant(db, org, via="console", user_id=owner)
     await db.commit()
     assert (await health.collect(db, redis, org, now=NOW))["intel"]["assistant_locked"] is True
+
+
+# ─── review: hồi phục giả, hai chuông, các lỗi nhỏ ───────────────────────────
+
+def _no_recovery(rows: list[Any]) -> bool:
+    return not any("hồi phục" in r.text for r in rows)
+
+
+async def test_deadman_held_open_after_window_until_briefing_sent(db: Any) -> None:
+    org = await mk_org(db)
+    await _telegram(db, org)
+    await _owner(db, org)
+    slot = datetime(2026, 10, 24, 0, 30, tzinfo=UTC)
+    await _tick(db, org, slot + timedelta(minutes=11))
+    assert [a.key for a in await _alerts(db)] == ["agent.digest_late"]
+    await _tick(db, org, slot + timedelta(hours=3, minutes=1))       # hết cửa sổ mà vẫn chưa gửi: KHÔNG phải đã hồi phục
+    assert [a.key for a in await _alerts(db)] == ["agent.digest_late"] and _no_recovery(await _backup_rows(db))
+    await db.execute(text("""INSERT INTO ops.telegram_outbox (org_id, kind, dedupe_key, text, sent_at) VALUES (:o, 'briefing', 'briefing:later', 'Bản tin', now())"""), {"o": org})
+    await db.commit()
+    await _tick(db, org, slot + timedelta(hours=4))
+    assert await _alerts(db) == [] and not _no_recovery(await _backup_rows(db))
+
+
+async def test_session_incident_aging_out_closes_silently(db: Any) -> None:
+    org = await mk_org(db)
+    await _telegram(db, org)
+    zl = await _channel(db, org, "zalo")
+    await _session(db, zl, org, "expired", ended=NOW - timedelta(minutes=3))
+    await _tick(db, org)
+    assert [a.key for a in await _alerts(db)] == ["agent.session:zalo"]
+    await _tick(db, org, NOW + timedelta(days=7, minutes=1))
+    assert await _alerts(db) == [] and _no_recovery(await _backup_rows(db))
+
+
+async def test_kick_aging_out_and_group_no_longer_eligible_close_silently(db: Any) -> None:
+    org = await mk_org(db)
+    await _telegram(db, org)
+    ch = await _channel(db, org)
+    await _session(db, ch, org, heartbeat=NOW)
+    gid = await _group(db, org, ch, left=NOW - timedelta(hours=1))
+    await db.execute(text("INSERT INTO ops.listen_events (org_id, at, kind, channel_id, channel_type, group_id) VALUES (:o, :t, 'bot_removed', :c, 'zalo', :g)"),
+                     {"o": org, "t": NOW - timedelta(hours=1), "c": ch, "g": gid})
+    quiet = await _group(db, org, ch, name="Nhóm im")
+    await _events(db, org, ch, _every(60, NOW - timedelta(days=10), NOW - timedelta(hours=20)), quiet)
+    await db.commit()
+    await _tick(db, org)
+    assert {a.key for a in await _alerts(db)} == {f"agent.group_removed:{gid}", f"agent.group_quiet:{quiet}"}
+    await db.execute(text("UPDATE core.groups SET listen_mode = 'off' WHERE id = :g"), {"g": quiet})   # Sếp tắt nghe nhóm: không phải "đã hết im"
+    await db.commit()
+    await _session_heartbeat(db, NOW + timedelta(days=8))
+    await _tick(db, org, NOW + timedelta(days=8))
+    assert await _alerts(db) == [] and _no_recovery(await _backup_rows(db))
+
+
+async def test_no_second_bell_when_channel_down_or_bridge_silent_already_open(db: Any) -> None:
+    from gh import health
+
+    org = await mk_org(db)
+    await _telegram(db, org)
+    await _owner(db, org)
+    zl = await _channel(db, org, "zalo")
+    await _session(db, zl, org, "expired", ended=NOW - timedelta(minutes=3))
+    wa = await _channel(db, org, "whatsapp")
+    await _session(db, wa, org, "active", heartbeat=NOW - timedelta(minutes=5))
+    await health.raise_once(db, org, key="channel.down:zalo", kind="channel.down", severity="bad", title="Zalo ngắt", body="b", link=None)
+    await health.raise_once(db, org, key="bridge.silent", kind="bridge.silent", severity="bad", title="Bridge im", body="b", link=None)
+    await db.commit()
+    await _tick(db, org)
+    await _tick(db, org, NOW + timedelta(minutes=1))
+    assert await _alerts(db) == []                                     # không mở sự cố riêng ⇒ không chuông thứ hai
+    assert (await db.execute(text("SELECT count(*) FROM core.notifications WHERE kind LIKE 'agent.%'"))).scalar_one() == 0
+    rows = await _backup_rows(db)
+    assert len(rows) == 2 and all(r.kind == "incident" for r in rows)   # kênh phụ vẫn được báo, mỗi sự cố MỘT lần
+
+
+async def test_own_incident_kept_if_already_open_when_channel_down_appears(db: Any) -> None:
+    from gh import health
+
+    org = await mk_org(db)
+    ch = await _channel(db, org)
+    await _session(db, ch, org, heartbeat=NOW - timedelta(minutes=5))
+    await _tick(db, org)
+    await health.raise_once(db, org, key="bridge.silent", kind="bridge.silent", severity="bad", title="Bridge im", body="b", link=None)
+    await db.commit()
+    await _tick(db, org, NOW + timedelta(minutes=1))
+    assert [a.key for a in await _alerts(db)] == ["agent.session:zalo"] and _no_recovery(await _backup_rows(db))
+
+
+async def test_deadman_skips_orgs_without_owner_or_with_owner_role_off(db: Any) -> None:
+    import orjson
+
+    org = await mk_org(db)
+    await _telegram(db, org)
+    at = datetime(2026, 10, 24, 0, 50, tzinfo=UTC)
+    await _tick(db, org, at)
+    assert await _alerts(db) == []                                     # không có Owner: bản tin cũng không chạy
+    await _owner(db, org)
+    await db.execute(text("UPDATE core.organizations SET settings = jsonb_build_object('gen', CAST(:g AS jsonb)) WHERE id = :o"),
+                     {"g": orjson.dumps({"roles": []}).decode(), "o": org})
+    await db.commit()
+    await _tick(db, org, at)
+    assert await _alerts(db) == []
+
+
+def test_clean_strips_bidi_zero_width_and_line_separators() -> None:
+    s = watchdog._clean("A‮B​C D E\u0085F\nG")
+    assert "‮" not in s and "​" not in s and " " not in s and "\n" not in s
+
+
+async def test_global_silence_uses_same_day_type_no_false_sunday_alarm(db: Any) -> None:
+    org = await mk_org(db)
+    ch = await _channel(db, org)
+    sunday = datetime(2026, 10, 25, 5, 0, tzinfo=UTC)                  # 12:00 Chủ nhật giờ VN
+    await _session(db, ch, org, heartbeat=sunday)
+    for d in range(1, 29):
+        day = sunday - timedelta(days=d)
+        if day.astimezone(watchdog.VN).isoweekday() <= 5:               # lịch sử chỉ có ngày thường, dày 10 phút
+            await _events(db, org, ch, _every(10, day.replace(minute=0), day.replace(minute=59)))
+    await _events(db, org, ch, [sunday - timedelta(hours=2)])
+    await _tick(db, org, sunday)
+    assert [a.key for a in await _alerts(db)] == []
+
+
+async def test_recovered_lines_include_channel_down_and_bridge_silent(db: Any) -> None:
+    from gh import health
+
+    org = await mk_org(db)
+    await health.raise_once(db, org, key="channel.down:zalo", kind="channel.down", severity="bad", title="Zalo ngắt", body="b", link=None)
+    await health.clear(db, org, "channel.down:zalo")
+    await db.commit()
+    assert await watchdog.recovered_lines(db, org, since=NOW) == ["Đã hồi phục: Zalo ngắt"]

@@ -18,7 +18,7 @@ trước khi vào tin báo."""
 from __future__ import annotations
 
 import logging
-import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -27,7 +27,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gh import health
+from gh import health, notifications
 from gh.biz.hooks import CronJob
 from gh.telegram import backup
 
@@ -40,14 +40,15 @@ CHANNEL_NAME = {"zalo": "Zalo", "whatsapp": "WhatsApp"}
 HEARTBEAT_MAX = timedelta(minutes=2)
 ENDED_LOOKBACK = timedelta(days=7)
 LOGOUT_WINDOW = timedelta(minutes=2)
-SILENCE_FACTOR, SILENCE_MIN_GAPS, SILENCE_FLOOR, SILENCE_HISTORY = 3, 20, timedelta(minutes=30), timedelta(days=14)
+SILENCE_FACTOR, SILENCE_MIN_GAPS, SILENCE_FLOOR, SILENCE_HISTORY = 3, 20, timedelta(minutes=30), timedelta(days=28)
 GROUP_FACTOR, GROUP_MIN_GAPS, GROUP_FLOOR, GROUP_HISTORY, GROUP_MAX = 5, 15, timedelta(hours=6), timedelta(days=30), 20
 GROUP_HOURS = range(7, 23)
 GROUP_LISTEN_MODES = ("tagged_only", "silent", "proactive")
 KICK_LOOKBACK = timedelta(days=7)
 DEADMAN_GRACE, DEADMAN_WINDOW = timedelta(minutes=10), timedelta(hours=3)
 LINK = "/connections"
-_CTRL = re.compile(r"[\x00-\x1f\x7f]+")
+_STRIP_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})      # điều khiển, định dạng (bidi, zero-width), dấu xuống dòng/đoạn Unicode
+ENDED_STATES = ("expired", "error", "logged_out")
 
 
 @dataclass(frozen=True)
@@ -58,10 +59,12 @@ class Incident:
     title: str
     body: str
     link: str = LINK
+    covered_by: tuple[str, ...] = ()      # sự cố cùng gốc đã có chuông ở nơi khác (channel.down / bridge.silent): không mở chuông thứ hai
 
 
 def _clean(name: str | None, limit: int = 60) -> str:
-    return _CTRL.sub(" ", name or "").strip()[:limit] or "(không tên)"
+    cleaned = "".join(" " if unicodedata.category(ch) in _STRIP_CATEGORIES else ch for ch in (name or ""))
+    return " ".join(cleaned.split())[:limit] or "(không tên)"
 
 
 def _human(d: timedelta) -> str:
@@ -71,7 +74,7 @@ def _human(d: timedelta) -> str:
 
 # ─── (1) phiên bridge ────────────────────────────────────────────────────────
 
-async def _sessions(db: AsyncSession, org: Any, now: datetime) -> list[Incident]:
+async def _sessions(db: AsyncSession, org: Any, now: datetime) -> tuple[list[Incident], dict[str, str]]:
     rows = (await db.execute(text("""
         SELECT DISTINCT ON (c.id) c.type, s.state, s.started_at, s.qr_issued_at, s.last_heartbeat_at, s.ended_at,
                EXISTS (SELECT 1 FROM core.channel_sessions p WHERE p.channel_id = c.id AND p.id <> s.id AND p.started_at IS NOT NULL) AS had_run,
@@ -82,24 +85,26 @@ async def _sessions(db: AsyncSession, org: Any, now: datetime) -> list[Incident]
         ORDER BY c.id, GREATEST(s.started_at, s.qr_issued_at, s.ended_at) DESC NULLS LAST, s.id DESC"""),
         {"o": org, "t": list(CHANNELS), "w": LOGOUT_WINDOW.total_seconds()})).all()
     out: list[Incident] = []
+    states = {r.type: r.state for r in rows}
     for r in rows:
         name, key = CHANNEL_NAME[r.type], f"{PREFIX}session:{r.type}"
-        if r.state in ("expired", "error", "logged_out"):
+        down = (f"channel.down:{r.type}",)
+        if r.state in ENDED_STATES:
             if r.ended_at is None or now - r.ended_at > ENDED_LOOKBACK or r.by_owner:
                 continue
             why = {"expired": "đã hết hạn phiên", "error": "gặp lỗi", "logged_out": "đã bị đăng xuất"}[r.state]
             out.append(Incident(key, "agent.session", "bad", f"Tài khoản {name} của Gen {why}",
-                                f"Gen không nghe và không gửi được tin trên {name}. Mở Kết nối để nối lại tài khoản."))
+                                f"Gen không nghe và không gửi được tin trên {name}. Mở Kết nối để nối lại tài khoản.", covered_by=down))
         elif r.state == "pending_qr" and r.had_run:
             out.append(Incident(key, "agent.session", "bad", f"Tài khoản {name} của Gen cần quét lại mã QR",
-                                f"Gen đang không nghe được tin trên {name}. Mở Kết nối và quét lại mã QR."))
+                                f"Gen đang không nghe được tin trên {name}. Mở Kết nối và quét lại mã QR.", covered_by=down))
         elif r.state == "active" and r.ended_at is None:
             seen = r.last_heartbeat_at or r.started_at or r.qr_issued_at
             if seen is not None and now - seen > HEARTBEAT_MAX:
                 out.append(Incident(key, "agent.session", "bad", f"Tài khoản {name} của Gen đã im {_human(now - seen)}",
                                     f"Cầu nối {name} không báo nhịp tim — tin khách có thể đang không vào. Mở Sức khoẻ hệ thống để xem cách khởi động lại.",
-                                    health.HEALTH_LINK))
-    return out
+                                    health.HEALTH_LINK, covered_by=(*down, "bridge.silent")))
+    return out, states
 
 
 # ─── (2) im lặng toàn cục ────────────────────────────────────────────────────
@@ -107,13 +112,15 @@ async def _sessions(db: AsyncSession, org: Any, now: datetime) -> list[Incident]
 async def _silence(db: AsyncSession, org: Any, now: datetime) -> list[Incident]:
     r = (await db.execute(text("""
         WITH ev AS (SELECT occurred_at, lag(occurred_at) OVER (ORDER BY occurred_at) AS prev FROM raw.events
-                    WHERE org_id = :o AND direction = 'inbound' AND occurred_at > :since AND occurred_at <= :now)
+                    WHERE org_id = :o AND direction = 'inbound' AND received_at > :since AND occurred_at > :since AND occurred_at <= :now)
         SELECT (SELECT max(occurred_at) FROM ev) AS last,
                count(*) FILTER (WHERE prev IS NOT NULL) AS n,
                percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM occurred_at - prev)) AS med
         FROM ev WHERE prev IS NOT NULL AND occurred_at - prev < interval '24 hours'
-          AND extract(hour FROM occurred_at AT TIME ZONE 'Asia/Ho_Chi_Minh') = :h"""),
-        {"o": org, "since": now - SILENCE_HISTORY, "now": now, "h": now.astimezone(VN).hour})).one()
+          AND extract(hour FROM occurred_at AT TIME ZONE 'Asia/Ho_Chi_Minh') = :h
+          AND (extract(isodow FROM occurred_at AT TIME ZONE 'Asia/Ho_Chi_Minh') >= 6) = :weekend"""),   # cùng loại ngày: Chủ nhật so với cuối tuần
+        {"o": org, "since": now - SILENCE_HISTORY, "now": now, "h": now.astimezone(VN).hour,
+         "weekend": now.astimezone(VN).isoweekday() >= 6})).one()
     if r.last is None or r.n < SILENCE_MIN_GAPS or r.med is None:
         return []
     limit = max(timedelta(seconds=SILENCE_FACTOR * float(r.med)), SILENCE_FLOOR)
@@ -140,7 +147,7 @@ async def _groups(db: AsyncSession, org: Any, now: datetime) -> tuple[list[Incid
     if evaluate_quiet:
         rows = (await db.execute(text("""
             WITH ev AS (SELECT group_id, occurred_at, lag(occurred_at) OVER (PARTITION BY group_id ORDER BY occurred_at) AS prev FROM raw.events
-                        WHERE org_id = :o AND direction = 'inbound' AND group_id IS NOT NULL AND occurred_at > :since AND occurred_at <= :now),
+                        WHERE org_id = :o AND direction = 'inbound' AND group_id IS NOT NULL AND received_at > :since AND occurred_at > :since AND occurred_at <= :now),
                  st AS (SELECT group_id, count(*) FILTER (WHERE prev IS NOT NULL) AS n, max(occurred_at) AS last,
                                percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM occurred_at - prev)) AS med
                         FROM ev GROUP BY group_id)
@@ -161,14 +168,23 @@ async def _groups(db: AsyncSession, org: Any, now: datetime) -> tuple[list[Incid
 
 # ─── (4) dead-man bản tin ────────────────────────────────────────────────────
 
+async def _briefing_runs(db: AsyncSession, org: Any) -> bool:
+    """Bản tin có chạy cho tổ chức này không — đúng điều kiện `briefing._one_org` bỏ qua (Gen tắt, không có vai Owner được dùng, không có Owner)."""
+    from gh.gen import store
+
+    cfg = await store.get_settings(db, org)
+    if not cfg.get("enabled") or "owner" not in (cfg.get("roles") or []):
+        return False
+    return bool(await notifications.owner_ids(db, org))
+
+
 async def _deadman(db: AsyncSession, org: Any, now: datetime) -> list[Incident]:
-    from gh.gen import briefing, store
+    from gh.gen import briefing
 
     slot = briefing.slot_for(now)
     if not (slot.at + DEADMAN_GRACE <= now < slot.at + DEADMAN_WINDOW):
         return []
-    cfg = await store.get_settings(db, org)
-    if not cfg.get("enabled"):
+    if not await _briefing_runs(db, org):
         return []
     r = (await db.execute(text("""
         SELECT EXISTS (SELECT 1 FROM ops.notify_channels WHERE org_id = :o AND enabled AND briefing) AS tg_path,
@@ -184,39 +200,86 @@ async def _deadman(db: AsyncSession, org: Any, now: datetime) -> list[Incident]:
 
 # ─── gom + áp dụng ───────────────────────────────────────────────────────────
 
-async def evaluate(db: AsyncSession, org: Any, now: datetime) -> tuple[dict[str, Incident], tuple[str, ...]]:
-    """(sự cố cần mở, tiền tố key KHÔNG được đóng lượt này vì không đánh giá được)."""
-    found: list[Incident] = [*await _sessions(db, org, now), *await _silence(db, org, now)]
+@dataclass(frozen=True)
+class Evaluation:
+    desired: dict[str, Incident]
+    keep: tuple[str, ...]            # tiền tố key KHÔNG đóng lượt này (không đánh giá được, vd. nhóm im ban đêm)
+    session_states: dict[str, str]
+
+
+async def evaluate(db: AsyncSession, org: Any, now: datetime) -> Evaluation:
+    sessions, states = await _sessions(db, org, now)
+    found: list[Incident] = [*sessions, *await _silence(db, org, now)]
     groups, quiet_evaluated = await _groups(db, org, now)
     found += groups
     found += await _deadman(db, org, now)
-    return {i.key: i for i in found}, () if quiet_evaluated else (f"{PREFIX}group_quiet:",)
+    return Evaluation({i.key: i for i in found}, () if quiet_evaluated else (f"{PREFIX}group_quiet:",), states)
+
+
+async def _resolution(db: AsyncSession, org: Any, key: str, now: datetime, ev: Evaluation) -> str:
+    """Sự cố đang mở mà lượt này không còn thấy: `recovered` (thật sự hết ⇒ báo hồi phục), `silent` (hết cửa sổ/hết điều kiện đánh giá nhưng KHÔNG
+    phải đã khỏi ⇒ đóng im lặng) hoặc `hold` (chưa khỏi, giữ mở)."""
+    kind, _, ref = key[len(PREFIX):].partition(":")
+    if kind == "session":
+        return "silent" if ev.session_states.get(ref, "gone") in (*ENDED_STATES, "gone") else "recovered"
+    if kind in ("group_removed", "group_quiet"):
+        g = (await db.execute(text("SELECT left_at, listen_mode FROM core.groups WHERE org_id = :o AND id = CAST(:g AS uuid)"), {"o": org, "g": ref})).one_or_none()
+        if g is None:
+            return "silent"
+        if kind == "group_removed":
+            return "recovered" if g.left_at is None else "silent"
+        return "recovered" if g.left_at is None and g.listen_mode in GROUP_LISTEN_MODES else "silent"
+    if kind == "digest_late":
+        from gh.gen import briefing
+
+        raised_at = briefing.slot_for(now).at          # có bản tin nào tới tay Sếp từ mốc gần nhất ⇒ đã thông; chưa ⇒ giữ mở (không tự hết theo cửa sổ)
+        sent = (await db.execute(text("""
+            SELECT EXISTS (SELECT 1 FROM ops.telegram_outbox WHERE org_id = :o AND kind = 'briefing' AND sent_at >= :t)
+                OR EXISTS (SELECT 1 FROM ops.owner_outbox WHERE org_id = :o AND kind = 'digest' AND sent_at >= :t)"""), {"o": org, "t": raised_at})).scalar_one()
+        if sent:
+            return "recovered"
+        return "hold" if await _briefing_runs(db, org) else "silent"
+    return "recovered"
 
 
 async def reconcile(db: AsyncSession, redis: Any, org: Any, now: datetime) -> dict[str, int]:
     """Mở/đóng sự cố của một tổ chức theo `evaluate`. Bên gọi commit."""
-    desired, keep = await evaluate(db, org, now)
+    ev = await evaluate(db, org, now)
     opened = (await db.execute(text("SELECT key, title FROM ops.health_alerts WHERE org_id = :o AND key LIKE 'agent.%' AND cleared_at IS NULL"),
                                {"o": org})).all()
+    own_open = {r.key for r in opened}
+    external = {r.key: r.raised_at for r in (await db.execute(text("""SELECT key, raised_at FROM ops.health_alerts
+        WHERE org_id = :o AND cleared_at IS NULL AND (key = 'bridge.silent' OR key LIKE 'channel.down:%')"""), {"o": org})).all()}
     stamp = now.strftime("%Y%m%d%H%M")
     raised = cleared = 0
-    for inc in desired.values():
+    for inc in ev.desired.values():
+        cover = next((k for k in inc.covered_by if k in external), None)
+        if cover is not None and inc.key not in own_open:
+            # Đã có chuông của sự cố này (ingest `channel.down:*` / `bridge.silent`): không mở chuông thứ hai, chỉ báo kênh phụ MỘT lần mỗi đợt.
+            if await backup.notify(db, org, f"{inc.title}. {inc.body}", kind="incident", dedupe_key=f"{inc.key}:cover:{cover}:{external[cover].strftime('%Y%m%d%H%M%S')}"):
+                raised += 1
+            continue
         fresh = await health.raise_once(db, org, key=inc.key, kind=inc.kind, severity=inc.severity, title=inc.title, body=inc.body, link=inc.link, redis=redis)
         if fresh:
             raised += 1
             await backup.notify(db, org, f"{inc.title}. {inc.body}", kind="incident", dedupe_key=f"{inc.key}:{stamp}")
     for row in opened:
-        if row.key in desired or any(row.key.startswith(p) for p in keep):
+        if row.key in ev.desired or any(row.key.startswith(p) for p in ev.keep):
+            continue
+        outcome = await _resolution(db, org, row.key, now, ev)
+        if outcome == "hold":
             continue
         if await health.clear(db, org, row.key, redis=redis):
             cleared += 1
-            await backup.notify(db, org, f"Đã hồi phục: {row.title}", kind="incident", dedupe_key=f"ok:{row.key}:{stamp}")
+            if outcome == "recovered":
+                await backup.notify(db, org, f"Đã hồi phục: {row.title}", kind="incident", dedupe_key=f"ok:{row.key}:{stamp}")
     return {"raised": raised, "cleared": cleared}
 
 
 async def recovered_lines(db: AsyncSession, org: Any, *, since: datetime) -> list[str]:
     """Dòng "đã hồi phục" cho bản tin kế (T3 chèn): các sự cố của watchdog đóng từ `since`."""
-    rows = (await db.execute(text("""SELECT title FROM ops.health_alerts WHERE org_id = :o AND key LIKE 'agent.%' AND cleared_at >= :s
+    rows = (await db.execute(text("""SELECT title FROM ops.health_alerts WHERE org_id = :o AND cleared_at >= :s
+                                       AND (key LIKE 'agent.%' OR key LIKE 'channel.down:%' OR key = 'bridge.silent')
                                      ORDER BY cleared_at"""), {"o": org, "s": since})).scalars().all()
     return [f"Đã hồi phục: {t}" for t in rows]
 
