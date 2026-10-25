@@ -82,3 +82,25 @@ async def test_rv2_failhigh_group_without_member_list(db: AsyncSession) -> None:
         await _unit_row(db, org, raw, "suc_khoe_an_toan", {"emergency": True, "ongoing": True}, person=sender, mention_entity=victim)
     out = await G.project_units(db, org, NOW)
     assert sum(1 for s in out if s.gate == levels.G2) == 1               # GRP-A (không danh sách) qua cổng; GRP-B (có danh sách, nạn nhân ngoài) thì không
+
+
+async def test_rv2_flood_of_processed_no_due_promises_cannot_push_out_real_deadline(db: AsyncSession) -> None:
+    """Tấn công: nhiều lời hứa không hạn (đã xử lý) + 1 lời hứa có hạn 3 giờ, limit nhỏ ⇒ lời hứa có hạn ra 🔴 ngay lượt đầu."""
+    w = await _world(db)
+    for i in range(30):
+        await _fact(db, w, "promised_to", w.staff, f"em sẽ gửi tài liệu {i}", at=NOW - timedelta(hours=40 - i), due=None, to=w.cust)
+    first = []
+    for i in range(3):                                                # nhóm không hạn có trần riêng (limit/5) ⇒ cần vài lượt để xử lý hết
+        first += await promises.project(db, w.org, NOW - timedelta(minutes=10 - i), limit=50)
+    assert len(first) == 30
+    await _fact(db, w, "promised_to", w.staff, "giao hàng chiều nay", at=NOW - timedelta(hours=2), due=NOW + timedelta(hours=3), to=w.cust)
+    out = await promises.project(db, w.org, NOW, limit=3)
+    assert [s.gate for s in out] == [levels.G4]                       # 30 fact không hạn đã có tín hiệu ⇒ không quét lại
+    # chưa xử lý: trần riêng cho nhóm không hạn, hạn thật xếp trước
+    w2 = await _world(db)
+    for i in range(30):
+        await _fact(db, w2, "promised_to", w2.staff, f"việc {i}", at=NOW - timedelta(hours=40 - i), due=None, to=w2.cust)
+    await _fact(db, w2, "promised_to", w2.staff, "giao hàng chiều nay", at=NOW - timedelta(hours=2), due=NOW + timedelta(hours=3), to=w2.cust)
+    out2 = await promises.project(db, w2.org, NOW, limit=5)
+    assert out2[0].gate == levels.G4 and len(out2) == 5
+    assert sum(1 for s in out2 if s.gate is None) == 4 and sum(1 for s in out2 if s.level != "red") == 4

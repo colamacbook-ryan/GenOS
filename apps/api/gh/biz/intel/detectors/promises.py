@@ -236,22 +236,28 @@ async def project(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, limit: 
     side = [e for e in (sets.owner, *sets.staff) if e is not None]
     tos = [e for e in (sets.owner, *sets.key_relations) if e is not None]
     rows = (await db.execute(text(f"""
-        SELECT {_FACT_COLS} FROM mem.facts f JOIN mem.entities se ON se.id = f.subject_id
-        CROSS JOIN LATERAL (SELECT {_DUE_TS} AS due_ts) d
-        LEFT JOIN LATERAL (SELECT COALESCE(te.merged_into, te.id) AS to_c FROM mem.entities te
-                           WHERE te.id::text = f.object_value ->> 'to_entity_id' AND te.org_id = :o LIMIT 1) t ON jsonb_typeof(f.object_value) = 'object'
-        WHERE f.org_id = :o AND f.predicate = ANY(:p) AND f.status IN ('asserted', 'owner_confirmed') AND f.valid_from >= :since
-          AND (d.due_ts IS NULL OR d.due_ts >= :dmin
-               OR NOT (EXISTS (SELECT 1 FROM biz.promises p WHERE p.fact_id = f.id)
-                       OR EXISTS (SELECT 1 FROM biz.alerts a WHERE a.org_id = :o AND a.facts ->> 'fact_id' = f.id::text)))
-          AND NOT EXISTS (SELECT 1 FROM ops.action_log al WHERE al.org_id = :o AND al.action = 'intel.promises.skip' AND al.target_id = f.id::text)
-          AND ((f.predicate = 'deadline' AND f.valid_to IS NULL AND d.due_ts >= :dmin)
-               OR (f.predicate <> 'deadline'
-                   AND (COALESCE(se.merged_into, se.id) = ANY(CAST(:side AS uuid[])) OR t.to_c = ANY(CAST(:tos AS uuid[])))
-                   AND (f.valid_to IS NULL OR (d.due_ts IS NOT NULL AND NOT EXISTS (SELECT 1 FROM biz.promises p WHERE p.fact_id = f.id)))))
-        ORDER BY abs(extract(epoch FROM (COALESCE(d.due_ts, f.valid_from + interval '1 day') - :now))) LIMIT :n"""),  # noqa: S608
+        SELECT * FROM (
+          SELECT {_FACT_COLS}, d.due_ts IS NULL AS nodue,
+                 row_number() OVER (PARTITION BY (d.due_ts IS NULL)
+                                    ORDER BY abs(extract(epoch FROM (COALESCE(d.due_ts, f.valid_from) - :now)))) AS rn
+          FROM mem.facts f JOIN mem.entities se ON se.id = f.subject_id
+          CROSS JOIN LATERAL (SELECT {_DUE_TS} AS due_ts) d
+          LEFT JOIN LATERAL (SELECT COALESCE(te.merged_into, te.id) AS to_c FROM mem.entities te
+                             WHERE te.id::text = f.object_value ->> 'to_entity_id' AND te.org_id = :o LIMIT 1) t ON jsonb_typeof(f.object_value) = 'object'
+          WHERE f.org_id = :o AND f.predicate = ANY(:p) AND f.status IN ('asserted', 'owner_confirmed') AND f.valid_from >= :since
+            -- fact không hạn / quá hạn > 3 ngày CHỈ vào lượt quét khi chưa có sổ hoặc tín hiệu (không chiếm chỗ mãi: chống lời hứa không hạn xả hàng loạt)
+            AND (d.due_ts >= :dmin
+                 OR NOT (EXISTS (SELECT 1 FROM biz.promises p WHERE p.fact_id = f.id)
+                         OR EXISTS (SELECT 1 FROM biz.alerts a WHERE a.org_id = :o AND a.facts ->> 'fact_id' = f.id::text)))
+            AND NOT EXISTS (SELECT 1 FROM ops.action_log al WHERE al.org_id = :o AND al.action = 'intel.promises.skip' AND al.target_id = f.id::text)
+            AND ((f.predicate = 'deadline' AND f.valid_to IS NULL AND d.due_ts >= :dmin)
+                 OR (f.predicate <> 'deadline'
+                     AND (COALESCE(se.merged_into, se.id) = ANY(CAST(:side AS uuid[])) OR t.to_c = ANY(CAST(:tos AS uuid[])))
+                     AND (f.valid_to IS NULL OR (d.due_ts IS NOT NULL AND NOT EXISTS (SELECT 1 FROM biz.promises p WHERE p.fact_id = f.id)))))
+        ) x WHERE x.rn <= CASE WHEN x.nodue THEN CAST(:nn AS int) ELSE CAST(:n AS int) END
+        ORDER BY x.nodue, x.rn LIMIT :n"""),  # noqa: S608
         {"o": org_id, "p": list(PREDICATES), "since": now - timedelta(days=WINDOW_DAYS), "dmin": now - timedelta(days=3), "now": now,
-         "side": side, "tos": tos, "n": limit})).all()
+         "side": side, "tos": tos, "n": limit, "nn": max(1, limit // 5)})).all()
     out: list[signals.Signal] = []
     for f in rows:
         try:
