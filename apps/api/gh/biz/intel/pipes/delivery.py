@@ -21,7 +21,7 @@ import secrets
 import unicodedata
 import uuid
 from collections.abc import Iterable
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import text
@@ -45,7 +45,6 @@ URGENT_HEAD = "Điểm gấp trong ngày"
 MARK = {"red": "🔴", "amber": "🟠", "grey": "⚪"}
 # Dãy ≥ 8 chữ số, giữa các chữ số có thể có ≤ 3 ký tự BẤT KỲ không phải chữ/số/xuống dòng (kể cả `_`): `0912–345–678`, `(0912) 345 678`.
 _LONGNUM = re.compile(r"(?<!\d)(\d(?:(?:[^\w\n]|_){0,3}\d){7,24})(?!\d)")
-_PROTECT = re.compile(r"\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[./-]\d{1,2}[./-]\d{4}|(?<![\d:])\d{1,2}:\d{2}(?::\d{2})?(?![\d:])")
 _INVISIBLE = re.compile("[\u00ad\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]")
 _FRAME = re.compile(r"(——— nội dung ———\n.*?\n——— hết ———)", re.S)
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -55,7 +54,38 @@ _MONEY_AFTER = re.compile(r"\s{0,2}(?:đ|₫|vnd|vnđ|k|tr|triệu|tỷ|ty|nghì
 _MONEY_BEFORE = re.compile(r"(?:vnd|vnđ|₫|số tiền|giá)\s{0,2}[:=]?\s{0,2}$", re.I)
 _ACCOUNT_KW = re.compile(r"(?:stk|tk\b|tài khoản|tai khoan|số tk|so tk|thẻ|the\b|card|ngân hàng|ngan hang)", re.I)
 MONEY_MAX_DIGITS = 12
-_DATE = re.compile(r"\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[./-]\d{1,2}[./-]\d{4}")
+
+
+_D_YMD = re.compile(r"(\d{4})-(\d{1,2})-(\d{1,2})")
+_D_DMY = re.compile(r"(\d{1,2})[./-](\d{1,2})[./-](\d{4})")
+_T_HMS = re.compile(r"(\d{1,2}):(\d{2})(?::(\d{2}))?")
+
+
+def _is_date(x: str) -> bool:
+    try:
+        if m := _D_YMD.fullmatch(x):
+            date(int(m[1]), int(m[2]), int(m[3]))
+            return True
+        if m := _D_DMY.fullmatch(x):
+            date(int(m[3]), int(m[2]), int(m[1]))
+            return True
+    except ValueError:
+        return False
+    return False
+
+
+def _is_time(x: str) -> bool:
+    m = _T_HMS.fullmatch(x)
+    return bool(m) and int(m[1]) < 24 and int(m[2]) < 60 and int(m[3] or 0) < 60
+
+
+def _is_datetime(raw: str) -> bool:
+    """TOÀN BỘ đoạn là một ngày thật, hoặc ngày + giờ thật («2026-10-23 17:35»). Một phần giống ngày không đủ để miễn che."""
+    x = raw.strip()
+    if _is_date(x):
+        return True
+    m = re.fullmatch(r"(.+?)[ T,]{1,2}(\d{1,2}:\d{2}(?::\d{2})?)", x)
+    return bool(m) and _is_date(m[1]) and _is_time(m[2])
 
 
 def display_mask(s: str) -> str:
@@ -64,18 +94,10 @@ def display_mask(s: str) -> str:
     +84) và (2) ngữ cảnh tiền sát bên (đ/VND/k/tr/triệu/tỷ sau số, hoặc «giá / số tiền / VND» trước số) mà trong 30 ký tự phía trước KHÔNG có
     từ khoá tài khoản (STK, tài khoản, thẻ, card…). Hoặc là ngày tháng."""
     s = _INVISIBLE.sub("", unicodedata.normalize("NFKC", s))      # chống lách: chữ số toàn chiều, NBSP/khoảng trắng lạ, ký tự vô hình
-    kept: list[str] = []
-
-    def protect(m: re.Match[str]) -> str:                        # ngày / giờ thật: đổi sang mốc toàn chữ cái (không dính chữ số) rồi trả lại
-        kept.append(m.group(0))
-        return "ZQ" + "".join(chr(97 + int(c)) for c in str(len(kept) - 1)) + "QZ"
-
-    s = _PROTECT.sub(protect, s)
-
     def sub(m: re.Match[str]) -> str:
         raw = m.group(1)
         d = re.sub(r"\D", "", raw)
-        if len(d) < 8 or _DATE.fullmatch(raw.strip()):
+        if len(d) < 8 or _is_datetime(raw):
             return raw
         before = s[max(0, m.start(1) - 30):m.start(1)]
         phone_like = d.startswith("0") or d.startswith("84") or before.endswith("+")
@@ -84,8 +106,7 @@ def display_mask(s: str) -> str:
                  and _ACCOUNT_KW.search(before) is None)
         return raw if money else f"{d[:4]}…{d[-3:]}"
 
-    out = _LONGNUM.sub(sub, s)
-    return re.sub(r"ZQ([a-j]+)QZ", lambda m: kept[int("".join(str(ord(c) - 97) for c in m.group(1)))], out) if kept else out
+    return _LONGNUM.sub(sub, s)
 
 
 def _defang_frame(s: str) -> str:

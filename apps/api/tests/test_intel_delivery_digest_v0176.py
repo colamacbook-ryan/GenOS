@@ -405,3 +405,17 @@ async def test_digest_bypass_quiet_counts_hidden_console_pin_defensive_item(db: 
     assert await run(org) == "sent"
     nb = (await db.execute(text("SELECT not_before, created_at, text FROM ops.owner_outbox WHERE kind = 'digest'"))).one()
     assert "1 mục cần xem trên Console" in nb.text and nb.not_before == nb.created_at
+
+
+def test_display_mask_date_lookalike_stk_and_sentinel_injection() -> None:
+    """Không có bước placeholder: STK chèn dạng ngày không được "bảo vệ" một phần; sentinel kẻ gian đưa vào không gây lỗi / thay chữ."""
+    m = delivery.display_mask
+    for leak, tail in (("0123-45-67 8901", "…901"), ("12/34/5678 9012", "…012"), ("2026-10-25 0912 345 678", "…678"), ("31/02/2026 1234 5678", "…678")):
+        out = m(leak)
+        assert "…" in out and out.endswith(tail) and "345 678" not in out and "8901" not in out.replace("…901", ""), (leak, out)
+    for inj in ("ZQabcQZ", "ZQaQZ 0912 345 678 ZQjjjjjjjjjjQZ", "ZQQZ"):
+        out = m(inj)
+        assert out.replace("0912 345 678", "0912…678") == out or "0912…678" in out
+        assert "ZQ" in out                                              # nguyên văn, không bị thay
+    for keep in ("25/10/2026", "17:35", "2026-10-23 17:35", "25.000.000đ", "23.10.2026, 17:35", "2026-10-23T17:35:10"):
+        assert m(keep) == keep, keep
