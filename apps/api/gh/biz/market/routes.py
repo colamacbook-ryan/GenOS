@@ -45,7 +45,7 @@ WRITE = require("opportunity.write")
 # ═══ Bảng cơ hội ══════════════════════════════════════════════════════════════
 
 def _catalog_supply_sql(alias: str) -> str:
-    """Cung tổng hợp từ hàng của Sếp (`meaning_unit_id` trỏ `biz.catalog_items`, T6): bảng giá nội bộ, chỉ Owner thấy."""
+    """Cung tổng hợp từ hàng của Sếp (`meaning_unit_id` trỏ catalog, T6): bảng giá nội bộ, chỉ Owner thấy."""
     return (f"({alias}.meaning_unit_id IS NOT NULL AND EXISTS "
             f"(SELECT 1 FROM biz.catalog_items ci WHERE ci.id = {alias}.meaning_unit_id))")
 
