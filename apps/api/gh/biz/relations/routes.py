@@ -513,10 +513,17 @@ async def get_profile_brief(person_id: uuid.UUID, tier: Literal["summary", "full
     pin = owner and user.pin_active()
 
     dm_sql, dm_params = direct_visible_sql(user, "mu.group_id", "mu.person_id")
-    events = (await db.execute(text(f"""
+    # §4.5 R3 / CNS-069: đơn vị lừa đảo KHÔNG bao giờ tóm tắt (chỉ câu cảnh báo); sức khoẻ cần PIN; nhân sự (staff/candidate) cần PIN.
+    hr_person = r.type in ("staff", "candidate")
+    events = [] if hr_person and not pin else (await db.execute(text(f"""
         SELECT mu.id, mu.event_type, mu.conclusion, mu.observed_at FROM clean.meaning_units mu
         WHERE mu.org_id = :o AND mu.person_id = :p AND mu.superseded_by IS NULL AND {dm_sql}
-        ORDER BY mu.observed_at DESC LIMIT 5"""), {"o": org, "p": person_id, **dm_params})).all()  # noqa: S608
+          AND mu.kind_hint IS DISTINCT FROM :fr AND (CAST(:pin AS boolean) OR mu.kind_hint IS DISTINCT FROM :hl)
+        ORDER BY mu.observed_at DESC LIMIT 5"""), {"o": org, "p": person_id, "fr": rsvc.FRAUD_SIGNAL, "hl": "suc_khoe_an_toan",  # noqa: S608
+                                                   "pin": pin, **dm_params})).all()
+    fraud_unit = owner and (await db.execute(text(f"""
+        SELECT 1 FROM clean.meaning_units mu WHERE mu.org_id = :o AND mu.person_id = :p AND mu.superseded_by IS NULL AND {dm_sql}
+          AND mu.kind_hint = :fr LIMIT 1"""), {"o": org, "p": person_id, "fr": rsvc.FRAUD_SIGNAL, **dm_params})).first() is not None  # noqa: S608
 
     out: dict[str, Any] = {
         "tier": tier,
@@ -525,7 +532,9 @@ async def get_profile_brief(person_id: uuid.UUID, tier: Literal["summary", "full
         "events": [{"text": mask_text(e.conclusion, owner), "event_type": e.event_type, "observed_at": iso(e.observed_at),
                     "evidence": [{"quote": mask_text(e.conclusion, owner), "at": iso(e.observed_at),
                                   "link": f"/explain/meaning_unit/{e.id}"}]} for e in events],
-        "facts": [], "open_items": [], "summary": None, "warning": None}
+        "facts": [], "open_items": [], "summary": None,
+        "warning": "có cảnh báo cần xem: mở Console (PIN)" if fraud_unit else None,
+        "events_withheld": "nhan_su_can_pin" if hr_person and not pin else None}
 
     ent = (await db.execute(text("SELECT id FROM mem.entities WHERE org_id = :o AND person_id = :p AND forgotten_at IS NULL"),
                             {"o": org, "p": person_id})).scalar_one_or_none()

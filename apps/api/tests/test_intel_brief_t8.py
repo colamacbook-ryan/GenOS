@@ -63,8 +63,8 @@ async def test_brief_non_owner_gets_no_memory_facts(owner_api: Api, db: Any, cli
     _, pid, _ = await _setup(db)
     op = await login_as(client, db, "operator")
     r = await op.get(f"/profile/{pid}/brief")
-    if r.status_code == 200:
-        assert r.json()["facts"] == [] and r.json()["summary"] is None and "xi măng" not in r.text
+    assert r.status_code == 200, r.text
+    assert r.json()["facts"] == [] and r.json()["summary"] is None and "xi măng" not in r.text
 
 
 async def test_graph_person_endpoint_scoped(owner_api: Api, db: Any) -> None:

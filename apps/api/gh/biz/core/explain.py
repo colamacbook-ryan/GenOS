@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gh.auth import rbac, service
 from gh.biz.core.scope import Scope, direct_visible, direct_visible_sql, group_view_sql, not_found, scope_for
 from gh.data.common import RAW_SELECT, iso, mask_text, raw_code, raw_item
+from gh.errors import pin_required
 
 MAX_UNITS = 20
 BUSINESS_READ = ("queue.read", "profile.read", "opportunity.read")
@@ -208,6 +209,11 @@ async def _score(db: AsyncSession, user: service.CurrentUser, sc: Scope, id: str
         subject_id = uuid.UUID(sid)
     except ValueError as e:
         raise not_found("Điểm") from e
+    if dimension == "reliability":      # T8: độ tin cậy lời hứa là đánh giá người — chỉ Owner có phiên PIN (§4.5 R3)
+        if user.role_code != rbac.OWNER:
+            raise not_found("Điểm")
+        if not user.pin_active():
+            raise pin_required()
     if subject_type == "person":
         visible = await _unit_visible(db, sc, subject_id, None)
     elif subject_type == "group":

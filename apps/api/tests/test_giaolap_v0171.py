@@ -119,7 +119,7 @@ async def test_briefing_summary_prompt_masks_outsider_lines(app, db, redis) -> N
     assert "25.000.000" in seen[0][-1].content
 
 
-async def test_gen_tool_results_to_model_are_masked_but_ids_survive(app, db, redis, owner_api) -> None:  # type: ignore[no-untyped-def]
+async def test_gen_tool_results_to_model_owner_keeps_phone_stk_but_masks_credentials(app, db, redis, owner_api) -> None:  # type: ignore[no-untyped-def]
     org = await org_id(db)
     await listen(db, org, "g1")
     [raw] = await put(sessionmaker(), org, msg("Cần container", sender="u1", name="Chị Lan"))
@@ -133,7 +133,10 @@ async def test_gen_tool_results_to_model_are_masked_but_ids_survive(app, db, red
     run = ToolRunner(owner_api.c._transport.app, me, token)  # type: ignore[attr-defined]
     res = await run.run("queue.list", {"tab": "all"})
     assert res.ok and str(unit) in res.text and str(unit) in run.seen_ids       # id còn nguyên cho validator
-    _no_secret(res.text)
+    # v0.1.76 (Q9, CNS-081): tool của OWNER gửi model nguyên văn SĐT/STK; OTP / mật khẩu vẫn luôn che.
+    for leak in ("482913", "abc12345xyz"):
+        assert leak not in res.text, leak
+    assert "0912 345 678" in res.text and "1234 5678 9012 3456" in res.text
 
 
 # ─── P3-5 — tin ĐI của nhân viên / tài khoản Sếp không tạo tín hiệu cầu, cơ hội ──────────────────────────────────────

@@ -143,6 +143,8 @@ def fact_visible_in_brief(sensitivity: str, status: str, predicate: str, *, pin:
     (SĐT, sức khoẻ, người nhà, STK…) chỉ khi Sếp đang có phiên PIN. Giá trị lạ ⇒ không hiện."""
     if sensitivity == "hr" or (status == "disputed" and predicate in fraud_predicates):
         return False
+    if status in ("retracted", "superseded") or predicate == "payment_account":    # đã rút/thay; STK chỉ qua `payment.verified`
+        return False
     return sensitivity == "normal" or (sensitivity == "sensitive" and pin)
 
 

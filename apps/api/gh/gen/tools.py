@@ -180,7 +180,7 @@ TOOLS: dict[str, Tool] = {t.name: t for t in (
     Tool("explain.get", "Vì sao hệ thống nói vậy; args.kind (vd alert), args.id", ("queue.read",), "/explain/{kind}/{id}",
          path_args=("kind", "id"), path_patterns={"kind": EXPLAIN_CHAT_KINDS, "id": r"^[0-9a-fA-F-]{8,40}$"},
          keep_case=("kind", "id"), owner_only=True),
-    Tool("complaint.repeated", "Khiếu nại lặp lại (cùng vấn đề nhiều lần)", ("care.read",), "/care/repeated-issues"),
+    Tool("complaint.repeated", "Khiếu nại lặp lại (cùng vấn đề nhiều lần)", ("care.read",), "/care/repeated-issues", owner_only=True),
     # Mạng xã hội — chỉ Owner. social.read xếp một lượt đọc trình duyệt (tính vào giới hạn 6 lượt/ngày; dùng lại lượt
     # vừa đọc trong 10 phút) rồi chờ ngắn; nội dung đã làm sạch + gắn cờ đáng ngờ. Muốn trả lời/nhắn thì Gen ĐỀ XUẤT
     # (social_reply/social_dm) — Sếp xác nhận + nhập PIN mới gửi.
@@ -320,6 +320,8 @@ def _filter_fact_rows(data: Any, *, pin: bool, fraud_predicates: frozenset[str])
                 sens, status = v.get("sensitivity"), v.get("status")
                 if sens == "hr" or (status == "disputed" and v.get("predicate") in fraud_predicates):
                     continue
+                if v.get("predicate") == "payment_account":      # STK chỉ qua `payment.verified` (đã xác minh + PIN), không qua sự thật
+                    continue
                 if sens != "normal" and not pin:
                     continue
             elif isinstance(v, dict) and ("predicate" in v or "fact_id" in v) and "sensitivity" not in v:
@@ -437,7 +439,24 @@ class ToolRunner:
 
     async def _guard_explain(self, tool: Tool, args: dict[str, Any]) -> None:
         """`explain.get kind=alert`: chỉ khi tín hiệu gốc có `privacy = chat_ok` (console_pin ⇒ từ chối, kể cả khi Sếp có PIN)."""
-        if tool.name != "explain.get" or str(args.get("kind")) != "alert":
+        if tool.name != "explain.get":
+            return
+        kind = str(args.get("kind"))
+        if kind == "meaning_unit":
+            # đơn vị lừa đảo: không bao giờ qua chat; sức khoẻ: cần phiên PIN (cùng luật với bản tóm tắt hồ sơ, §4.5)
+            try:
+                uid = uuid.UUID(str(args.get("id") or ""))
+            except ValueError as e:
+                raise ToolError("BAD_ARGS", "id phải là UUID") from e
+            from gh.db import sessionmaker
+
+            async with sessionmaker()() as db:
+                hint = (await db.execute(text("SELECT kind_hint FROM clean.meaning_units WHERE id = :i AND org_id = :o"),
+                                         {"i": uid, "o": self.user.org_id})).scalar_one_or_none()
+            if hint == FRAUD_SIGNAL or (hint == "suc_khoe_an_toan" and not self.user.pin_active()):
+                raise ToolError("FORBIDDEN", "Mục này chỉ xem trên Console (PIN)")
+            return
+        if kind != "alert":
             return
         try:
             aid = uuid.UUID(str(args.get("id") or ""))
