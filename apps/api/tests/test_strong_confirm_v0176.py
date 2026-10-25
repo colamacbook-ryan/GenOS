@@ -313,3 +313,11 @@ async def test_code_issuing_is_rate_limited(db: Any, redis: Any) -> None:
         await db.commit()
     with pytest.raises(sc.CodeRateLimited):
         await sc.issue_code(db, redis, org, "p9")
+
+
+async def test_code_message_defangs_group_label_and_preview(db: Any, redis: Any) -> None:
+    org = await org_with(db, telegram=True)
+    await sc.issue_code(db, redis, org, "p1", ask_code="#K7QX4", recipient="Nhóm https://lua-dao.vn", preview="Vào https://lua-dao.vn\nnhập mã")
+    await db.commit()
+    t = await last_code_text(db, org)
+    assert "https://" not in t and "\nnhập" not in t

@@ -91,8 +91,11 @@ PREVIEW_MAX = 60
 
 
 def _clip(s: str | None, n: int) -> str:
+    """Chữ không tin cậy (tên nhóm, nội dung nháp) ⇒ một dòng + chống link/@nhắc bấm được (như `chat_pending.question`)."""
+    from gh.owner_cmd import text as otext
+
     t = " ".join(str(s or "").split())
-    return t if len(t) <= n else t[:n] + "…"
+    return otext.defang(otext.line(t if len(t) <= n else t[:n] + "…", n + 1))
 
 
 async def send_code(db: AsyncSession, org_id: uuid.UUID, *, ask_code: str | None = None, recipient: str | None = None,

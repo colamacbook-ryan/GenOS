@@ -763,7 +763,9 @@ def profile_note(raw: str) -> str | None:
         return None
     content = raw[m.start(1):].strip()
     words = content.split()
-    if len(words) > 1 and words[1][:1].isupper():
+    name = words[1].lstrip("\"'«“‘([{<") if len(words) > 1 else ""
+    # Giới hạn đã biết: tên riêng viết THƯỜNG («anh tuấn …») không phân biệt rẻ được với chữ thường — Sếp sửa ở Console › Tôi.
+    if name[:1].isupper():
         return None
     return content
 
@@ -776,8 +778,8 @@ def _profile_section(content: str) -> str | None:
     # sở thích báo / giờ yên lặng đi mục `report_prefs` dù câu còn khớp mục khác (để luật phòng thủ + báo kênh phụ áp được)
     asks_quiet = profile.is_quiet_hours("report_prefs", content)
     f = profile._fold(content)
-    timed = bool(_BAO.search(f) and _TIME_WINDOW.search(f))
-    if section not in ("rhythm", "report_prefs") and (asks_quiet or timed or profile._NEGATIVE_REPORT_RE.search(f)):
+    about_reports = bool(_BAO.search(f) or "lam phien" in f)          # mọi câu nói về BÁO / làm phiền ⇒ mục cách báo (Console)
+    if section not in ("rhythm", "report_prefs") and (asks_quiet or about_reports or profile._NEGATIVE_REPORT_RE.search(f)):
         section = "report_prefs"
     return section
 
@@ -820,16 +822,39 @@ def _compact_keywords() -> tuple[str, ...]:
     return tuple(sorted({w.replace(" ", "") for w in words if len(w.replace(" ", "")) >= 5} | {"otp", "stk"}))
 
 
+#: Từ vựng thêm (recheck bảo mật T2) — so trên bản fold đã đổi số-thay-chữ 0→o (chỉ cho bước so khớp).
+_MORE_DEFENSIVE = re.compile(r"\b(?:mao danh|gia danh|doi no|bank|police)\b")
+#: Từ mà bỏ dấu sẽ trùng chữ thường gặp ("tiền"/"tiên" trong «ưu tiên», "vay"/"vậy"/"váy") ⇒ so CÓ DẤU trên chữ thường NFC.
+_ACCENTED_DEFENSIVE = re.compile(r"(?<!\w)(?:tiền|vay)(?!\w)")
+_IN_WORD_PUNCT = re.compile(r"[a-z][^a-z0-9\s]+[a-z]")
+
+
 def profile_suspicious(content: str) -> bool:
-    """Fail-closed (review bảo mật T2): (a) còn ký tự ngoài tập cho phép sau NFKC (chữ lấp vô hình U+115F/U+1160/U+3164/U+FFA0/
-    U+2800, chữ Cyrillic/Hy Lạp giả Latin…); (b) từ khoá phòng thủ khớp trên chữ đã fold + BỎ dấu câu, khoảng trắng chen giữa
-    ("l.ừa", "lừa-đảo", "l ừ a đ ả o"); (c) "báo" kèm số hoặc từ chỉ giờ (sáng/trưa/chiều/tối/đêm/khuya, giờ, h, am/pm, số chữ)."""
+    """Fail-closed (review bảo mật T2) ⇒ Console + PIN khi:
+    (a) còn ký tự ngoài allowlist sau NFKC (chữ lấp vô hình, ɑ/ı/ʟ, Cyrillic/Hy Lạp…);
+    (b) chữ bị chen dấu câu trong một từ ("l.ừa", "c-h-á-y") hoặc ≥ 2 token một chữ cái liên tiếp ("l ừ a", "b ệ n h");
+    (c) chữ lẫn số trong một từ ("l0a", "0TP"); từ khoá phòng thủ (từ vựng Hồ sơ + tiền bạc/mạo danh) khớp theo từ trên bản
+        fold có đổi 0→o ("tiền", "vay" so CÓ DẤU để khỏi trùng «ưu tiên», «vậy»),
+        hoặc khớp trên bản bỏ hết dấu câu/khoảng trắng với từ khoá dài ≥ 5 ("lừa-đảo", "l ừ a đ ả o");
+    (d) "báo" kèm số hoặc từ chỉ giờ."""
     from gh.biz.mem import profile
 
     if not all(_allowed_char(ch) for ch in content):
         return True
     f = profile._fold(content)
-    compact = re.sub(r"[^a-z0-9]", "", f)
+    if _IN_WORD_PUNCT.search(f):
+        return True
+    tokens = re.findall(r"[a-z0-9]+", f)
+    if any(len(a) == 1 and len(b) == 1 and a.isalpha() and b.isalpha() for a, b in zip(tokens, tokens[1:], strict=False)):
+        return True
+    if any(re.search(r"[a-z]", t) and re.search(r"\d", t) for t in tokens):
+        return True                       # chữ lẫn số trong một từ ("l0a", "0TP", "8h30") ⇒ Console
+    fm = f.replace("0", "o")
+    if profile._DEFENSIVE_RE.search(fm) or _EXTRA_DEFENSIVE.search(fm) or _MORE_DEFENSIVE.search(fm):
+        return True
+    if _ACCENTED_DEFENSIVE.search(content.lower().replace("0", "o")):
+        return True
+    compact = re.sub(r"[^a-z0-9]", "", fm)
     if any(k in compact for k in _compact_keywords()):
         return True
     return bool(_BAO.search(f) and (re.search(r"\d", f) or _TIME_WORDS.search(f)))
