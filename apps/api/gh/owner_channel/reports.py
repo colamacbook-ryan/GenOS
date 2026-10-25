@@ -140,7 +140,7 @@ MAX_ATTEMPTS = 5
 MAX_AGE = timedelta(hours=24)
 BATCH = 20
 #: Mã từ chối của cửa `send_auto` mà thử lại cũng vô ích ⇒ bỏ hẳn dòng (kênh tắt / không phải bot / câu bị chặn).
-PERMANENT = {"OWNER_CHANNEL_OFF", "NOT_BOT_ACCOUNT", "GUARD_BLOCKED", "TRIGGER_NOT_FOUND", "CHANNEL_NOT_SUPPORTED"}
+PERMANENT = {"OWNER_CHANNEL_OFF", "NOT_BOT_ACCOUNT", "GUARD_BLOCKED", "TRIGGER_NOT_FOUND", "CHANNEL_NOT_SUPPORTED", "ASSISTANT_LOCKED"}
 
 
 async def flush(sm: Any, bus: Any, redis: Any, now: datetime | None = None) -> dict[str, int]:
@@ -153,10 +153,19 @@ async def flush(sm: Any, bus: Any, redis: Any, now: datetime | None = None) -> d
     now = now or datetime.now(UTC)
     stats = {"sent": 0, "failed": 0, "retry": 0}
     async with sm() as db:
+        # Org đang KHOÁ TRỢ LÝ loại ngay trong SELECT (không chiếm chỗ trong batch của org khác — chống DoS chéo tenant); hàng bị giữ
+        # quá MAX_AGE đóng lại để mở khoá không dội báo cáo cũ.
+        await db.execute(text("""
+            UPDATE ops.owner_outbox x SET failed_code = 'ASSISTANT_LOCKED'
+            FROM core.organizations o WHERE o.id = x.org_id AND o.settings->'intel'->>'assistant_locked_at' IS NOT NULL
+              AND x.sent_at IS NULL AND x.failed_code IS NULL AND x.created_at < :old"""), {"old": now - MAX_AGE})
+        await db.commit()
         rows = (await db.execute(text("""
-            SELECT id, org_id, channel_type, text, attempts, created_at FROM ops.owner_outbox
-            WHERE sent_at IS NULL AND failed_code IS NULL AND not_before <= :now AND next_attempt_at <= :now
-            ORDER BY created_at LIMIT :n"""), {"now": now, "n": BATCH})).all()
+            SELECT x.id, x.org_id, x.channel_type, x.text, x.attempts, x.created_at FROM ops.owner_outbox x
+            JOIN core.organizations o ON o.id = x.org_id
+            WHERE x.sent_at IS NULL AND x.failed_code IS NULL AND x.not_before <= :now AND x.next_attempt_at <= :now
+              AND o.settings->'intel'->>'assistant_locked_at' IS NULL
+            ORDER BY x.created_at LIMIT :n"""), {"now": now, "n": BATCH})).all()
         await db.rollback()
     locked: dict[Any, bool] = {}
     for r in rows:

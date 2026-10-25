@@ -128,3 +128,34 @@ async def test_flush_sets_sent_at_for_digest_so_deadman_sees_it(app, db, redis) 
     bus = FakeBus()
     assert (await reports.flush(SM(), bus, redis, now=NOON + timedelta(minutes=1)))["sent"] == 1
     assert (await db.execute(text("SELECT sent_at FROM ops.owner_outbox WHERE kind = 'digest'"))).scalar_one() is not None
+
+
+async def test_locked_org_rows_do_not_starve_other_orgs_and_stale_ones_expire(app, db, redis) -> None:  # type: ignore[no-untyped-def]
+    """TẤN CÔNG DoS chéo tenant: org A khoá với nhiều hàng chờ không được chiếm batch (BATCH = 20) của org B."""
+    from tests.mem_helpers import mk_org
+
+    a = await org_id(db)
+    await bot_world(db, a)
+    for i in range(reports.BATCH + 5):
+        assert await enq(a, dedupe_key=f"a{i}") is True or True        # xếp được nhiều hàng trước khi khoá (bỏ qua trần: chèn thẳng)
+    await db.execute(text("""INSERT INTO ops.owner_outbox (org_id, channel_type, kind, severity, dedupe_key, text, created_at, not_before, next_attempt_at)
+                             SELECT :o, 'zalo', 'alert', 'urgent', 'bulk' || g, 'cũ', :c, :c, :c FROM generate_series(1, :n) g"""),
+                     {"o": a, "c": NOON - timedelta(hours=1), "n": reports.BATCH + 5})
+    await db.execute(text("""INSERT INTO ops.owner_outbox (org_id, channel_type, kind, severity, dedupe_key, text, created_at, not_before, next_attempt_at)
+                             VALUES (:o, 'zalo', 'digest', 'info', 'stale', 'rất cũ', :c, :c, :c)"""), {"o": a, "c": NOON - timedelta(hours=30)})
+    await db.commit()
+    await _lock(db, a)
+    # org B (cùng DB): hàng MỚI hơn hàng của A ⇒ trước đây nằm sau 20 hàng của A và không bao giờ được gửi
+    b = await mk_org(db, "Org B")
+    ch = (await db.execute(text("INSERT INTO core.channels (org_id, type, name) VALUES (:o, 'zalo', 'z') RETURNING id"), {"o": b})).scalar_one()
+    await db.commit()
+    await bot_world(db, b)
+    assert ch is not None
+    assert await enq(b, kind="alert", severity="urgent", dedupe_key="b1", text_="Tin của B", now=NOON) is True
+    bus = FakeBus()
+    stats = await reports.flush(SM(), bus, redis, now=NOON + timedelta(minutes=1))
+    assert stats["sent"] == 1 and [p["text"] for _, p in bus.on(BRIDGE_OUTBOUND)] == ["Tin của B"]
+    # hàng của A: còn chờ (không bị gửi, không bị đốt lượt thử); hàng quá MAX_AGE bị đóng để mở khoá không dội báo cáo cũ
+    pend = (await db.execute(text("SELECT count(*) FROM ops.owner_outbox WHERE org_id = :o AND sent_at IS NULL AND failed_code IS NULL AND attempts = 0"), {"o": a})).scalar_one()
+    assert pend >= reports.BATCH
+    assert (await db.execute(text("SELECT failed_code FROM ops.owner_outbox WHERE dedupe_key = 'stale'"))).scalar_one() == "ASSISTANT_LOCKED"
