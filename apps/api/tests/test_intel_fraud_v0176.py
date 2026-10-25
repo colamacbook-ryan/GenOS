@@ -7,7 +7,9 @@ chỉ ghi lịch sử, mồi phishing tối đa 🟠."""
 from __future__ import annotations
 
 from datetime import timedelta
+from typing import Any
 
+import orjson
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -433,3 +435,41 @@ async def test_fraud_poison_message_dropped_after_max_fails(db: AsyncSession, mo
     for k in range(fraud.MAX_FAILS + 2):
         await fraud.run_and_commit(db, w.org, w.now + timedelta(minutes=k), seen=seen)
     assert len(tries) == fraud.MAX_FAILS
+
+
+# ─── T12 review BLOCKER 1: câu thường không đẩy 🔴 luật cứng; ứng viên mềm chỉ ghi khi (d2) xác nhận ─────────────────────
+
+FP_STAFF = ["anh đăng nhập app ngân hàng rồi, ngân hàng gửi mã OTP bảo nhập để xác nhận chuyển khoản cho nhà cung cấp",
+            "em đăng nhập zalo trên máy tính rồi, nó gửi mã xác nhận về điện thoại bảo nhập",
+            "anh đăng nhập vào hệ thống kế toán rồi, cần mật khẩu wifi không anh"]
+
+
+async def test_fraud_everyday_login_messages_raise_no_signal(db: AsyncSession) -> None:
+    for body in FP_STAFF:
+        w = await world(db)
+        await w.group("nv", "Nhóm NV", 20)
+        _p, iid = await w.person("Nhân viên", ptype="staff", group="nv", history_days_ago=60)
+        await w.raw(body, sender=iid, group="nv")
+        assert await fraud.run(db, w.org, w.now) == [], body
+        assert await _alerts(db, w.org) == []
+
+
+def _confirm_call(flags: list[str]) -> Any:
+    from gh.refinery.extract import ModelReply
+
+    async def call(messages: list[Any]) -> ModelReply:
+        return ModelReply(orjson.dumps({"gate": "lua_dao_dang_dien_ra", "flags_confirmed": flags, "harm": {"what": "mất tiền"}, "verdict": "agree",
+                                        "reason": "thử"}).decode(), "fake-strong")
+    return call
+
+
+async def test_fraud_soft_credential_candidate_written_only_when_d2_confirms(db: AsyncSession) -> None:
+    for call, want in ((None, 0), (_confirm_call([]), 0), (_confirm_call(["credentials_entered"]), 1)):
+        w = await world(db)
+        await w.group("nv", "Nhóm NV", 20)
+        _p, iid = await w.person("Nhân viên", ptype="staff", group="nv", history_days_ago=60)
+        await w.raw(FP_STAFF[1], sender=iid, group="nv")
+        out = await fraud.run(db, w.org, w.now, call=call)
+        assert len(out) == want
+        if want:
+            assert (out[0].level, out[0].gate) == ("red", levels.G1)
