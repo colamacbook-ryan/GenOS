@@ -104,16 +104,21 @@ def phishing_bait(text: str | None) -> bool:
 # Che khi HIỂN THỊ / ghi log (Q9: chỉ che bí mật — OTP, mật khẩu, số thẻ, CVV, token; STK giữ 3 số cuối).
 _CVV = re.compile(r"(?i)\b(cvv2?|cvc2?|csc|m[ãa] (?:b[ảa]o m[ậa]t|cvv))\b(\s*(?:l[àa]|:|=)?\s*)(\d{3,4})\b")
 _TOKEN = re.compile(r"(?i)\b(token|api[ _-]?key|secret|access[ _-]?key|bearer)\b(\s*(?:l[àa]|:|=)?\s*)([A-Za-z0-9._~+/=-]{6,})")
-_LONG_DIGITS = re.compile(r"(?<!\d)(\d[\d .-]{4,24}\d)(?!\d)")
+_LONG_DIGITS = re.compile(r"(?<!\d)(\d(?:[ ._/-]{0,2}\d){5,24})(?!\d)")      # số ngăn bằng " . _ / -" (không mơ hồ)
+_PASSWORD = re.compile(r"(?i)(?<![\w])(mk|m[ậa]t kh[ẩa]u|pass(?:word|wd)?|pw|pwd)\b(\s*(?:l[àa]|:|=)?\s*)(?!\[đã che\]|l[àa]\b|\s)(\S+)")
 MASK = "[đã che]"
 
 
 def mask_secrets(text: str | None) -> str:
     """Che OTP / mật khẩu (theo ngữ cảnh từ khoá), CVV, token; mọi dãy ≥ 6 chữ số chỉ giữ 3 số cuối (STK, số thẻ). Dùng cho chữ
     HIỂN THỊ (trích dẫn, tiêu đề) và log — KHÔNG dùng cho chữ gửi model (Q9)."""
+    import unicodedata
+
     from gh.data.common import mask_text
 
-    out = mask_text(text or "", False) or ""
+    clean = "".join(ch for ch in (text or "") if unicodedata.category(ch) != "Cf")       # bỏ zero-width trước (chống né che số thẻ)
+    out = mask_text(clean, False) or ""
+    out = _PASSWORD.sub(lambda m: f"{m.group(1)}{m.group(2)}{MASK}", out)
     out = _CVV.sub(lambda m: f"{m.group(1)}{m.group(2)}{MASK}", out)
     out = _TOKEN.sub(lambda m: f"{m.group(1)}{m.group(2)}{MASK}", out)
 

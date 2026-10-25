@@ -77,8 +77,22 @@ CASES: list[tuple[str, str, str, int | str, str | None]] = [
     ("ung_known", "Cho em mượn 2 triệu nha chị, cuối tuần em trả", "member", 25, None),
     # — đơn lớn không cọc, giục gửi ngay ⇒ 🔴 —
     ("goods1", "Em lấy 200 thùng nước suối, không cọc nha, gửi ngay trong hôm nay giúp em", "stranger", "dm", "red"),
-    ("goods2", "Chốt đơn 50 bao xi măng, nhận hàng rồi mới thanh toán, giao gấp giúp anh", "stranger", 40, "red"),
-    ("goods3", "Lấy nguyên lô, ship COD, gửi luôn chiều nay nhé", "stranger", 300, "red"),
+    ("goods2", "Chốt đơn 50 bao xi măng, không cọc, giao gấp giúp anh", "stranger", 40, "red"),
+    ("goods3", "Lấy nguyên lô, cọc sau, gửi luôn chiều nay nhé", "stranger", 300, "red"),
+    # — báo nhầm không chịu được (review M4): COD / "nhận hàng rồi thanh toán" là cách mua thường; "giúp em" không kèm chuyển/ứng/mượn —
+    ("fp_cod", "Em lấy 20 thùng, ship cod, giao ngay trong hôm nay nhé", "stranger", "dm", None),
+    ("fp_cod2", "Lấy nguyên lô, ship COD, gửi luôn chiều nay nhé", "stranger", 300, None),
+    ("fp_nhan_hang", "Chốt đơn 50 bao xi măng, nhận hàng rồi mới thanh toán, giao gấp giúp anh", "stranger", 40, None),
+    ("fp_giup1", "Anh Minh ơi giúp em kiểm tra xem đã nhận tiền chưa ạ", "stranger_addr_owner", 150, None),
+    ("fp_giup2", "Giúp em xem lại tiền ship đơn hôm qua nha", "stranger", 25, None),
+    ("fp_cuu", "Cứu em với, tiền điện tháng này cao quá", "stranger", 25, None),
+    # — né bằng ký tự lạ (review M1) —
+    ("zw1", "Anh ơi bên em đổi số tài khoản sang 0123\u200b456789 MB nhé, anh chuyển vào số này giúp em", "ncc_hist", 120, "red"),
+    ("zw2", "Bên em đổi STK sang 0123_456_789 MB, anh chuyển vào số này", "ncc_hist", 120, "red"),
+    ("zw3", "Bên em đổi\n\n\nSTK sang 0123/456/789 MB,\n anh chuyển vào số này", "ncc_hist", 120, "red"),
+    ("claim1", "Bên em đổi tài khoản nhận tiền rồi, anh chuyển khoản tiền hàng giúp em nhé", "ncc_nohist", 120, "red"),
+    # — người lạ gửi STK + đòi thanh toán (review M3) —
+    ("nl1", "Anh thanh toán đơn hôm qua 48.500.000đ vào STK 0123456789 MB giúp em", "stranger", 120, "red"),
     ("goods_known", "Chị lấy 200 thùng, cọc sau nha em, gửi ngay trong hôm nay", "customer", 40, None),
     ("goods_small", "Em lấy 2 cái áo, ship COD gửi ngay nha", "stranger", "dm", None),
     ("goods_deposit", "Em lấy 200 thùng, em cọc 30% rồi, gửi ngay giúp em", "stranger", "dm", None),
@@ -116,7 +130,7 @@ def test_fraud_edge_case(code: str, body: str, ctx: str, size: int | str, want: 
 
 
 def test_fraud_edge_suite_size_and_otp_coverage() -> None:
-    assert len(CASES) >= 40
+    assert len(CASES) >= 50
     assert sum(1 for c in CASES if c[0].startswith("otp") and c[4] == "red") >= 8
     assert sum(1 for c in CASES if c[0].startswith("otp_no")) >= 3
 
@@ -171,3 +185,25 @@ def test_fraud_amount_small_first_does_not_lower_level() -> None:
     assert da is not None and da.amount_vnd == 50_000_000 and "goods_no_deposit_rush" in da.rules
     li = F.signal_input(da, msg_at=H.NOW, thread=L.Thread(type="dm_agent", size=2, agent_in_thread=True))
     assert L.axes(li, H.profile(), H.state(), H.NOW)[0] == 3                    # impact theo số lớn (≥ 50 triệu)
+
+
+def test_fraud_zero_width_digits_parse_to_same_account() -> None:
+    a = F.scan("STK 0123\u200b456789 MB").accounts
+    b = F.scan("STK 0123456789 MB").accounts
+    assert a and b and a[0].digest == b[0].digest
+    body = "đổi STK sang 0123\u200b456\u200b789 MB"
+    sp = F.scan(body).accounts[0].span
+    assert body[sp[0]:sp[1]].replace("\u200b", "") == "0123456789"         # span về đúng chữ gốc
+
+
+def test_fraud_no_master_key_uses_claim_rule_and_warns_once(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """m5: thiếu khoá master ⇒ không im lặng bỏ qua: luật cứng `doi_stk_xin_tien`, cảnh báo MỘT lần."""
+    import logging
+
+    caplog.set_level(logging.WARNING)
+    monkeypatch.setattr(F, "_digest", lambda _d: None)
+    monkeypatch.setattr(F, "_NO_KEY_WARNED", False)
+    for _ in range(2):
+        d = F.decide(F.scan("Anh chuyển tiền hàng vào STK 0123456789 MB giúp em"), CTX["ncc_hist"])
+        assert d is not None and F.H_STK_CLAIM in d.hard and "stk_unhashed" in d.rules
+    assert sum("thiếu khoá master" in r.getMessage() for r in caplog.records) == 1

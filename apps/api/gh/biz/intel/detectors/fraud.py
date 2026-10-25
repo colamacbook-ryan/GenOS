@@ -37,6 +37,8 @@ import asyncio
 import functools
 import logging
 import re
+import time
+import unicodedata
 import uuid
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
@@ -61,6 +63,11 @@ WINDOW = timedelta(minutes=30)            # tin mới (thân tin)
 MEDIA_WINDOW = timedelta(hours=24)        # chữ OCR/transcript tới trễ cho tin ≤ 24 giờ
 SCAN_LIMIT = 400
 MAX_D2_PER_RUN = 5
+FETCH_FACTOR = 5                          # lấy tối đa SCAN_LIMIT × 5 ứng viên (mới nhất trước) rồi lọc theo watermark
+RUN_BUDGET_S = 30.0                       # trần thời gian MỘT lượt quét một tổ chức; còn lại để lượt sau (tin mới vẫn được ưu tiên)
+GROUP_WINDOW = timedelta(minutes=10)      # gom tin chia nhỏ: ≤ 3 tin liên tiếp của CÙNG người trong CÙNG luồng trong 10 phút
+GROUP_MAX = 3
+SEEN_TTL_S = 2 * 86400
 STRANGER_DAYS = 7.0
 BIG_ORDER_VND = 5_000_000
 BIG_ORDER_QTY = 10
@@ -126,7 +133,7 @@ _BANKS = (r"(?:vcb|vietcombank|techcombank|tcb|mb|mbbank|mb bank|acb|bidv|agriba
           r"hdbank|ocb|msb|vib|seabank|eximbank|lpbank|lienvietpostbank|namabank|abbank|baovietbank|pvcombank|kienlongbank|momo|zalopay|"
           r"viettelpay|vnpay|shinhan|uob|hsbc|cake|timo|tnex)")
 _ACCT_LABEL = re.compile(rf"\b(?:stk|so tai khoan|so tk|tai khoan|tk|chuyen khoan|chuyen tien|ck|ngan hang|nh|{_BANKS})\b")
-_DIGITS = re.compile(r"(?<![\d.,])(\d(?:[ .-]?\d){7,18})(?![\d])")
+_DIGITS = re.compile(r"(?<![\d.,])(\d(?:[\s._/-]{0,2}\d){7,18})(?![\d])")   # nhóm số ngăn bằng ≤ 2 ký tự " ._/-" (không mơ hồ)
 _ORDER_CODE_BEFORE = re.compile(r"(?:ma don|don hang|so don|ma van don|van don|mvd|ma hd|hoa don|ma gd|ma giao dich|ngay|sdt|so dt|dien thoai|"
                                 r"hotline|zalo|goi|lh|lien he|cccd|cmnd|mst|ma so thue)\s*(?:hang|so)?\s*[:#.-]?\s*$")
 _PHONE = re.compile(r"^(?:84|0)(?:3|5|7|8|9)\d{8}$")
@@ -138,12 +145,12 @@ _CHANGE = re.compile(rf"\b(?:doi|thay doi|doi sang|chuyen sang|cap nhat)\b{_g(0,
 _PAY_VERB = re.compile(r"\b(?:chuyen khoan|chuyen tien|chuyen|ck|thanh toan|tra tien|tra|gui tien|dong tien|nap|nop|banking|bank)\b")
 _ASK_MONEY = re.compile(
     rf"\b(?:ung|ung truoc|tam ung|muon|vay|cho muon|cho vay|chuyen giup|chuyen ho|nho chuyen|gui giup|nap giup|chuyen gap|chuyen truoc|"
-    rf"ck giup|ck ho|ck gap|bank giup|giup em|giup minh|cuu)\b{_g(0, 5)}[\s,]+(?:tien\b|\d[\d.,]*\s*(?:k|tr|trieu|nghin|ngan|cu|xi|lit|d|dong|vnd|ty)\b)"
+    rf"ck giup|ck ho|ck gap|bank giup|(?:giup em|giup minh|giup chau|cuu em|cuu minh)\s+(?:chuyen|ung|muon|vay|ck|gui|nap))\b{_g(0, 5)}[\s,]+(?:tien\b|\d[\d.,]*\s*(?:k|tr|trieu|nghin|ngan|cu|xi|lit|d|dong|vnd|ty)\b)"
     rf"|\b(?:ung|muon|vay)\s+(?:giup\s+|ho\s+|tam\s+|cho\s+)?(?:em|minh|toi|chau|con|anh|chi)?\s*\d")
 _ORDER = re.compile(r"\b(?:dat|lay|chot|order|mua|dat hang|chot don|len don|nhap|can mua|lay luon|mua luon)\b")
-_NO_DEPOSIT = re.compile(r"\b(?:khong coc|chua coc|khoi coc|coc sau|khong dat coc|ko coc|k coc|khong can coc|chua chuyen coc|ship cod|cod|"
-                         r"nhan hang (?:roi )?(?:moi )?(?:tra|thanh toan|chuyen|ck)|tra sau|thanh toan sau|gui hang truoc|giao truoc tra sau|"
-                         r"cong no|ghi no|thieu tra sau)\b")
+#: "Không cọc" tường minh. KHÔNG gồm "ship COD" / "nhận hàng rồi thanh toán" — cách mua hằng ngày, báo nhầm không chịu được (review T7 M4).
+_NO_DEPOSIT = re.compile(r"\b(?:khong coc|chua coc|khoi coc|coc sau|khong dat coc|ko coc|k coc|khong can coc|chua chuyen coc|"
+                         r"gui hang truoc|giao truoc tra sau|cong no|ghi no|thieu tra sau)\b")
 _RUSH = re.compile(r"\b(?:gui ngay|giao ngay|ship ngay|gui gap|giao gap|ship gap|xuat hang ngay|xuat ngay|gui lien|giao lien|ship lien|"
                    r"gui luon|giao luon|ship luon|can gap|gap lam|gap gap|ngay trong hom nay|trong hom nay|ngay hom nay|ngay bay gio|"
                    r"len xe ngay|chay ngay|gui di ngay|lam ngay)\b")
@@ -191,6 +198,7 @@ class Scan:
     domain: str | None = None
     amount_vnd: int | None = None
     addressed: tuple[str, ...] = ()
+    pay_verb: tuple[int, int] | None = None       # có động từ trả/chuyển tiền (kể cả khi không đọc được STK)
 
     @property
     def money_ask(self) -> bool:
@@ -325,10 +333,54 @@ def scan(body: str | None, source_field: str = "body") -> Scan:
     return Scan(source_field, tuple(accts.values()), first("change"), first("pay_ask"), first("ask_money"), first("goods"), first("unc"),
                 first("cred"), cred_part[1].cred_first_person if cred_part else True, first("takeover"), first("phishing"),
                 next((sc.domain for _a, sc in parts if sc.domain), None), max(amounts) if amounts else None,
-                tuple(dict.fromkeys(x for _a, sc in parts for x in sc.addressed))[:3])
+                tuple(dict.fromkeys(x for _a, sc in parts for x in sc.addressed))[:3], pay_verb=first("pay_verb"))
+
+
+def _clean(t: str) -> tuple[str, list[int]]:
+    """Bỏ ký tự định dạng vô hình (Unicode Cf: zero-width, đảo chiều…) và gộp mọi khoảng trắng/xuống dòng liên tiếp thành MỘT dấu cách
+    — chống né bằng ký tự lạ ("0123<ZWSP>456789", "đổi\n\nSTK"). Trả (chữ sạch, ánh xạ vị trí sạch → vị trí gốc)."""
+    out: list[str] = []
+    cmap: list[int] = []
+    prev_space = False
+    for i, ch in enumerate(t):
+        if unicodedata.category(ch) == "Cf":
+            continue
+        if ch.isspace():
+            if prev_space:
+                continue
+            out.append(" ")
+            cmap.append(i)
+            prev_space = True
+            continue
+        out.append(ch)
+        cmap.append(i)
+        prev_space = False
+    return "".join(out), cmap
+
+
+def _remap(sc: Scan, cmap: list[int], n: int) -> Scan:
+    def m(sp: tuple[int, int] | None) -> tuple[int, int] | None:
+        if sp is None or not cmap:
+            return sp
+        a = min(max(sp[0], 0), len(cmap) - 1)
+        b = min(max(sp[1], 1), len(cmap))
+        return (cmap[a], min(n, cmap[b - 1] + 1))
+
+    return replace(sc, accounts=tuple(replace(x, span=m(x.span) or x.span) for x in sc.accounts), change=m(sc.change), pay_ask=m(sc.pay_ask),
+                   pay_verb=m(sc.pay_verb), ask_money=m(sc.ask_money), goods=m(sc.goods), unc=m(sc.unc), cred=m(sc.cred),
+                   takeover=m(sc.takeover), phishing=m(sc.phishing))
 
 
 def _scan_one(t: str, source_field: str) -> Scan:
+    if not t.strip():
+        return Scan(source_field)
+    clean, cmap = _clean(t)
+    if len(clean) == len(t):
+        return _scan_core(t, source_field)
+    return _remap(_scan_core(clean, source_field), cmap, len(t))
+
+
+def _scan_core(t: str, source_field: str) -> Scan:
     if not t.strip():
         return Scan(source_field)
     from gh.refinery import prefilter
@@ -354,14 +406,14 @@ def _scan_one(t: str, source_field: str) -> Scan:
             first_person = _THIRD.search(fold[lo:m.end()]) is None
     accts = _accounts(fold, idx, n)
     change = _CHANGE.search(fold)
-    pay = _PAY_VERB.search(fold) if accts else None
+    pay_any = _PAY_VERB.search(fold)
+    pay = pay_any if accts else None
     ask = _ASK_MONEY.search(fold)
     order, nodep, rush = _ORDER.search(fold), _NO_DEPOSIT.search(fold), _RUSH.search(fold)
     try:
         amount = max_amount(fold)
     except Exception:  # noqa: BLE001 — fail-high: số tiền hỏng không chặn đánh giá tin (amount = None)
         amount = None
-          # số LỚN NHẤT trong chữ (không dùng ứng viên "amount" đầu tiên của L2 — chỉ để hiển thị)
     qty = max((int(q.group(1)) for q in _QTY.finditer(fold)), default=0)
     big = (amount or 0) >= BIG_ORDER_VND or qty >= BIG_ORDER_QTY or _BIG_WORDS.search(fold) is not None
     goods = _span(order, idx, n) if (order and nodep and rush and big) else None
@@ -371,7 +423,8 @@ def _scan_one(t: str, source_field: str) -> Scan:
     addressed = tuple(dict.fromkeys(_addressed_surfaces(t)))[:3]
     return Scan(source_field, tuple(accts), _span(change, idx, n), _span(pay, idx, n), _span(ask, idx, n), goods, _span(unc, idx, n), cred,
                 first_person, take_c.span if take_c else None,
-                (_span(pm, idx, n) or (0, min(n, 1))) if phish else None, suspicious.domain_of(t), amount, addressed)
+                (_span(pm, idx, n) or (0, min(n, 1))) if phish else None, suspicious.domain_of(t), amount, addressed,
+                pay_verb=_span(pay_any, idx, n))
 
 
 # ─── tầng thuần: quyết định từ quét + ngữ cảnh người ─────────────────────────────────────────────────────────────────────
@@ -427,6 +480,16 @@ class Decision:
     extra: dict[str, Any] = field(default_factory=dict)
 
 
+_NO_KEY_WARNED = False
+
+
+def _warn_no_key() -> None:
+    global _NO_KEY_WARNED
+    if not _NO_KEY_WARNED:
+        _NO_KEY_WARNED = True
+        log.warning("fraud: thiếu khoá master — không băm được STK để so lịch sử; dùng luật 'đổi STK + đòi chuyển tiền' (fail-high)")
+
+
 def decide(sc: Scan, ctx: Ctx) -> Decision | None:
     """Hàm thuần: quét + người ⇒ cờ/luật cứng/nạn nhân cho `levels.SignalIn`. None ⇒ không có gì về lừa đảo."""
     if not sc.any:
@@ -479,10 +542,37 @@ def decide(sc: Scan, ctx: Ctx) -> Decision | None:
         elif ctx.disputed:
             rules.append("payment_account_dispute")                 # STK khác lịch sử, không kèm yêu cầu tiền ⇒ 🟠 (levels)
             spans.append(payee.span if payee else (0, 0))
-    if (sc.accounts and stk_ask) or "stk_change" in rules:
+        if stk_ask and not set(rules) & {"stk_change", "stk_change_unverified"} and any(a.digest is None for a in sc.accounts):
+            # Thiếu khoá master ⇒ không băm được để so lịch sử: KHÔNG im lặng bỏ qua — coi như lời "đổi/chuyển vào số này" (luật cứng)
+            _warn_no_key()
+            rules.append("stk_unhashed")
+            hard.append(H_STK_CLAIM)
+            flags["money_request"] = True
+            txn = "pending"
+            spans.append(sc.accounts[0].span)
+    elif sc.change and sc.pay_verb:
+        # "đổi STK" + yêu cầu trả tiền mà không đọc được số (số bị chèn ký tự, gửi ảnh, gửi tin sau…) ⇒ vẫn là luật cứng (review M1)
+        rules.append("stk_change_claim")
+        hard.append(H_STK_CLAIM)
+        flags["money_request"] = True
+        txn = "pending"
+        spans.append(sc.change)
+    stk_rules = set(rules) & {"stk_change", "stk_change_unverified", "stk_unhashed", "stk_change_claim"}
+    if (sc.accounts and stk_ask) or stk_rules:
         victims.extend(addressed)
         if business:
             victims.extend(owner_rel)                               # bên trả tiền là Sếp (NCC/đối tác/khách đòi chuyển vào số mới)
+
+    # 2b. người lạ (< 7 ngày / chưa có lịch sử) gửi STK + yêu cầu thanh toán vào số đó ⇒ luật cứng (spec: money_request + người lạ)
+    if ctx.stranger and stk_ask and not stk_rules and ctx.impersonated is None and not (verified_hit and not new_accts):
+        rules.append("stranger_stk_request")
+        hard.append(H_STRANGER)
+        flags["money_request"] = True
+        txn = "pending"
+        spans.append(sc.pay_ask or sc.change or sc.accounts[0].span)
+        victims.extend(addressed)
+        if ctx.owner is not None and ctx.owner.present_in_thread:
+            victims.extend(owner_rel)                               # đòi "thanh toán" trong luồng có Sếp ⇒ bên trả là Sếp
 
     # 3. mạo danh (mem.aliases / trùng tên, ID mới)
     imp: list[levels.PersonRel] = []
@@ -556,13 +646,15 @@ def wording(d: Decision, place: str, name: str | None) -> tuple[str, str, str]:
         return (f"Có người báo đã nhập OTP / mật khẩu / số thẻ trong {place}", "có thể bị rút tiền trong tài khoản/thẻ ngay", ACTION_CRED)
     if "goods_no_deposit_rush" in r:
         return (f"Có đơn hàng lớn không cọc, giục gửi ngay trong {place}", "có thể mất hàng không thu được tiền", ACTION_GOODS)
-    if "stk_change" in r or "stk_change_unverified" in r:
+    if "stk_change" in r or "stk_change_unverified" in r or "stk_unhashed" in r or "stk_change_claim" in r:
         diff = ", khác STK đã dùng" if "stk_change" in r else ""
         return (f"Có yêu cầu đổi số tài khoản nhận tiền trong {place}{tail[:-1] + diff + ')' if tail else ''}",
                 "có thể chuyển tiền vào tài khoản lạ, không đòi lại được", ACTION_PAY)
     if "impersonation" in r and d.hard:
         who = f" “{name}”" if name else ""
         return (f"Có tài khoản khác ID trùng tên{who} yêu cầu chuyển tiền trong {place}", "có thể chuyển tiền cho người mạo danh", ACTION_PAY)
+    if "stranger_stk_request" in r:
+        return (f"Người mới vào {place} gửi số tài khoản và yêu cầu thanh toán{tail}", "có thể chuyển tiền vào tài khoản lạ", ACTION_PAY)
     if "stranger_money_request" in r:
         return (f"Người mới vào {place} nhờ ứng / chuyển tiền", "có thể mất tiền cho người lạ", ACTION_PAY)
     if "impersonation" in r:
@@ -599,7 +691,8 @@ class _Row:
 
 
 async def _candidates(db: AsyncSession, org_id: uuid.UUID, now: datetime, limit: int) -> list[_Row]:
-    """Tin vào gần đây (thân tin) + chữ OCR/transcript mới (tin ≤ 24 giờ) chưa có tín hiệu W5 cho đúng (tin, trường)."""
+    """Tin vào gần đây (thân tin) + chữ OCR/transcript mới (tin ≤ 24 giờ) chưa có tín hiệu W5 cho đúng (tin, trường) — MỚI NHẤT TRƯỚC
+    (xả tin thường không đẩy được tin lừa đảo mới ra khỏi lượt; bên gọi lọc tiếp theo watermark)."""
     rows = (await db.execute(text("""
         WITH src AS (
           SELECT e.id, e.received_at, e.occurred_at, e.group_id, e.sender_identity_id, 'body' AS field, e.body_text AS body
@@ -614,8 +707,77 @@ async def _candidates(db: AsyncSession, org_id: uuid.UUID, now: datetime, limit:
         LEFT JOIN core.person_identities pi ON pi.id = s.sender_identity_id
         WHERE NOT EXISTS (SELECT 1 FROM biz.alerts a WHERE a.org_id = :o AND a.kind = 'rui_ro_lua_dao' AND a.raw_event_ids @> ARRAY[s.id]
                             AND a.evidence @> jsonb_build_array(jsonb_build_object('raw_event_id', s.id::text, 'source_field', s.field)))
-        ORDER BY s.received_at LIMIT :n"""), {"o": org_id, "since": now - WINDOW, "msince": now - MEDIA_WINDOW, "n": limit})).all()
+        ORDER BY s.received_at DESC, s.occurred_at DESC, s.id DESC LIMIT :n"""), {"o": org_id, "since": now - WINDOW, "msince": now - MEDIA_WINDOW, "n": limit})).all()
     return [_Row(r.id, r.received_at, r.occurred_at, r.group_id, r.person_id, r.field, r.body) for r in rows]
+
+
+class SeenStore:
+    """Watermark "đã quét" theo (tin, trường). Bộ nhớ trong tiến trình (mặc định / test); `RedisSeen` cho worker (giữ qua khởi động lại)."""
+
+    def __init__(self) -> None:
+        self._d: dict[str, float] = {}
+
+    async def unseen(self, org_id: uuid.UUID, keys: list[str]) -> set[str]:
+        t = time.time()
+        return {k for k in keys if self._d.get(f"{org_id}:{k}", 0.0) < t}
+
+    async def mark(self, org_id: uuid.UUID, keys: list[str]) -> None:
+        t = time.time()
+        if len(self._d) > 200_000:
+            self._d = {k: v for k, v in self._d.items() if v >= t}
+        for k in keys:
+            self._d[f"{org_id}:{k}"] = t + SEEN_TTL_S
+
+
+class RedisSeen(SeenStore):
+    def __init__(self, redis: Any) -> None:
+        super().__init__()
+        self.r = redis
+
+    async def unseen(self, org_id: uuid.UUID, keys: list[str]) -> set[str]:
+        if not keys:
+            return set()
+        vals = await self.r.mget([f"intel:fraud:seen:{org_id}:{k}" for k in keys])
+        return {k for k, v in zip(keys, vals, strict=True) if v is None}
+
+    async def mark(self, org_id: uuid.UUID, keys: list[str]) -> None:
+        if keys:
+            pipe = self.r.pipeline()
+            for k in keys:
+                pipe.set(f"intel:fraud:seen:{org_id}:{k}", b"1", ex=SEEN_TTL_S)
+            await pipe.execute()
+
+
+MEMORY_SEEN = SeenStore()
+
+
+def _seen_key(row: _Row) -> str:
+    return f"{row.event_id}:{row.source_field}"
+
+
+async def _priors(db: AsyncSession, org_id: uuid.UUID, row: _Row) -> list[_Row]:
+    """≤ 2 tin THÂN TIN ngay trước tin này của CÙNG người trong CÙNG luồng, trong `GROUP_WINDOW` (gom tin chia nhỏ — review M2)."""
+    if row.person_id is None or row.source_field != "body":
+        return []
+    rows = (await db.execute(text("""
+        SELECT e.id, e.received_at, e.occurred_at, e.group_id, e.body_text FROM raw.events e
+        JOIN core.person_identities pi ON pi.id = e.sender_identity_id
+        WHERE e.org_id = :o AND pi.person_id = :p AND e.direction = 'inbound' AND e.id <> :i AND e.body_text IS NOT NULL AND e.body_text <> ''
+          AND e.occurred_at <= :at AND e.occurred_at >= :lo AND e.received_at >= :rlo
+          AND ((CAST(:g AS uuid) IS NULL AND e.group_id IS NULL) OR e.group_id = :g)
+        ORDER BY e.occurred_at DESC LIMIT :n"""), {"o": org_id, "p": row.person_id, "i": row.event_id, "at": row.occurred_at,
+                                                    "lo": row.occurred_at - GROUP_WINDOW, "rlo": row.received_at - GROUP_WINDOW - timedelta(hours=1),
+                                                    "g": row.group_id, "n": GROUP_MAX - 1})).all()
+    return [_Row(r.id, r.received_at, r.occurred_at, r.group_id, row.person_id, "body", r.body_text) for r in reversed(rows)]
+
+
+async def _sender_flagged(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID | None, at: datetime) -> bool:
+    """Người gửi đang dính tín hiệu W5 mở (≤ 7 ngày) — tài khoản có thể đã bị chiếm: STK của các tin SAU cũng không thành lịch sử (m2)."""
+    if person_id is None:
+        return False
+    return (await db.execute(text("""SELECT 1 FROM biz.alerts WHERE org_id = :o AND kind = 'rui_ro_lua_dao' AND status IN ('open', 'acknowledged')
+                                     AND created_at >= :lo AND coalesce(facts -> 'person_ids', '[]'::jsonb) ? :p LIMIT 1"""),
+                            {"o": org_id, "lo": at - timedelta(days=STRANGER_DAYS), "p": str(person_id)})).first() is not None
 
 
 async def _who(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID | None, *, key_rel: frozenset[uuid.UUID], owner_people: set[uuid.UUID],
@@ -816,13 +978,13 @@ async def _effective_case(db: AsyncSession, org_id: uuid.UUID, ck: str) -> str:
 
 def _case_key(d: Decision, row: _Row, ctx: Ctx) -> str:
     vn_day = row.occurred_at.astimezone(levels.VN).date().isoformat()
-    if d.payee and d.payee.digest and set(d.rules) & {"stk_change", "stk_change_unverified", "payment_account_dispute", "impersonation", "unc"}:
+    if d.payee and d.payee.digest and set(d.rules) & {"stk_change", "stk_change_unverified", "stk_unhashed", "payment_account_dispute", "impersonation", "unc"}:
         return levels.case_key(FR, at=row.occurred_at, payee_digest=d.payee.digest[:32], group_id=str(row.group_id) if row.group_id else None)
     if ctx.impersonated is not None and ctx.impersonated.entity_id is not None:
         return levels.case_key(FR, at=row.occurred_at, impersonated_entity_id=str(ctx.impersonated.entity_id))
     if d.domain:
         return levels.case_key(FR, at=row.occurred_at, domain=d.domain)
-    if ctx.sender.person_id is not None and set(d.rules) & {"stranger_money_request", "goods_no_deposit_rush"}:
+    if ctx.sender.person_id is not None and set(d.rules) & {"stranger_money_request", "stranger_stk_request", "goods_no_deposit_rush", "stk_change_claim"}:
         return levels.case_key(FR, at=row.occurred_at, raw_event_id=f"actor:{ctx.sender.person_id}:{vn_day}")
     return levels.case_key(FR, at=row.occurred_at, raw_event_id=str(row.event_id))
 
@@ -839,7 +1001,18 @@ class Prepared:
 
 async def prepare(db: AsyncSession, org_id: uuid.UUID, row: _Row, *, key_rel: frozenset[uuid.UUID], owner_people: set[uuid.UUID],
                   owner_entity: uuid.UUID | None) -> Prepared | None:
-    sc = scan(row.body, row.source_field)
+    sc = await asyncio.to_thread(scan, row.body, row.source_field)          # regex chạy ngoài vòng sự kiện
+    priors: list[_Row] = []
+    offset = 0
+    if sc.any or sc.pay_verb:
+        priors = await _priors(db, org_id, row)
+        if priors:
+            prefix = "\n".join(p.body for p in priors) + "\n"
+            comb = await asyncio.to_thread(scan, prefix + row.body, row.source_field)
+            if comb.any:
+                sc, offset = comb, len(prefix)
+            else:
+                priors = []
     if not sc.any:
         return None
     from gh.biz.mem import entities
@@ -869,13 +1042,15 @@ async def prepare(db: AsyncSession, org_id: uuid.UUID, row: _Row, *, key_rel: fr
     # Ghi lịch sử SAU khi quyết (chống đầu độc): STK luôn vào `payment_identifiers` gắn người gửi thật; `payment_account` chỉ ghi cho
     # người gửi đã biết, không phải người lạ, không mạo danh — tin đã kích luật thì chỉ khi ra `disputed`.
     dispute = None
+    flagged = bool(d and d.rules) or await _sender_flagged(db, org_id, row.person_id, row.occurred_at)
     for a in sc.accounts:
-        if a.digest in verified:
-            continue
-        if not (d and d.rules):
-            await _record_identifier(db, org_id, a, sender=sender)      # tin đã kích luật: KHÔNG STK nào của tin vào lịch sử
+        if a.digest in verified or a.span[0] < offset:
+            continue                                                # STK của tin trước (đã gom) được ghi khi quét chính tin đó
+        own = replace(a, span=(a.span[0] - offset, a.span[1] - offset))
+        if not flagged:
+            await _record_identifier(db, org_id, own, sender=sender)    # tin đã kích luật / người đang dính W5: KHÔNG STK nào vào lịch sử
         if imp is None and not stranger:
-            dispute = await _record_fact(db, org_id, a, subject=sender, row=row, suspicious_msg=bool(d and d.rules)) or dispute
+            dispute = await _record_fact(db, org_id, own, subject=sender, row=row, suspicious_msg=flagged) or dispute
     if dispute is not None and (d is None or d.record_only or "stk_change" not in d.rules):
         ctx = replace(ctx, disputed=True)
         d = decide(sc, ctx)
@@ -898,10 +1073,15 @@ async def prepare(db: AsyncSession, org_id: uuid.UUID, row: _Row, *, key_rel: fr
         fx["domain"] = d.domain
     if dispute:
         fx["dispute_id"] = str(dispute)
-    quote = row.body[d.span[0]:d.span[1]] if d.span[1] > d.span[0] else None
+    a0, b0 = d.span[0] - offset, d.span[1] - offset
+    if b0 <= 0 or a0 >= len(row.body):
+        a0, b0 = 0, len(row.body)                                   # luật trúng trên tin trước (đã gom): bằng chứng = cả tin này
+    a0, b0 = max(a0, 0), min(max(b0, a0 + 1), len(row.body))
+    quote = row.body[a0:b0] if b0 > a0 else None
     ev = [signals.EvidenceIn(type="raw_event", id=row.event_id, received_at=row.received_at, source_field=row.source_field,  # type: ignore[arg-type]
-                             span_start=d.span[0], span_end=max(d.span[1], d.span[0] + 1),
-                             quote=suspicious.mask_secrets(quote) if quote else None)]
+                             span_start=a0, span_end=max(b0, a0 + 1), quote=suspicious.mask_secrets(quote) if quote else None)]
+    ev += [signals.EvidenceIn(type="raw_event", id=p.event_id, received_at=p.received_at, source_field="body", span_start=0,
+                              span_end=max(1, len(p.body))) for p in priors]
     tk = f"g:{row.group_id}" if row.group_id else (f"dm:{row.person_id}" if row.person_id else None)
     persons = [p for p in (row.person_id, imp.person_id if imp else None) if p]
     up = signals.UpsertIn(kind=FR, title=suspicious.mask_secrets(title)[:300], suggested_action=action, detector=DETECTOR, detector_version=VERSION,
@@ -980,14 +1160,18 @@ async def _d2_allowed(db: AsyncSession, org_id: uuid.UUID, thread_key: str, now:
 # ─── chạy ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 async def run(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, call: Any = None, limit: int = SCAN_LIMIT,
-              max_d2: int = MAX_D2_PER_RUN) -> list[signals.Signal]:
+              max_d2: int = MAX_D2_PER_RUN, seen: SeenStore | None = None, budget_s: float = RUN_BUDGET_S) -> list[signals.Signal]:
     """Quét một tổ chức. Luật cứng ⇒ ghi NGAY rồi (d2); không luật cứng ⇒ (d2) TRƯỚC rồi ghi (không 🔴 nào bị hạ sau khi đẩy).
     Bên gọi commit. Một tin lỗi không dừng tin khác (lỗi chỉ ghi mã tin + tên lỗi)."""
     from gh.biz.mem import entities, profile, profile_read
 
-    rows = await _candidates(db, org_id, now, limit)
+    seen = seen or MEMORY_SEEN
+    fetched = await _candidates(db, org_id, now, limit * FETCH_FACTOR)
+    fresh = await seen.unseen(org_id, [_seen_key(r) for r in fetched])
+    rows = [r for r in fetched if _seen_key(r) in fresh][:limit]
     if not rows:
         return []
+    started = time.monotonic()
     prof = await profile_read.snapshot(db, org_id)
     key_rel = prof.key_relation_entity_ids()
     owner_people = set(await profile.owner_person_ids(db, org_id))
@@ -995,6 +1179,10 @@ async def run(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, call: Any =
     out: list[signals.Signal] = []
     d2_left = max_d2 if call is not None else 0
     for row in rows:
+        if time.monotonic() - started > budget_s:
+            log.warning("fraud: hết trần thời gian lượt quét, còn %d tin để lượt sau", len(rows) - rows.index(row))
+            break
+        await seen.mark(org_id, [_seen_key(row)])                  # đánh dấu TRƯỚC: tin hỏng không bị quét lại mãi
         try:
             async with db.begin_nested():
                 p = await prepare(db, org_id, row, key_rel=key_rel, owner_people=owner_people, owner_entity=owner_ent)
@@ -1026,6 +1214,8 @@ async def intel_fraud(ctx: dict[str, Any]) -> dict[str, int]:
     now = clock.now()
     sm = sessionmaker()
     router = ctx.get("model_router")
+    rds = ctx.get("redis_bus") or ctx.get("redis")
+    seen: SeenStore = RedisSeen(rds) if rds is not None else MEMORY_SEEN
     res = {"signals": 0, "errors": 0}
     async with sm() as db:
         orgs = (await db.execute(text("SELECT id FROM core.organizations"))).scalars().all()
@@ -1033,7 +1223,7 @@ async def intel_fraud(ctx: dict[str, Any]) -> dict[str, int]:
         call = router_caller(router, org, purpose=budget.PURPOSE[budget.KIND_SAFETY], tier="strong") if router is not None else None
         try:
             async with sm() as db:
-                res["signals"] += len(await asyncio.wait_for(run(db, org, now, call=call), timeout=240))
+                res["signals"] += len(await asyncio.wait_for(run(db, org, now, call=call, seen=seen), timeout=240))
                 await db.commit()
         except Exception as e:  # noqa: BLE001 — một tổ chức lỗi không dừng tổ chức khác; không ghi nội dung tin
             log.error("intel_fraud lỗi ở một tổ chức: %s", type(e).__name__)
@@ -1094,7 +1284,11 @@ async def _verify_row(db: AsyncSession, org_id: uuid.UUID, rid: uuid.UUID, diges
     await actionlog.record(db, org_id=org_id, actor_type="user", actor_id=str(user_id), action="intel.payment_identifier.verify",
                            target_type="payment_identifier", target_id=str(r.id), result="ok")
     ids = (await db.execute(text("""SELECT id FROM biz.alerts WHERE org_id = :o AND kind = 'rui_ro_lua_dao' AND status IN ('open', 'acknowledged')
-                                    AND facts ->> 'payee_digest' = :d"""), {"o": org_id, "d": r.digest})).scalars().all()
+                                    AND facts ->> 'payee_digest' = :d
+                                    AND coalesce(facts -> 'fraud_rules', '[]'::jsonb) ?| ARRAY['stk_change', 'stk_change_unverified', 'stk_unhashed',
+                                                                                             'stk_change_claim', 'payment_account_dispute']
+                                    AND NOT coalesce(facts -> 'fraud_rules', '[]'::jsonb) ? 'credentials_entered'"""),
+                     {"o": org_id, "d": r.digest})).scalars().all()
     return [await signals.resolve_by_owner(db, org_id, i, now=now, actor_id=str(user_id)) for i in ids]
 
 

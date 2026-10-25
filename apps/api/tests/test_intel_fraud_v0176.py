@@ -228,3 +228,146 @@ async def test_fraud_poisoning_fresh_account_not_known_and_suspicious_never_asse
     await w.raw(f"Bên em đổi STK sang {ACCT_OLD} VCB, anh chuyển vào số này", sender=iid, group="kh")
     out2 = await fraud.run(db, w.org, w.now)
     assert len(out2) == 1 and out2[0].level == "red"                              # STK lần trước không "đầu độc" thành lịch sử
+
+
+# ─── review T7 (M2, M5, M6, m1, m2) ───────────────────────────────────────────────────────────────────────────────────────
+
+async def test_fraud_split_messages_grouped_is_red(db: AsyncSession) -> None:
+    """M2: "đổi tài khoản rồi" → "0123456789 MB" → "anh chuyển khoản giúp em" (3 tin, cùng người, ≤ 10 phút) ⇒ 🔴."""
+    w, _ncc, ncc_iid = await _ncc_world(db)
+    await w.raw("Anh ơi bên em đổi tài khoản nhận tiền rồi nhé", sender=ncc_iid, group="kh", at=w.now - timedelta(minutes=3))
+    await w.raw(f"{ACCT_NEW} MB", sender=ncc_iid, group="kh", at=w.now - timedelta(minutes=2))
+    await w.raw("Anh chuyển khoản tiền hàng giúp em hôm nay nhé", sender=ncc_iid, group="kh", at=w.now - timedelta(minutes=1))
+    out = await fraud.run(db, w.org, w.now)
+    assert out and any((s.level, s.gate) == ("red", levels.G1) for s in out)
+    assert all(s.level == "red" for s in out) and len({s.id for s in out}) == 1
+
+
+async def test_fraud_flood_401_then_scam_caught_first_run(db: AsyncSession) -> None:
+    """M5: 401 tin thường rồi 1 tin lừa đảo ⇒ lượt ĐẦU bắt được (mới nhất trước + watermark); lượt sau không quét lại tin cũ."""
+    w = await world(db, owner_name="Minh")
+    await w.group("kh", "Khách", 150)
+    _p, ok = await w.person("Khách quen", group="kh", history_days_ago=40)
+    _s, siid = await w.person("Tuấn Kiệt", group="kh", joined_days_ago=1)
+    for i in range(401):
+        await w.raw(f"hàng về chưa anh {i}", sender=ok, group="kh", at=w.now - timedelta(minutes=5))
+    await w.raw("Anh Minh ơi ứng giúp em 5 triệu, chiều em trả liền ạ", sender=siid, group="kh")
+    store = fraud.SeenStore()
+    out = await fraud.run(db, w.org, w.now, seen=store)
+    assert len(out) == 1 and out[0].level == "red"
+    calls: list[str] = []
+    real = fraud.prepare
+
+    async def spy(*a: object, **k: object) -> object:
+        calls.append(a[2].body)  # type: ignore[attr-defined]
+        return await real(*a, **k)  # type: ignore[arg-type]
+
+    import pytest as _pt
+
+    mp = _pt.MonkeyPatch()
+    mp.setattr(fraud, "prepare", spy)
+    try:
+        await fraud.run(db, w.org, w.now + timedelta(minutes=1), seen=store)
+        await fraud.run(db, w.org, w.now + timedelta(minutes=2), seen=store)
+    finally:
+        mp.undo()
+    # chỉ những tin CHƯA quét ở lượt đầu (402 tin trong cửa sổ + tin lịch sử của helper − 400 đã quét), mỗi tin một lần
+    assert sorted(calls) == ["chào cả nhà", "hàng về chưa anh 0", "hàng về chưa anh 1"], calls
+
+
+async def test_fraud_run_budget_leaves_rest_for_next_run(db: AsyncSession) -> None:
+    """M5: hết trần thời gian ⇒ dừng, tin chưa quét KHÔNG bị đánh dấu, lượt sau bắt được."""
+    w = await world(db)
+    await w.group("gd", "Nhóm nhỏ", 20)
+    _p, iid = await w.person("Người mới", group="gd", joined_days_ago=1)
+    await w.raw("Cho em vay 3tr, mai em gửi lại", sender=iid, group="gd")
+    store = fraud.SeenStore()
+    assert await fraud.run(db, w.org, w.now, seen=store, budget_s=-1) == []
+    out = await fraud.run(db, w.org, w.now, seen=store)
+    assert len(out) == 1 and out[0].level == "red"
+
+
+async def test_fraud_mutation_history_excludes_any_flagged_digest(db: AsyncSession) -> None:
+    """M6 (đột biến 1): STK THỨ HAI của tin bị gắn cờ (không phải payee) nằm trong `fraud_digests` ⇒ dòng lịch sử cũ của nó KHÔNG "đã biết"."""
+    from gh.biz.intel.detectors.fraud import Who, _history
+
+    w = await world(db)
+    await w.group("kh", "Khách", 120)
+    p, iid = await w.person("Đối tác Bình", ptype="partner", group="kh", history_days_ago=60)
+    await w.raw(f"Bên em đổi STK sang {ACCT_NEW} MB, hoặc {ACCT_OLD} VCB cũng được, anh chuyển vào số này", sender=iid, group="kh")
+    out = await fraud.run(db, w.org, w.now)
+    assert len(out) == 1
+    a = (await _alerts(db, w.org))[0]
+    assert a.facts["payee_digest"] == facts.payment_digest(ACCT_NEW) and facts.payment_digest(ACCT_OLD) in a.facts["fraud_digests"]
+    await db.execute(text("""INSERT INTO biz.payment_identifiers (org_id, person_id, digest, last3, source, created_at)
+                             VALUES (:o, :p, :d, '321', 'chat', :ca)"""), {"o": w.org, "p": p, "d": facts.payment_digest(ACCT_OLD), "ca": w.now - timedelta(days=30)})
+    ent = (await db.execute(text("SELECT id FROM mem.entities WHERE person_id = :p"), {"p": p})).scalar_one()
+    known, _v, _a = await _history(db, w.org, Who(ref="x", person_id=p, entity_id=ent), w.now + timedelta(days=1))
+    assert facts.payment_digest(ACCT_OLD) not in known
+
+
+async def test_fraud_mutation_fraud_digests_accumulate_across_case(db: AsyncSession) -> None:
+    """M6 (đột biến 2): hai tin cùng vụ (cách > 10 phút, không gom) mang hai STK ⇒ `fraud_digests` giữ CẢ HAI (upsert ghi đè `facts`)."""
+    from gh.biz.intel.detectors.fraud import Who, _history
+
+    w = await world(db)
+    await w.group("gd", "Nhóm nhỏ", 20)
+    _s, iid = await w.person("Người lạ", group="gd", joined_days_ago=1)
+    await w.raw(f"Cho em mượn 2 triệu, chuyển vào STK {ACCT_OLD} VCB giúp em", sender=iid, group="gd", at=w.now - timedelta(minutes=30))
+    first = await fraud.run(db, w.org, w.now - timedelta(minutes=29))
+    await w.raw(f"Chuyển vào STK {ACCT_NEW} MB nhé chị, em cần gấp", sender=iid, group="gd")
+    second = await fraud.run(db, w.org, w.now)
+    assert len(first) == 1 and len(second) == 1 and first[0].id == second[0].id
+    fx = (await _alerts(db, w.org))[0].facts
+    assert {facts.payment_digest(ACCT_OLD), facts.payment_digest(ACCT_NEW)} <= set(fx["fraud_digests"])
+    legit, _ = await w.person("Công ty thật", ptype="customer", group="gd", history_days_ago=90)
+    await db.execute(text("""INSERT INTO biz.payment_identifiers (org_id, person_id, digest, last3, source, created_at)
+                             VALUES (:o, :p, :d, '321', 'chat', :ca) ON CONFLICT (org_id, digest) DO UPDATE SET person_id = EXCLUDED.person_id,
+                             created_at = EXCLUDED.created_at"""), {"o": w.org, "p": legit, "d": facts.payment_digest(ACCT_OLD), "ca": w.now - timedelta(days=30)})
+    ent = (await db.execute(text("SELECT id FROM mem.entities WHERE person_id = :p"), {"p": legit})).scalar_one()
+    known, _v, _a = await _history(db, w.org, Who(ref="x", person_id=legit, entity_id=ent), w.now + timedelta(days=1))
+    assert facts.payment_digest(ACCT_OLD) not in known
+
+
+async def test_fraud_mutation_no_payment_account_for_stranger(db: AsyncSession) -> None:
+    """M6 (đột biến 3): người lạ gửi STK (không đòi tiền) ⇒ KHÔNG ghi `payment_account` (không có fact nào cho thực thể người lạ)."""
+    w = await world(db)
+    await w.group("kh", "Khách", 120)
+    s, iid = await w.person("Người lạ", group="kh", joined_days_ago=1)
+    await w.raw(f"STK em {ACCT_NEW} MB nha", sender=iid, group="kh")
+    assert await fraud.run(db, w.org, w.now) == []
+    ent = (await db.execute(text("SELECT id FROM mem.entities WHERE person_id = :p"), {"p": s})).scalar_one()
+    assert (await db.execute(text("SELECT count(*) FROM mem.facts WHERE subject_id = :e AND predicate = 'payment_account'"),
+                             {"e": ent})).scalar_one() == 0
+
+
+async def test_fraud_verify_payee_does_not_close_credentials_case(db: AsyncSession) -> None:
+    """m1: xác minh STK chỉ đóng vụ đổi STK / mâu thuẫn STK, KHÔNG đóng vụ lộ OTP/thẻ dù cùng STK."""
+    w, _ncc, ncc_iid = await _ncc_world(db)
+    _st, staff = await w.person("Nhi kế toán", ptype="staff", group="kh", history_days_ago=30)
+    await w.raw(f"Em lỡ nhập mã OTP rồi, nó bảo chuyển vào STK {ACCT_NEW} MB", sender=staff, group="kh", at=w.now - timedelta(minutes=30))
+    cred = await fraud.run(db, w.org, w.now - timedelta(minutes=29))
+    await w.raw(f"Bên em đổi STK sang {ACCT_NEW} MB, anh chuyển vào số này", sender=ncc_iid, group="kh")
+    stk = await fraud.run(db, w.org, w.now)
+    assert len(cred) == 1 and len(stk) == 1 and cred[0].id != stk[0].id
+    uid = (await db.execute(text("INSERT INTO core.users (org_id, email, display_name, password_hash) VALUES (:o, 'v@x.vn', 'S', 'x') RETURNING id"),
+                            {"o": w.org})).scalar_one()
+    closed = await fraud.verify_signal_payee(db, w.org, stk[0].id, user_id=uid, pin_verified=True, now=w.now)
+    assert [c.id for c in closed] == [stk[0].id]
+    st = (await db.execute(text("SELECT status, level FROM biz.alerts WHERE id = :i"), {"i": cred[0].id})).one()
+    assert st.status == "open" and st.level == "red"
+
+
+async def test_fraud_hijacked_account_later_account_not_recorded(db: AsyncSession) -> None:
+    """m2: tài khoản NCC (đã biết) vừa dính tín hiệu W5 ⇒ STK trong tin SAU (không kèm đòi tiền) không vào fact/lịch sử của NCC."""
+    w, ncc, ncc_iid = await _ncc_world(db)
+    await w.raw(f"Bên em đổi STK sang {ACCT_NEW} MB, anh chuyển vào số này", sender=ncc_iid, group="kh", at=w.now - timedelta(minutes=30))
+    assert len(await fraud.run(db, w.org, w.now - timedelta(minutes=29))) == 1
+    await w.raw("STK em 5566778899 TCB nha", sender=ncc_iid, group="kh")
+    await fraud.run(db, w.org, w.now)
+    d = facts.payment_digest("5566778899")
+    ent = (await db.execute(text("SELECT id FROM mem.entities WHERE person_id = :p"), {"p": ncc})).scalar_one()
+    assert (await db.execute(text("""SELECT count(*) FROM mem.facts WHERE subject_id = :e AND predicate = 'payment_account'
+                                     AND object_value ->> 'digest' = :d"""), {"e": ent, "d": d})).scalar_one() == 0
+    assert (await db.execute(text("SELECT count(*) FROM biz.payment_identifiers WHERE org_id = :o AND digest = :d"),
+                             {"o": w.org, "d": d})).scalar_one() == 0
