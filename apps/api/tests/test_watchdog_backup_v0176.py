@@ -40,11 +40,14 @@ class Sink:
         return httpx.MockTransport(handle)
 
 
-async def _telegram(db: Any, org: uuid.UUID, *, paired: bool = True) -> None:
+SHARED_CHAT = "-100777"          # chat chung (nhóm): KHÔNG được nhận mã
+
+
+async def _telegram(db: Any, org: uuid.UUID, *, paired: bool = True, chat: str = CHAT, owner_chat: str = CHAT) -> None:
     await db.execute(text("""INSERT INTO ops.notify_channels (org_id, token_enc, chat_id, bot_username, enabled, owner_chat_id, owner_tg_user_id)
                              VALUES (:o, :t, :c, 'gen_bot', true, :oc, :ou)"""),
-                     {"o": org, "t": crypto.encrypt(TOKEN.encode(), tsvc.TOKEN_AAD), "c": CHAT,
-                      "oc": CHAT if paired else None, "ou": TG_USER if paired else None})
+                     {"o": org, "t": crypto.encrypt(TOKEN.encode(), tsvc.TOKEN_AAD), "c": chat,
+                      "oc": owner_chat if paired else None, "ou": TG_USER if paired else None})
     await db.commit()
 
 
@@ -278,3 +281,47 @@ async def test_unlock_only_console_owner_and_does_not_reenable_channels(db: Any)
     await db.commit()
     st = await _state(db, org)
     assert st["locked"] is False and st["owner_channel"] is False  # bật lại kênh quản trị là bước riêng, có chủ ý của Sếp
+
+
+# ─── mã chỉ tới chat riêng của Sếp ───────────────────────────────────────────
+
+async def test_send_code_requires_paired_owner(db: Any) -> None:
+    org = await mk_org(db)
+    await _telegram(db, org, paired=False)                       # có kênh chung nhưng chưa ghép Sếp
+    with pytest.raises(backup.BackupUnavailable):
+        await backup.send_code(db, org)
+    await db.execute(text("UPDATE ops.notify_channels SET owner_chat_id = :c"), {"c": CHAT})   # có chat nhưng thiếu from.id
+    await db.commit()
+    with pytest.raises(backup.BackupUnavailable):
+        await backup.send_code(db, org)
+    assert await _rows(db) == []
+    sink = Sink()
+    assert (await backup.flush(sessionmaker(), transport=sink.transport()))["sent"] == 0 and sink.sent == []
+
+
+async def test_code_never_goes_to_shared_chat(db: Any, caplog: pytest.LogCaptureFixture) -> None:
+    org = await mk_org(db)
+    await _telegram(db, org, chat=SHARED_CHAT, owner_chat=CHAT)
+    caplog.set_level(logging.DEBUG)
+    h = await backup.send_code(db, org)
+    await backup.notify(db, org, "sự cố", dedupe_key="n1")           # notify thường vẫn theo kênh cũ
+    await db.commit()
+    sink = Sink()
+    await backup.flush(sessionmaker(), transport=sink.transport())
+    by_text = {("Mã xác nhận" in m["text"]): m["chat_id"] for m in sink.sent}
+    assert by_text[True] == CHAT and by_text[False] == SHARED_CHAT
+    assert all(m["chat_id"] == CHAT for m in sink.sent if "Mã xác nhận" in m["text"])
+    assert h not in caplog.text and TOKEN not in caplog.text
+
+
+async def test_code_not_sent_if_owner_chat_changed_after_creation(db: Any) -> None:
+    org = await mk_org(db)
+    await _telegram(db, org, chat=SHARED_CHAT, owner_chat=CHAT)
+    await backup.send_code(db, org)
+    await db.execute(text("UPDATE ops.notify_channels SET owner_chat_id = '424242'"))     # Sếp ghép lại sang chat khác
+    await db.commit()
+    sink = Sink()
+    await backup.flush(sessionmaker(), transport=sink.transport())
+    assert sink.sent == []
+    r = (await _rows(db))[0]
+    assert r.failed_code == "OWNER_CHAT_CHANGED" and not any(t.isdigit() and len(t) == 4 for t in r.text.split())

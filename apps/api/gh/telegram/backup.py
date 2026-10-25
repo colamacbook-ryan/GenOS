@@ -88,13 +88,15 @@ def verify_code(org_id: uuid.UUID, code: str, code_hash: str) -> bool:
 
 async def send_code(db: AsyncSession, org_id: uuid.UUID) -> str:
     """Sinh mã 4 số, xếp tin gửi qua Telegram, trả BĂM. Không commit."""
-    if not await _telegram_enabled(db, org_id):
-        raise BackupUnavailable("Chưa nối kênh phụ (Telegram)")
+    row = (await db.execute(text("""SELECT owner_chat_id, owner_tg_user_id FROM ops.notify_channels WHERE org_id = :o AND enabled"""),
+                            {"o": org_id})).one_or_none()
+    if row is None or not row.owner_chat_id or not row.owner_tg_user_id:
+        raise BackupUnavailable("Chưa ghép Telegram của Sếp (mã chỉ gửi riêng cho Sếp, không gửi vào chat chung)")
     code = f"{secrets.randbelow(10000):04d}"
     await db.execute(text("""
         INSERT INTO ops.backup_outbox (org_id, channel, kind, dedupe_key, text)
         VALUES (:o, 'telegram', 'code', :d, :t)"""),
-        {"o": org_id, "d": f"code:{uuid.uuid4().hex}",
+        {"o": org_id, "d": f"code:{row.owner_chat_id}:{uuid.uuid4().hex}",   # chat đích (không phải bí mật) ghi theo hàng: bảng chưa có cột riêng
          "t": f"Mã xác nhận của Sếp: {code} (dùng trong 10 phút; không đưa mã này cho ai, kể cả người xưng là Gen)."})
     return hash_code(org_id, code)
 
@@ -114,7 +116,7 @@ async def flush(sm: Any, *, transport: Any = None) -> dict[str, int]:
         await db.execute(text("DELETE FROM ops.backup_outbox WHERE created_at < now() - make_interval(secs => :k)"), {"k": KEEP.total_seconds()})
         await db.commit()
         rows = (await db.execute(text("""
-            SELECT id, org_id, kind, attempts FROM ops.backup_outbox
+            SELECT id, org_id, kind, attempts, dedupe_key FROM ops.backup_outbox
             WHERE channel = 'telegram' AND sent_at IS NULL AND failed_code IS NULL AND attempts < :a AND next_attempt_at <= now()
             ORDER BY created_at LIMIT :n"""), {"a": FLUSH_MAX_ATTEMPTS, "n": FLUSH_BATCH})).all()
         await db.commit()
@@ -143,8 +145,19 @@ async def flush(sm: Any, *, transport: Any = None) -> dict[str, int]:
             if mine is None:
                 await db.rollback()
                 continue
+            chat = cred[1]
+            if r.kind == "code":
+                # Mã CHỈ tới chat riêng của Sếp đã ghép lúc tạo mã; không còn khớp (đổi/gỡ ghép) ⇒ huỷ, không bao giờ rơi về chat chung.
+                target = str(r.dedupe_key or "").split(":")[1] if str(r.dedupe_key or "").count(":") >= 2 else ""
+                cur = (await db.execute(text("SELECT owner_chat_id FROM ops.notify_channels WHERE org_id = :o"), {"o": r.org_id})).scalar_one_or_none()
+                if not target or cur != target:
+                    await db.execute(text("UPDATE ops.backup_outbox SET failed_code = 'OWNER_CHAT_CHANGED', text = :s WHERE id = :i"), params)
+                    await db.commit()
+                    stats["failed"] += 1
+                    continue
+                chat = target
             try:
-                await client.send_message(cred[0], cred[1], mine.text)
+                await client.send_message(cred[0], chat, mine.text)
             except tg.TelegramError as e:
                 if e.code == tg.RATE_LIMITED:
                     await db.execute(text("UPDATE ops.backup_outbox SET next_attempt_at = now() + make_interval(secs => :s) WHERE id = :i"),
