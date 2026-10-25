@@ -254,3 +254,21 @@ async def backup_flush(ctx: dict[str, Any]) -> dict[str, int]:
 
 
 JOBS: list[CronJob] = [(watchdog_tick, {"minute": set(range(60))}), (backup_flush, {"minute": set(range(60))})]
+
+
+async def health_block(db: AsyncSession, org: Any, now: datetime) -> dict[str, Any] | None:
+    """Khối `intel` của `health.collect`: kênh phụ, khoá trợ lý, phiên kênh, số sự cố watchdog đang mở. None khi chưa có gì để hiện
+    (giữ nguyên khuôn cũ cho bản cài chưa dùng Tình báo). Không chứa token/chat_id."""
+    tg = bool((await db.execute(text("SELECT enabled FROM ops.notify_channels WHERE org_id = :o"), {"o": org})).scalar_one_or_none())
+    sessions = (await db.execute(text("""
+        SELECT DISTINCT ON (c.id) c.type, s.state, COALESCE(s.last_heartbeat_at, s.started_at, s.qr_issued_at) AS seen
+        FROM core.channels c JOIN core.channel_sessions s ON s.channel_id = c.id
+        WHERE c.org_id = :o AND c.type = ANY(:t)
+        ORDER BY c.id, GREATEST(s.started_at, s.qr_issued_at, s.ended_at) DESC NULLS LAST, s.id DESC"""), {"o": org, "t": list(CHANNELS)})).all()
+    incidents = int((await db.execute(text("SELECT count(*) FROM ops.health_alerts WHERE org_id = :o AND key LIKE 'agent.%' AND cleared_at IS NULL"),
+                                      {"o": org})).scalar_one())
+    locked = await backup.is_locked(db, org)
+    if not (tg or locked or incidents or sessions):
+        return None
+    return {"backup_channel": "telegram" if tg else "none", "assistant_locked": locked, "incidents": incidents,
+            "sessions": [{"channel": s.type, "state": s.state, "heartbeat_age_s": int((now - s.seen).total_seconds()) if s.seen else None} for s in sessions]}

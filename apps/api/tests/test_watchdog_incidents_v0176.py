@@ -303,3 +303,39 @@ async def test_one_org_failure_does_not_stop_others(db: Any, monkeypatch: pytest
     out = await watchdog.run_once(NOW)
     assert out["errors"] == 1 and out["orgs"] >= 2
     assert any(a.key == "agent.session:zalo" for a in await _alerts(db))
+
+
+# ─── health.collect: dòng Tình báo + phiên ───────────────────────────────────
+
+async def test_health_collect_intel_block_only_when_relevant(db: Any, redis: Any) -> None:
+    from gh import health
+
+    org = await mk_org(db)
+    base = await health.collect(db, redis, org, now=NOW)
+    assert "intel" not in base                                      # khuôn cũ giữ nguyên khi chưa dùng Tình báo/kênh
+    await _telegram(db, org)
+    ch = await _channel(db, org)
+    await _session(db, ch, org, heartbeat=NOW - timedelta(minutes=5))
+    await _tick(db, org)
+    out = await health.collect(db, redis, org, now=NOW)
+    intel = out["intel"]
+    assert intel["backup_channel"] == "telegram" and intel["assistant_locked"] is False and intel["incidents"] == 1
+    assert intel["sessions"] == [{"channel": "zalo", "state": "active", "heartbeat_age_s": 300}]
+    assert "token" not in str(intel).lower()
+    assert out["overall"] == "bad"                                  # sự cố 'bad' đang mở kéo tổng thể xuống đỏ (đã có sẵn qua issues)
+
+
+async def test_health_collect_intel_shows_missing_backup_channel_and_lock(db: Any, redis: Any) -> None:
+    from gh import health
+    from gh.telegram import backup
+
+    org = await mk_org(db)
+    ch = await _channel(db, org)
+    await _session(db, ch, org, heartbeat=NOW)
+    out = await health.collect(db, redis, org, now=NOW)
+    assert out["intel"]["backup_channel"] == "none"
+    await _owner(db, org)
+    owner = (await db.execute(text("SELECT id FROM core.users WHERE org_id = :o"), {"o": org})).scalar_one()
+    await backup.lock_assistant(db, org, via="console", user_id=owner)
+    await db.commit()
+    assert (await health.collect(db, redis, org, now=NOW))["intel"]["assistant_locked"] is True
