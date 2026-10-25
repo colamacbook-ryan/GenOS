@@ -224,3 +224,15 @@ async def test_question_ask_summary_is_shown_in_zalo_digest(db: Any) -> None:
     await _ask(db, org, "question", "Anh muốn giao hàng hôm nào?")
     assert await run(org) == "sent"
     assert "❓ Anh muốn giao hàng hôm nào?" in (await outbox(db))[0].text
+
+
+def test_display_mask_defaults_to_masking_and_only_exempts_clear_money_context() -> None:
+    """TẤN CÔNG: STK/SĐT viết tách nhóm không được lọt qua vì "trông giống tiền"."""
+    m = delivery.display_mask
+    for leak in ("STK 1 234 567 890", "STK 123 456 789", "STK 1.234.567.890", "0901 234 567", "+84 901 234 567", "84 901 234 567", "số 0123456789012"):
+        out = m(leak)
+        assert "…" in out and not any(c in out for c in ("234 567", "234.567", "0123456789")), (leak, out)
+    assert m("1 234 567 890") == "1234…890"
+    for keep in ("1.500.000đ", "2 triệu", "giá 25.000.000", "25.000.000 VND", "chuyển 12.000.000đ nhé", "ngày 2026-10-23"):
+        assert m(keep) == keep, keep
+    assert m("0901234567đ") != "0901234567đ"                       # số bắt đầu bằng 0 không bao giờ được miễn

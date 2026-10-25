@@ -41,16 +41,24 @@ URGENT_HEAD = "Điểm gấp trong ngày"
 MARK = {"red": "🔴", "amber": "🟠", "grey": "⚪"}
 _LONGNUM = re.compile(r"(?<!\d)(\d[\d .-]{6,22}\d)(?!\d)")
 _WS = re.compile(r"\s+")
-_MONEY = re.compile(r"[1-9]\d{0,2}(?:[., ]\d{3})+")           # 25.000.000 là số tiền, không phải STK
+_MONEY_AFTER = re.compile(r"\s{0,2}(?:đ|₫|vnd|vnđ|k|tr|triệu|tỷ|ty|nghìn|nghin|ngàn|ngan)(?![\w])", re.I)
+_MONEY_BEFORE = re.compile(r"(?:vnd|vnđ|₫|đ|tiền|số tiền|giá)\s{0,2}[:=]?\s{0,2}$", re.I)
 _DATE = re.compile(r"\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[.-]\d{1,2}[.-]\d{4}")
 
 
 def display_mask(s: str) -> str:
-    """Số dài (≥ 8 chữ số: STK, SĐT, thẻ) hiển thị dạng "0123…789" — phòng thủ khi tài khoản Zalo của Sếp bị chiếm (§8.1)."""
+    """Số dài (≥ 8 chữ số: STK, SĐT, thẻ) hiển thị dạng "0123…789" — phòng thủ khi tài khoản Zalo của Sếp bị chiếm (§8.1).
+    MẶC ĐỊNH CHE. Chỉ miễn khi có ngữ cảnh TIỀN rõ ràng sát bên (đ/VND/k/tr/triệu/tỷ sau số, hoặc «giá/tiền/VND» trước số) VÀ số không bắt đầu
+    bằng 0 / mã quốc gia 84; hoặc là ngày tháng. Cách nhóm chữ số một mình KHÔNG đủ (STK «1 234 567 890» vẫn bị che)."""
     def sub(m: re.Match[str]) -> str:
-        d = re.sub(r"\D", "", m.group(1))
-        if len(d) < 8 or _MONEY.fullmatch(m.group(1)) or _DATE.fullmatch(m.group(1).strip()):
-            return m.group(1)
+        raw = m.group(1)
+        d = re.sub(r"\D", "", raw)
+        if len(d) < 8 or _DATE.fullmatch(raw.strip()):
+            return raw
+        phone_like = d.startswith("0") or d.startswith("84") or s[max(0, m.start(1) - 1):m.start(1)] == "+"
+        money_ctx = bool(_MONEY_AFTER.match(s, m.end(1))) or bool(_MONEY_BEFORE.search(s[max(0, m.start(1) - 20):m.start(1)]))
+        if money_ctx and not phone_like:
+            return raw
         return f"{d[:4]}…{d[-3:]}"
 
     return _LONGNUM.sub(sub, s)
