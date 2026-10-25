@@ -109,3 +109,15 @@ async def test_inbound_off_other_commands_still_rejected_disabled(owner_api: Api
     async with admin_sessionmaker()() as s:
         n = (await s.execute(text("SELECT count(*) FROM ops.action_log WHERE action = 'telegram.rejected' AND detail->>'reason' = 'disabled'"))).scalar_one()
     assert n == 2
+
+
+async def test_owner_disabled_messages_never_ring_the_stranger_bell(owner_api: Api, bot: FakeBot, redis: Any) -> None:
+    """Review bảo mật (minor 6): tin của CHÍNH Sếp bị bỏ `disabled` không tính vào ngưỡng chuông "người lạ nhắn bot"."""
+    await _pair(owner_api, bot, redis, update_id=1)
+    await _inbound_off()
+    now = datetime.now(UTC)
+    res = await run(bot, redis, *[msg(10 + i, "/hom_nay", date=now) for i in range(7)])
+    assert res == ["rejected:disabled"] * 7
+    async with admin_sessionmaker()() as s:
+        n = (await s.execute(text("SELECT count(*) FROM core.notifications WHERE kind = 'telegram.rejected'"))).scalar_one()
+    assert n == 0

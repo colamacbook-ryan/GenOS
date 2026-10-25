@@ -122,7 +122,8 @@ async def _process(
             await db.commit()
             return f"rejected:{verdict}"
         if not row.inbound_enabled and verdict.kind != inbound.LOCK_KIND:
-            await inbound.record_reject(db, redis, org_id, inbound.R_DISABLED, update)
+            await inbound.record_reject(db, redis, org_id, inbound.R_DISABLED, update,
+                                        owner_tg_user_id=cfg.owner_tg_user_id)
             await db.commit()
             return f"rejected:{inbound.R_DISABLED}"
         await db.commit()
