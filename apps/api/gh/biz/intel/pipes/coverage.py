@@ -27,6 +27,7 @@ from gh.chassis import actionlog
 from gh.data.common import mask_text
 from gh.db import DB
 from gh.errors import ApiError, not_found
+from gh.refinery import clock
 
 router = APIRouter(tags=["intel"])
 
@@ -78,7 +79,7 @@ async def record_missed(db: AsyncSession, org_id: uuid.UUID, *, user_id: uuid.UU
     evidence = [{"type": "raw_event", "id": str(raw_event_id)}] if raw_event_id else []
     aid = await signals.record_legacy(db, org_id, alert_type="owner_missed", priority="P3", title="Sếp báo sót",
                                       summary=masked or None, evidence=evidence)
-    await db.execute(text("UPDATE biz.alerts SET status = 'dismissed', delivery = 'none', level = 'grey', lane = 'fyi' WHERE id = :i"), {"i": aid})
+    await signals.transition(db, org_id, aid, "dismissed", now=clock.now(), actor_id=str(user_id) if user_id else "system:intel")
     tag = f"[{kind}] " if kind else ""
     await db.execute(text("""INSERT INTO biz.signal_feedback (org_id, signal_id, verdict, verdict_by, user_id, gate, shadow, note)
                              VALUES (:o, :s, 'missed', 'owner', :u, :g, false, :n)"""),
