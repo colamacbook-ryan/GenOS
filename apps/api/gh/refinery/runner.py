@@ -25,7 +25,7 @@ import logging
 import re
 import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -49,6 +49,7 @@ from gh.refinery import (
     _l3_stub as l3,  # L3-PLUG: ĐIỂM CẮM L3 duy nhất (xem docstring `_l3_stub`); sau khi L3 merge đổi nguồn ở đây
 )
 from gh.refinery import budget, clock, extract, prefilter, scoring, triage
+from gh.refinery.brain_contract import CONTRACT_VERSION
 from gh.refinery.rules import EventCtx, Outcome, RuleDef, RuleHit, apply_outputs, evaluate
 
 log = logging.getLogger("gh.refinery")
@@ -782,6 +783,7 @@ BURST_WINDOW = timedelta(minutes=10)
 CONTEXT_EVENTS = 30
 CONTEXT_WINDOW = timedelta(hours=24)
 RETRY_BACKOFF = timedelta(minutes=5)
+HISTORY_EVIDENCE_FIRST_KINDS = ("nghia_vu_loi_hua", "viec_han")        # đơn vị lời hứa/việc có hạn: bằng chứng chọn trước khi áp trần
 HISTORY_EVIDENCE_MAX = 10          # tin bằng chứng của khối Lịch sử thêm vào tin ngữ cảnh (để trích được)
 HISTORY_EVIDENCE_CHARS = 3000
 ACK_LOOKBACK = timedelta(days=1)    # biên lệch giờ của cận dưới updated_at/received_at lời xác nhận (index org/state/updated_at + partition)
@@ -790,6 +792,62 @@ ACK_MAX = 30                        # lời xác nhận ngắn (đã loại kh�
 FREE_MODE_RETRY = timedelta(minutes=15)
 TEMPLATE_WINDOW = timedelta(days=7)
 UNVERIFIED_CONFIDENCE = 0.8              # §4D.4: đơn vị model có trích dẫn verified, chưa qua (d) — T1 tính lại độ chắc
+
+
+def pick_history_evidence(history: Sequence[Any], have: set[uuid.UUID], *, limit: int = HISTORY_EVIDENCE_MAX) -> dict[uuid.UUID, datetime]:
+    """Chọn tin bằng chứng của khối "Lịch sử" (`pack.history`) để kéo vào tin ngữ cảnh, tối đa `limit`. Hai lượt, mỗi lượt mới nhất trước
+    (trần cắt tin cũ hơn): đơn vị `kind_hint ∈ HISTORY_EVIDENCE_FIRST_KINDS` (lời hứa, việc có hạn — cần mã tin hứa để đóng sổ) rồi các đơn
+    vị còn lại. Tin đã có (`have`) không lặp lại."""
+    want: dict[uuid.UUID, datetime] = {}
+    ordered = list(reversed(history))
+    first = [it for it in ordered if it.meta.get("kind_hint") in HISTORY_EVIDENCE_FIRST_KINDS]
+    rest = [it for it in ordered if it.meta.get("kind_hint") not in HISTORY_EVIDENCE_FIRST_KINDS]
+    for it in (*first, *rest):
+        for rid, rr in it.meta.get("evidence", ()):
+            if rid not in have and rid not in want and len(want) < limit:
+                want[rid] = rr
+    return want
+
+
+async def sender_roles(db: AsyncSession, org_id: uuid.UUID, person_ids: Collection[uuid.UUID | None], *,
+                       thread_key: str | None = None) -> dict[uuid.UUID, str | None]:
+    """Vai người gửi cho prompt/`verify` (P-T6, `GroupEvent.sender_role`) — CHỈ từ dữ liệu đã có của tổ chức `org_id`, không suy đoán:
+    `owner` = hồ sơ người của Sếp (thực thể Sếp đã gộp, hoặc `attrs.is_owner` do ghép mã); `staff` = `generic.staff_trusted` (person_type staff +
+    khoá loại + `staff_marked_at`, Sếp đã xác nhận qua Owner + PIN — cùng luật v0.1.76); `staff_side` = có dấu hiệu phía Sếp
+    (`generic.hard_owner_side`: person_type staff hoặc fact `staff_of`) nhưng CHƯA được tin; `customer` = `generic.hard_customer` (fact
+    `customer_of` hoặc person_type customer); `cold_customer` = khởi động lạnh (`generic.cold_customer`) trong nhóm `kinh_doanh` Sếp đã xác nhận
+    hoặc trong DM của Sếp (`thread_key` bắt đầu `dm:`); còn lại ⇒ None.
+    `verify` dùng vai cho trường của KHÁCH (bậc khiếu nại, đòi Sếp, nhắc): vai phía Sếp ⇒ từ chối; vai None (không rõ) ⇒ trường về null, đường
+    tương thích r6.6.1 an toàn (spec (c′): không có nguồn thì không dùng). Người của tổ chức khác không bao giờ được tra (lọc theo `org_id`)."""
+    ids = {p for p in person_ids if p is not None}
+    if not ids:
+        return {}
+    from gh.biz.intel.detectors import generic as g
+    from gh.biz.mem import profile as profile_mod
+    mine = set((await db.execute(text("SELECT id FROM core.persons WHERE org_id = :o AND id = ANY(:i)"), {"o": org_id, "i": list(ids)})).scalars().all())
+    owner_people = set(await profile_mod.owner_person_ids(db, org_id)) | set(await g.paired_owner_person_ids(db, org_id))
+    sets = await g.org_sets(db, org_id)
+    gid = thread_group(thread_key) if thread_key else None
+    cold_ok = (thread_key is not None and thread_key.startswith("dm:")) or await g.business_group(db, org_id, gid)
+    out: dict[uuid.UUID, str | None] = {p: None for p in ids}
+    for pid in mine:
+        if pid in owner_people:
+            out[pid] = "owner"
+            continue
+        w = await g.who_person(db, org_id, pid)
+        if w is None:
+            continue
+        if sets.is_owner(w.entity_id):
+            out[pid] = "owner"
+        elif g.staff_trusted(w.person_type, locked=w.locked, marked_at=w.staff_marked_at):
+            out[pid] = "staff"
+        elif g.hard_owner_side(w, sets):
+            out[pid] = "staff_side"
+        elif g.hard_customer(w, sets):
+            out[pid] = "customer"
+        elif g.cold_customer(w, sets, biz_group=cold_ok):
+            out[pid] = "cold_customer"
+    return out
 
 
 def verified_fields(vu: Any, u: Any, people: list[dict[str, Any]]) -> dict[str, Any]:
@@ -802,7 +860,19 @@ def verified_fields(vu: Any, u: Any, people: list[dict[str, Any]]) -> dict[str, 
                            "condition_met": u.condition.met if getattr(u, "condition", None) is not None else None}
     if vu is None:
         return out
-    return out | {"msg_at": _t(vu.msg_at), "event_at": _t(vu.event_at), "event_time_unparsed": bool(vu.event_time_unparsed),
+    # brain-out/2 (§4F.2, bản 3 §2.2 (c′)): chỉ phần SAU verify (trường không kiểm được đã về mặc định); `public` nằm ở `flags.public`
+    need = getattr(u, "need", None)
+    v2 = {"complaint_stage": getattr(u, "complaint_stage", None), "stage_message_id": getattr(u, "stage_message_id", None),
+          "asks_for_owner": bool(getattr(u, "asks_for_owner", False)), "public_venue": getattr(u, "public_venue", None),
+          "public": bool(u.flags.public) if getattr(u, "flags", None) is not None else False,
+          "need_fields_n": getattr(vu, "need_fields_n", None), "need": need.model_dump(mode="json") if need is not None else None,
+          "fixed_occasion": bool(getattr(u, "fixed_occasion", False)), "nudge_message_id": getattr(u, "nudge_message_id", None),
+          "owner_action": getattr(u, "owner_action", None), "status_by_role": getattr(vu, "status_by_role", None),
+          # đường bảng: `public_eff` (public sau luật venue; `public` thô giữ nguyên cho Bước 0), vai người gửi bằng chứng, nhắc bị từ chối, phiên bản
+          "public_eff": bool(getattr(vu, "public_eff", False)), "stage_by_role": getattr(vu, "stage_by_role", None),
+          "asks_by_role": getattr(vu, "asks_by_role", None), "nudge_by_role": getattr(vu, "nudge_by_role", None),
+          "nudge_rejected": bool(getattr(vu, "nudge_rejected", False)), "contract_version": getattr(vu, "contract_version", None)}
+    return out | v2 | {"msg_at": _t(vu.msg_at), "event_at": _t(vu.event_at), "event_time_unparsed": bool(vu.event_time_unparsed),
                   "deadline_at": _t(vu.deadline_at), "deadline_unparsed": bool(vu.deadline_unparsed), "ongoing": bool(vu.ongoing),
                   "money_vnd": vu.money_vnd, "status_by_person_id": str(vu.status_by_person_id) if vu.status_by_person_id else None,
                   "status_at": _t(vu.status_at), "txn_state": vu.txn_state, "txn_at": _t(vu.txn_at), "delivery_form": vu.delivery_form}
@@ -1523,11 +1593,11 @@ class GroupTurns:
                 await db.execute(text("""
                     INSERT INTO refinery.analyses (id, org_id, thread_key, run_id, window_from, window_to, new_n, context_n, model,
                                                    contract_version, stage, status, errors, finished_at)
-                    VALUES (:id, :o, :t, :run, :wf, :wt, :nn, :cn, :m, 'brain-out/1', 'extract', :s, CAST(:er AS jsonb), now())"""),
+                    VALUES (:id, :o, :t, :run, :wf, :wt, :nn, :cn, :m, :cv, 'extract', :s, CAST(:er AS jsonb), now())"""),
                                  {"id": aid, "o": org_id, "t": tk, "run": st.run_id,
                                   "wf": window.new_events[0].sent_at if window.new_events else None,
                                   "wt": window.new_events[-1].sent_at if window.new_events else None,
-                                  "nn": len(window.new_events), "cn": len(window.context_events), "m": model,
+                                  "nn": len(window.new_events), "cn": len(window.context_events), "m": model, "cv": CONTRACT_VERSION,
                                   "s": "contract_error" if code == "contract_error" else "failed",
                                   "er": orjson.dumps([{"code": code}, *({"code": e} for e in (errors or [])[:12])]).decode()})
                 await ai_cost.tag_calls(db, org_id, thread_key=tk, analysis_id=aid, purpose=budget.PURPOSE[kind], since=since)
@@ -1560,6 +1630,9 @@ class GroupTurns:
         pack = await retrieve.pack(db, org_id, tk, [{"sender_person_id": b.person_id, "raw_event_id": b.event_id, "text": b.body}
                                                     for b in blocks], now=clock.now())
         ctx_events = await self._history_evidence(db, org_id, tk, blocks, ctx_events, pack)
+        roles = await sender_roles(db, org_id, [e.sender_person_id for e in (*new_events, *ctx_events)], thread_key=tk)
+        for ge in (*new_events, *ctx_events):
+            ge.sender_role = roles.get(ge.sender_person_id) if ge.sender_person_id is not None else None       # P-T6: vai cạnh `from`
         all_ids = [m.event_id for b in blocks for m in b.all_events] + [c.raw_event_id for c in ctx_events if c.raw_event_id]
         media: dict[str, list[Any]] = {}
         for r in (await db.execute(text("""
@@ -1620,13 +1693,10 @@ class GroupTurns:
                                 pack: Any) -> list[Any]:
         """Tin bằng chứng của các đơn vị trong khối "Lịch sử" (`retrieve.pack`, cùng luồng) được thêm vào tin ngữ cảnh — để model
         TRÍCH được việc trước đó (lời hứa giữ giá, đợt thanh toán…) và code kiểm được trích dẫn. Trần `HISTORY_EVIDENCE_MAX` tin /
-        `HISTORY_EVIDENCE_CHARS` ký tự (một phần trần lịch sử ≈ 2.400 token); tin đã có trong cửa sổ không lặp lại."""
+        `HISTORY_EVIDENCE_CHARS` ký tự (một phần trần lịch sử ≈ 2.400 token); tin đã có trong cửa sổ không lặp lại. Tin bằng chứng của đơn vị
+        `nghia_vu_loi_hua`/`viec_han` được chọn TRƯỚC khi áp trần (`pick_history_evidence`): lời hứa cũ thiếu mã tin hứa thì không đóng được."""
         have = {m.event_id for b in blocks for m in b.all_events} | {c.raw_event_id for c in ctx_events if c.raw_event_id}
-        want: dict[uuid.UUID, datetime] = {}
-        for it in reversed(pack.history):                       # mới nhất trước: trần cắt tin cũ hơn
-            for rid, rr in it.meta.get("evidence", ()):
-                if rid not in have and rid not in want and len(want) < HISTORY_EVIDENCE_MAX:
-                    want[rid] = rr
+        want = pick_history_evidence(pack.history, have)
         scope = await self._thread_scope(db, tk)
         if not want or scope is None:
             return ctx_events
@@ -1643,7 +1713,11 @@ class GroupTurns:
             ORDER BY e.occurred_at DESC"""), {"o": org_id, "wids": list(want), "wrs": list(want.values()), **sp})).all()  # noqa: S608 — `where` là hằng nội bộ
         extra: list[Any] = []
         used = 0
-        for r in rows:
+        by_id = {r.id: r for r in rows}
+        for rid in want:                                        # trần ký tự theo THỨ TỰ ƯU TIÊN của `pick_history_evidence`, không theo giờ gửi
+            r = by_id.get(rid)
+            if r is None:
+                continue
             n = len(r.body_text or "")
             if used + n > HISTORY_EVIDENCE_CHARS:
                 continue
@@ -1778,12 +1852,12 @@ class GroupTurns:
                 INSERT INTO refinery.analyses (id, org_id, thread_key, run_id, window_from, window_to, new_n, context_n, facts_in_n,
                                                profile_version, contract_version, model, tokens_in, tokens_out, stage, status, errors,
                                                started_at, finished_at)
-                VALUES (:id, :o, :t, :run, :wf, :wt, :nn, :cn, :fn, :pv, 'brain-out/1', :m, :ti, :to, 'extract', 'ok',
+                VALUES (:id, :o, :t, :run, :wf, :wt, :nn, :cn, :fn, :pv, :cv, :m, :ti, :to, 'extract', 'ok',
                         CAST(:er AS jsonb), :st, now())"""),
                              {"id": aid, "o": org_id, "t": tk, "run": st.run_id, "wf": window.new_events[0].sent_at,
                               "wt": window.new_events[-1].sent_at, "nn": len(evs), "cn": len(window.context_events),
                               "fn": len(pack.facts) + len(pack.related), "pv": getattr(pack, "profile_version", None),
-                              "m": analysis.model, "ti": analysis.tokens_in, "to": analysis.tokens_out, "er": "[]", "st": since})
+                              "m": analysis.model, "cv": getattr(analysis.out, "contract_version", None) or CONTRACT_VERSION, "ti": analysis.tokens_in, "to": analysis.tokens_out, "er": "[]", "st": since})
             fact_ins: list[Any] = []
             unit_ids: dict[str, tuple[uuid.UUID, datetime]] = {}
             for vu in verified.units:

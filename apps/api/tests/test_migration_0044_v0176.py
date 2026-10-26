@@ -62,7 +62,7 @@ def test_migration_0044_follows_0043() -> None:
     script = ScriptDirectory.from_config(cfg)
     rev = script.get_revision("0044")
     assert rev is not None and rev.down_revision == "0043"
-    assert script.get_heads() == ["0044"]
+    assert len(script.get_heads()) == 1   # v0.1.77: đầu cây đã lên 0045; chỉ cần còn đúng một head
     assert SQL_0044.is_file()
 
 

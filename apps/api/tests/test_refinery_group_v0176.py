@@ -138,7 +138,7 @@ async def test_one_analysis_per_thread_and_windows_never_mix_threads(app, db, re
     assert (st.total, st.status) == (3, "done")
     rows = (await db.execute(text("SELECT thread_key, status, stage, new_n, contract_version FROM refinery.analyses ORDER BY thread_key"))).all()
     assert {(r.thread_key, r.status, r.stage, r.contract_version) for r in rows} == {
-        (f"g:{g1}", "ok", "extract", "brain-out/1"), (f"g:{g2}", "ok", "extract", "brain-out/1")}
+        (f"g:{g1}", "ok", "extract", "brain-out/2"), (f"g:{g2}", "ok", "extract", "brain-out/2")}
     # không có đơn vị nào ⇒ mọi tin "không có sự việc"
     assert await states(db, org) == {"discarded": 3}
 

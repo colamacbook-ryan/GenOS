@@ -24,7 +24,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gh.biz.hooks import CronJob
-from gh.biz.intel import levels, signals
+from gh.biz.intel import levels, person_role, signals
 from gh.biz.mem import profile_read
 from gh.data.common import mask_text
 
@@ -195,10 +195,8 @@ def cold_customer(w: Who | None, sets: OrgSets, *, biz_group: bool) -> bool:
 
 
 def who_rel(w: Who, sets: OrgSets, *, thread_member: bool = False) -> levels.PersonRel:
-    """MỘT hàm dựng vai người cho detector chiếu đơn vị (units, generic…): tra cứu `OrgSets` (fact) CỘNG loại người Sếp đã đánh dấu ở
-    `core.persons.person_type` (khách ⇒ customer, nhân viên ⇒ team). P-T1 (G-KB sau T14): generic bỏ qua person_type ⇒ khách mất cổng an toàn."""
-    r = person_rel(w.entity_id, sets, ref=w.ref, thread_member=thread_member)
-    return r.model_copy(update={"customer": r.customer or w.person_type == "customer", "team": r.team or w.person_type == "staff"})
+    """MỘT hàm dựng vai người cho detector chiếu đơn vị (units, generic…): thân dời sang `person_role.rel_from_who` (v0.1.77 P2, L-96)."""
+    return person_role.rel_from_who(w, sets, thread_member=thread_member)
 
 
 def person_rel(ent: uuid.UUID, sets: OrgSets, *, ref: str, thread_member: bool = False, kin_of_member: bool = False) -> levels.PersonRel:
@@ -217,9 +215,10 @@ async def raw_group(db: AsyncSession, raw_id: uuid.UUID | None) -> tuple[uuid.UU
     return r.group_id, (None if r.group_id is not None and r.member_count is None else int(r.member_count or 0))
 
 
-def thread_of(group_id: uuid.UUID | None, size: int | None) -> levels.Thread:
+def thread_of(group_id: uuid.UUID | None, size: int | None, audience_n: int | None = None) -> levels.Thread:
+    """`audience_n` (r7 (c′) `customer_audience_n`): bên gọi đếm bằng `person_role.audience_n`; None = không đếm được."""
     return levels.Thread(type="group" if group_id else "dm_agent", size=size or 0, size_known=size is not None, owner_in_thread=False,
-                         agent_in_thread=True)
+                         agent_in_thread=True, customer_audience_n=audience_n)
 
 
 def flags_of(raw: dict[str, Any] | None) -> levels.Flags:

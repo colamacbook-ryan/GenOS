@@ -2,7 +2,7 @@
 """Bước 2 của sàng lọc: trích xuất bằng LLM có kiểm chứng chứng cứ (ARCHITECTURE §4.3, R7).
 
 v0.1.76 (L3, spec Bước 1 r6.6.1 §4D): thêm đường THEO LUỒNG `analyze_group(GroupWindow, ContextPack, ProfileSnapshot, Policy) -> BrainOut`
-(tầng (b)): kỹ năng v2.1 (`prompts/intel_v2_1.md`) làm system prompt, đầu ra đúng hợp đồng `brain-out/1`; sai schema ⇒ gọi lại MỘT lần kèm
+(tầng (b)): kỹ năng v2.2 (`prompts/intel_v2_2.md`) làm system prompt, đầu ra đúng hợp đồng `brain-out/2`; sai schema ⇒ gọi lại MỘT lần kèm
 lỗi, vẫn sai ⇒ `ContractError` (lượt `contract_error`, tin quay lại hàng chờ). Q9 (CNS-081): chữ chat đi tới model NGUYÊN VĂN, không che —
 chỉ bí mật hệ thống (tham số `secrets`) bị thay. Đường lô cũ (`chunks`/`build_messages`/`validate`) giữ cho `runner` tới khi L2 chuyển sang
 `analyze_group`; nó cũng đã bỏ che theo Q9.
@@ -200,8 +200,8 @@ def validate(raw_text: str, refs: set[str], rule_codes: set[str]) -> Extraction:
 # ═══ Đường theo luồng (L3, spec §4D.1–§4D.2 (b)) ═════════════════════════════════════════════════════════════════════════
 
 AGENT_KEY = "core.refinery"
-EXTRACTOR_VERSION = "intel-v2.1.1"            # .1: promise_kept kèm mã tin hứa (review fix-gkb2 m6)
-PROMPT_PATH = Path(__file__).with_name("prompts") / "intel_v2_1.md"
+EXTRACTOR_VERSION = "intel-v2.2.0"            # v2.2 (v0.1.77): brain-out/2 + vai người cạnh `from` (P-T6); v2.1.1: promise_kept kèm mã tin hứa
+PROMPT_PATH = Path(__file__).with_name("prompts") / "intel_v2_2.md"
 MAX_BODY_CHARS = 4000                 # một tin dài hơn bị cắt TRONG PROMPT (trích dẫn vẫn kiểm với bản gốc)
 MAX_SCHEMA_ERRORS = 12
 DEFAULT_TZ = vi_time.DEFAULT_TZ
@@ -216,6 +216,7 @@ class GroupEvent:
     body: str | None = None
     sender_person_id: uuid.UUID | None = None
     sender_name: str | None = None
+    sender_role: str | None = None    # P-T6: vai cạnh `from` ("customer"|"cold_customer"|"staff"|"staff_side"|"owner"|None); `verify`: trường của khách cần vai khách, None ⇒ bỏ trường
     kind: str = "text"
     reply_to: str | None = None
     forwarded: bool = False
@@ -300,13 +301,17 @@ def router_caller(router: Any, org_id: uuid.UUID, *, agent_key: str = AGENT_KEY,
     return call
 
 
+#: nhãn vai người gửi hiện trong prompt (khoá `role` cạnh `from`)
+ROLE_LABELS = {"customer": "khach", "cold_customer": "khach", "staff": "nhan_vien", "staff_side": "nhan_vien", "owner": "sep"}
+
+
 @lru_cache(maxsize=1)
 def _skill_template() -> str:
     return PROMPT_PATH.read_text(encoding="utf-8")
 
 
 def skill_prompt() -> str:
-    """Kỹ năng tình báo v2.1 làm system prompt (tĩnh ⇒ prompt cache theo tiền tố). Khối từ vựng "gấp" render từ `URGENT_LEXICON`."""
+    """Kỹ năng tình báo v2.2 làm system prompt (tĩnh ⇒ prompt cache theo tiền tố). Khối từ vựng "gấp" render từ `URGENT_LEXICON`."""
     lex = ", ".join(f"“{t}”" for t in sorted(vi_time.URGENT_LEXICON))
     return _skill_template().replace("{{URGENT_LEXICON}}", lex)
 
@@ -322,6 +327,8 @@ def event_line(e: GroupEvent, media: Mapping[str, Sequence[MediaText]], tz: str,
         d["from"] = scrub_secrets(e.sender_name, secrets)
     if e.person_ref:
         d["from_ref"] = e.person_ref
+    if e.sender_role:
+        d["role"] = ROLE_LABELS.get(e.sender_role, e.sender_role)
     if e.reply_to:
         d["reply_to"] = e.reply_to
     if e.forwarded:
@@ -395,7 +402,7 @@ def build_user_prompt(window: GroupWindow, pack: ContextPack, profile: ProfileSn
                     "lượt này không thấy chúng: không kết luận ai im lặng hay việc chưa xong sau tin cuối của lượt này.")
     if unread:
         tail.append("Tin không đọc được (đếm vào `unreadable`): " + ", ".join(f"{k} {v}" for k, v in unread.items()))
-    tail.append("Chỉ trả JSON `brain-out/1`, đúng khuôn trong kỹ năng. Trích dẫn sao chép từng chữ từ trường tương ứng.")
+    tail.append("Chỉ trả JSON `brain-out/2`, đúng khuôn trong kỹ năng. Trích dẫn sao chép từng chữ từ trường tương ứng.")
     parts.append("\n".join(tail))
     return "\n\n".join(parts)
 
@@ -451,7 +458,7 @@ async def analyze_group_detailed(window: GroupWindow, pack: ContextPack, profile
                 out = out.model_copy(update={"thread_ref": window.thread_ref})      # thread_ref do code cấp, không tin model
             return Analysis(out, model, t_in, t_out, attempt, chars)
         messages = [*messages, Message("assistant", reply.text[:20_000]),
-                    Message("user", f"Lần trả lời trước {hint}. Trả lại DUY NHẤT một JSON `brain-out/1` đúng khuôn.")]
+                    Message("user", f"Lần trả lời trước {hint}. Trả lại DUY NHẤT một JSON `brain-out/2` đúng khuôn.")]
     raise ContractError(errors, model=model, tokens_in=t_in, tokens_out=t_out)
 
 
