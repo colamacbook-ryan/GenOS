@@ -323,6 +323,32 @@ async def mark(db: AsyncSession, org_id: uuid.UUID, uid: uuid.UUID, why: str, *,
                            target_type="meaning_unit", target_id=str(uid), result="ok", detail={"why": why})
 
 
+async def _goods_impersonation(db: AsyncSession, org_id: uuid.UUID, u: Any, p: People, sets: g.OrgSets, li: levels.SignalIn,
+                               raws: list[uuid.UUID]) -> levels.SignalIn:
+    """(D2, Ryan chốt 2026-10-25) Người gửi MẠO DANH một khách/đối tác đã biết (vai `nguoi_bi_mao_danh` là người khác người gửi, không phải
+    Sếp/agent) và chữ ĐÃ KIỂM (trích dẫn verified + thân tin được trích của chính người gửi) có "đặt hàng ghi nợ / đổi địa chỉ giao / đổi
+    người nhận" ⇒ `goods_risk` (code kiểm bằng `fraud.goods_redirect`, không theo lời model) và Sếp (bên giao hàng) là bên bị nhắm. Khách
+    quen thật đổi địa chỉ từ chính định danh cũ ⇒ không có vai mạo danh ⇒ không đổi gì."""
+    from gh.biz.intel.detectors import fraud
+
+    s = p.sender
+    if s is None or not any(w.entity_id != s.entity_id and not sets.is_owner(w.entity_id) for w in p.impersonated_who):
+        return li
+    texts = list((await db.execute(text("""SELECT quote FROM clean.evidence WHERE meaning_unit_id = :u AND meaning_observed_at = :t
+                                            AND quote_status = 'verified' AND quote IS NOT NULL"""), {"u": u.id, "t": u.observed_at})).scalars().all())
+    if s.person_id is not None:
+        texts += list((await db.execute(text("""SELECT e.body_text FROM raw.events e JOIN core.person_identities pi ON pi.id = e.sender_identity_id
+                                                 WHERE e.id = ANY(:r) AND e.org_id = :o AND pi.person_id = :p AND e.body_text IS NOT NULL"""),
+                                         {"r": raws, "o": org_id, "p": s.person_id})).scalars().all())
+    if not any(fraud.goods_redirect(t) for t in texts):
+        return li
+    victims = list(li.victims)
+    if sets.owner is not None and not any(v.is_owner for v in victims):
+        ow = await g.who(db, sets.owner)
+        victims.append(levels.PersonRel(ref=ow.ref if ow else "owner", is_owner=True))
+    return li.model_copy(update={"goods_risk": True, "victims": victims})
+
+
 def _case_key(kind: str, u: Any, p: People, li: levels.SignalIn, raw0: uuid.UUID) -> str:
     if kind == levels.FR and p.impersonated_who:
         return levels.case_key(kind, at=li.msg_at, impersonated_entity_id=str(p.impersonated_who[0].entity_id))
@@ -458,6 +484,8 @@ async def _project_one(db: AsyncSession, org_id: uuid.UUID, u: Any, ev: list[Any
     cust = (u.kind_hint in ("xung_dot_khieu_nai", "quan_he_nong_nguoi") and p.sender is not None and g.hard_customer(p.sender, sets))
     by_w = await g.who_person(db, org_id, _uuid(verified(u).get("status_by_person_id")))
     li = signal_input(u.kind_hint, u, p, sets, customer_of_owner=cust, status_by_owner_side=g.hard_owner_side(by_w, sets))
+    if u.kind_hint == levels.FR:
+        li = await _goods_impersonation(db, org_id, u, p, sets, li, [e.raw_event_id for e in ev])
     tk = f"g:{u.group_id}" if u.group_id else ""
     fx: dict[str, Any] = {"unit_id": str(u.id)}
     up = signals.UpsertIn(
