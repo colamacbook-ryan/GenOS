@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gh.biz.intel import levels, person_role, signals
+from gh.biz.intel import levels, signals
 
 log = logging.getLogger("gh.intel.raw_tail")
 WINDOW = timedelta(minutes=30)
@@ -39,7 +39,6 @@ async def _victim(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID | No
 
 
 async def tail(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, limit: int = 100) -> list[signals.Signal]:
-    from gh.biz.intel.detectors import generic
     from gh.biz.mem import profile_read
 
     rows = (await db.execute(text("""
@@ -56,7 +55,6 @@ async def tail(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, limit: int
         return []
     prof = await profile_read.snapshot(db, org_id)
     key_rel = prof.key_relation_entity_ids()
-    sets: generic.OrgSets | None = None
     out: list[signals.Signal] = []
     for r in rows:
         cands = [c for c in (r.detail or {}).get("cands") or [] if isinstance(c, dict)]
@@ -71,16 +69,12 @@ async def tail(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, limit: int
         victims = await _victim(db, org_id, r.person_id, key_rel) if first_person else []
         tk = (r.detail or {}).get("thread_key") or (f"g:{r.group_id}" if r.group_id else None)
         size = int(r.member_count or 0)
-        aud: int | None = None                               # r7 (c′) `customer_audience_n`; None = không đếm được
-        if r.group_id:
-            sets = sets or await generic.org_sets(db, org_id)
-            aud = await person_role.audience_n(db, org_id, r.group_id, speaker_person_id=r.person_id, sets=sets)
         li = levels.SignalIn(kind=kind, msg_at=r.occurred_at, event_at=r.occurred_at, hard_rule_hit=sorted({str(c["hard"]) for c in hard}),
                              flags=levels.Flags(**flags), source_class="rule", confidence_exist=1.0, confidence_content=1.0,
                              victims=victims, impact_base=3 if victims else 2,
                              thread=levels.Thread(type="group" if r.group_id else "dm_agent", size=size,
                                                   size_known=r.group_id is None or r.member_count is not None, owner_in_thread=False,
-                                                  agent_in_thread=True, customer_audience_n=aud),
+                                                  agent_in_thread=True),
                              txn_state="pending" if flags.get("money_request") else "none")
         ev = [signals.EvidenceIn(type="raw_event", id=r.id, received_at=r.received_at, source_field=str(c.get("field") or "body"),  # type: ignore[arg-type]
                                  span_start=int((c.get("span") or [0, 0])[0]), span_end=int((c.get("span") or [0, 0])[1]))

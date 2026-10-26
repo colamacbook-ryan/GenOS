@@ -64,50 +64,51 @@ async def is_customer(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID 
 
 
 async def audience_n(db: AsyncSession, org_id: uuid.UUID, group_id: uuid.UUID | None, *, speaker_person_id: uuid.UUID | None = None,
-                     speaker_entity_id: uuid.UUID | None = None, sets: OrgSets | None = None) -> int | None:
-    """`Thread.customer_audience_n`: số thành viên (đang ở nhóm) KHÁC người nói là khách của Sếp. Tin riêng, hoặc nhóm chưa có danh sách thành viên
-    (không đếm được) ⇒ None — "vắng" không chặn `venue = group` (r7.1, R3). Không suy từ cỡ nhóm."""
+                     speaker_entity_id: uuid.UUID | None = None) -> int | None:
+    """`Thread.customer_audience_n`: số thành viên (đang ở nhóm) KHÁC người nói là khách của Sếp (một câu SQL). Tin riêng, hoặc danh sách thành viên
+    chưa chắc đủ ⇒ None ("vắng" không chặn `venue = group`, r7.1 R3; đếm thiếu mà trả số nhỏ sẽ chặn nhầm 🔴 ⇒ fail-low). "Chắc đủ" = nhóm báo
+    `core.groups.member_count` và số dòng đang ở nhóm ≥ số đó (`members_complete` của bridge không được lưu nên không dùng được; `member_count` NULL ⇒ None).
+    Chỉ gọi cho `xung_dot_khieu_nai` / `quan_he_nong_nguoi` (đường G3) và heat — không cho lừa đảo/an toàn (Bước 0 không đọc, B2)."""
     if group_id is None:
         return None
-    from gh.biz.intel.detectors import generic as g
-
-    rows = (await db.execute(text("""SELECT COALESCE(e.merged_into, e.id) AS ent, gm.person_id, p.person_type, p.attrs ->> 'is_owner' AS own
-                                     FROM core.group_members gm JOIN core.persons p ON p.id = gm.person_id
-                                     LEFT JOIN mem.entities e ON e.person_id = gm.person_id AND e.org_id = :o
-                                     WHERE gm.group_id = :g AND gm.left_at IS NULL"""), {"o": org_id, "g": group_id})).all()
-    if not rows:
+    r = (await db.execute(text("""
+        SELECT g.member_count AS mc,
+               count(gm.person_id) AS total,
+               count(gm.person_id) FILTER (WHERE
+                   gm.person_id IS DISTINCT FROM CAST(:sp AS uuid)
+                   AND (CAST(:se AS uuid) IS NULL OR CAST(:se AS uuid) NOT IN (e.id, COALESCE(e.merged_into, e.id)))
+                   AND COALESCE(p.attrs ->> 'is_owner', '') <> 'true' AND NOT COALESCE(e.is_owner, false)
+                   AND (p.person_type = 'customer' OR EXISTS (
+                        SELECT 1 FROM mem.facts f WHERE f.org_id = :o AND f.predicate = 'customer_of' AND f.valid_to IS NULL
+                          AND f.status IN ('asserted', 'owner_confirmed') AND f.subject_id = COALESCE(e.merged_into, e.id)))) AS customers
+        FROM core.groups g
+        LEFT JOIN core.group_members gm ON gm.group_id = g.id AND gm.left_at IS NULL
+        LEFT JOIN core.persons p ON p.id = gm.person_id
+        LEFT JOIN mem.entities e ON e.person_id = gm.person_id AND e.org_id = :o AND e.merged_into IS NULL
+        WHERE g.id = :g AND g.org_id = :o GROUP BY g.member_count"""),
+                          {"o": org_id, "g": group_id, "sp": speaker_person_id, "se": speaker_entity_id})).one_or_none()
+    if r is None or r.mc is None or r.total == 0 or r.total < r.mc:
         return None
-    sets = sets or await g.org_sets(db, org_id)
-    speaker_ent = await g.canonical(db, speaker_entity_id)
-    n = 0
-    for r in rows:
-        if r.person_id == speaker_person_id and speaker_person_id is not None or (speaker_ent is not None and r.ent == speaker_ent):
-            continue
-        if r.own == "true" or sets.is_owner(r.ent):
-            continue
-        if r.person_type == "customer" or (r.ent is not None and r.ent in sets.customers):
-            n += 1
-    return n
+    return int(r.customers)
 
 
 async def staff_owner_ref(db: AsyncSession, org_id: uuid.UUID, *, status_hint: str | None, status_by_person_id: uuid.UUID | None,
-                          raw_event_ids: list[uuid.UUID], customer_person_id: uuid.UUID, group_id: uuid.UUID | None, trigger_at: datetime,
+                          customer_person_id: uuid.UUID, group_id: uuid.UUID | None, trigger_at: datetime, status_at: datetime | None,
                           asks_for_owner: bool = False) -> str | None:
     """`staff_ref` khi `staff_owned` (CNS-179), không thì None. Điều kiện (mọi cái phải đúng):
-    `status_hint = 'dang_xu_ly'` (model, kèm `status_message_id` do verify P3a kiểm) · người gửi tin trả lời ∈ NV ĐÃ XÁC NHẬN (person_type `staff`
+    `status_hint ∈ {dang_xu_ly, da_xu_ly}` (model — `dang_xu_ly` ⇒ bên gọi đặt `staff_owned`, `da_xu_ly` ⇒ `closure = staff`, một khái niệm, N1; kèm `status_message_id` do verify P3a kiểm) · người gửi tin trả lời ∈ NV ĐÃ XÁC NHẬN (person_type `staff`
     + khoá loại + `staff_marked_at`, D3 — `generic.staff_trusted`) · tin NV gửi SAU `trigger_at` (tin kích hoạt) · khách KHÔNG nhắn lại sau tin NV
-    trong cùng luồng · `asks_for_owner` thắng (khách đòi gặp chủ ⇒ không ai "đang lo"). `raw_event_ids` = tin gốc đã trích dẫn của đơn vị."""
-    if status_hint != "dang_xu_ly" or status_by_person_id is None or asks_for_owner:
+    trong cùng luồng · `asks_for_owner` thắng (khách đòi gặp chủ ⇒ không ai "đang lo"). `status_at` = giờ CỦA CHÍNH tin `dang_xu_ly` (verify ghi ở `entities.v.status_at`), thiếu ⇒ None; mốc "khách nhắn sau" cũng tính từ đó
+    (không phải tin NV mới nhất: NV nhắn "dạ" sau khi khách doạ lần hai không được xoá tin doạ)."""
+    if status_hint not in ("dang_xu_ly", "da_xu_ly") or status_by_person_id is None or status_at is None or asks_for_owner:
         return None
     from gh.biz.intel.detectors import generic as g
 
     w = await g.who_person(db, org_id, status_by_person_id)
     if w is None or not g.staff_trusted(w.person_type, locked=w.locked, marked_at=w.staff_marked_at):
         return None
-    sent = (await db.execute(text("""SELECT max(e.occurred_at) FROM raw.events e JOIN core.person_identities pi ON pi.id = e.sender_identity_id
-                                     WHERE e.id = ANY(:r) AND e.org_id = :o AND pi.person_id = :p"""),
-                             {"r": raw_event_ids, "o": org_id, "p": status_by_person_id})).scalar_one()
-    if sent is None or levels._aware(sent) <= levels._aware(trigger_at):
+    sent = levels._aware(status_at)
+    if sent <= levels._aware(trigger_at):
         return None
     later = (await db.execute(text("""SELECT 1 FROM raw.events e JOIN core.person_identities pi ON pi.id = e.sender_identity_id
                                       WHERE e.org_id = :o AND pi.person_id = :c AND e.direction = 'inbound' AND e.occurred_at > :t

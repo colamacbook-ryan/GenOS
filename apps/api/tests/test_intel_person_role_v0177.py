@@ -55,7 +55,10 @@ def test_who_rel_is_person_role_rel_from_who_unchanged() -> None:
     assert g.who_rel(w, sets) == g.person_rel(ent, sets, ref=w.ref).model_copy(update={"customer": True, "team": True})   # đúng thân cũ
 
 
-# ─── L-96: fraud.Who.rel() == person_role cho cùng người ─────────────────────
+# ─── L-96: fraud.Who.rel() vs person_role cho cùng người ─────────────────────
+# KHỚP khi vai đến từ `core.persons.person_type` + fact `customer_of` + Hồ sơ + `attrs.is_owner`. KHÁC có chủ đích (fraud.py không sửa):
+# `team` — person_role còn nhận fact `staff_of` (giữ hành vi `generic.who_rel`), fraud chỉ theo person_type; `is_owner` — person_role nhận cả
+# thực thể Sếp `mem.entities.is_owner` (tài khoản Console), fraud chỉ theo `owner_people` (attrs.is_owner). Hai ca dưới khoá chỗ khác nhau.
 
 async def test_person_role_matches_fraud_who_rel_for_same_person(db: AsyncSession) -> None:
     w = await mk_world(db, await mk_org(db))
@@ -83,6 +86,20 @@ async def test_person_role_matches_fraud_who_rel_for_same_person(db: AsyncSessio
     r = await person_role.person_role(db, w.org, person_id=key, group_id=w.group, sets=sets)
     assert r.owner_key_relation
     assert (await person_role.person_role(db, w.org, person_id=w.owner_person, group_id=None, sets=sets)).is_owner
+
+
+async def test_person_role_differs_from_fraud_only_on_staff_of_fact_and_console_owner(db: AsyncSession) -> None:
+    w = await mk_world(db, await mk_org(db))
+    sof, _, e = await _mk(db, w, "NV chỉ có fact", member=True)                       # person_type KHÔNG staff, chỉ fact staff_of
+    await _fact(db, w, e, "staff_of")
+    sets = await g.org_sets(db, w.org)
+    owners = set(await g.paired_owner_person_ids(db, w.org))
+    assert w.owner_person not in owners                                                 # Sếp chỉ là thực thể Console (is_owner), chưa có attrs.is_owner
+    for pid, field in ((sof, "team"), (w.owner_person, "is_owner")):
+        fr = (await fraud._who(db, w.org, pid, key_rel=sets.key_relations, owner_people=owners, group_id=w.group)).rel(thread_member=True)
+        pr = await person_role.person_role(db, w.org, person_id=pid, group_id=w.group, sets=sets)
+        assert getattr(pr, field) is True and getattr(fr, field) is False               # khác có chủ đích
+        assert pr.model_copy(update={field: False, "present_in_thread": fr.present_in_thread}) == fr.model_copy(update={"present_in_thread": fr.present_in_thread})
 
 
 async def test_person_role_unknown_entity_has_no_role(db: AsyncSession) -> None:
@@ -117,11 +134,13 @@ async def test_audience_n_counts_other_customers_only(db: AsyncSession) -> None:
     await _mk(db, w, "NV", staff_confirmed=True, member=True)
     await _mk(db, w, "Người thường", member=True)
     await db.execute(text("INSERT INTO core.group_members (group_id, person_id) VALUES (:g, :p)"), {"g": w.group, "p": w.owner_person})
+    await db.execute(text("UPDATE core.groups SET member_count = 6 WHERE id = :g"), {"g": w.group})
     await db.commit()
     assert await person_role.audience_n(db, w.org, w.group, speaker_person_id=sp) == 2            # trừ người nói, NV, Sếp, người thường
     assert await person_role.audience_n(db, w.org, w.group, speaker_entity_id=esp) == 2
     assert await person_role.audience_n(db, w.org, w.group) == 3                                  # không biết ai nói ⇒ người nói tính như khách khác
     await db.execute(text("UPDATE core.group_members SET left_at = now() WHERE group_id = :g AND person_id = :p"), {"g": w.group, "p": sp})
+    await db.execute(text("UPDATE core.groups SET member_count = 5 WHERE id = :g"), {"g": w.group})
     await db.commit()
     assert await person_role.audience_n(db, w.org, w.group, speaker_person_id=sp) == 2            # thành viên đã rời không đếm
 
@@ -131,7 +150,15 @@ async def test_audience_n_none_when_not_countable(db: AsyncSession) -> None:
     assert await person_role.audience_n(db, w.org, None) is None                                  # tin riêng
     assert await person_role.audience_n(db, w.org, w.group) is None                               # nhóm chưa có danh sách thành viên: KHÔNG suy (0 sai nghĩa)
     sp, _, _ = await _mk(db, w, "Chỉ mình nói", ptype="customer", member=True)
-    assert await person_role.audience_n(db, w.org, w.group, speaker_person_id=sp) == 0            # có danh sách, không ai khác ⇒ 0 đã đếm
+    assert await person_role.audience_n(db, w.org, w.group, speaker_person_id=sp) is None         # member_count NULL ⇒ không biết đủ hay chưa ⇒ None
+    await db.execute(text("UPDATE core.groups SET member_count = 1 WHERE id = :g"), {"g": w.group})
+    await db.commit()
+    assert await person_role.audience_n(db, w.org, w.group, speaker_person_id=sp) == 0            # danh sách đủ, không ai khác ⇒ 0 đã đếm
+    await db.execute(text("UPDATE core.groups SET member_count = 80 WHERE id = :g"), {"g": w.group})
+    for name in ("K1", "K2"):
+        k, _, _ = await _mk(db, w, name, ptype="customer", member=True)
+    await db.commit()
+    assert await person_role.audience_n(db, w.org, w.group, speaker_person_id=sp) is None         # nhóm 80 người, 3 dòng thành viên ⇒ None (đếm thiếu ⇒ fail-low)
 
 
 def test_thread_of_carries_audience_and_default_none() -> None:
@@ -141,46 +168,63 @@ def test_thread_of_carries_audience_and_default_none() -> None:
 
 # ─── staff_owned / staff_ref ─────────────────────────────────────────────────
 
-async def _scene(db: AsyncSession, *, staff_confirmed: bool = True, staff_after: bool = True, customer_after: bool = False) -> tuple[Any, uuid.UUID, uuid.UUID, list[uuid.UUID], datetime]:
+async def _scene(db: AsyncSession, *, staff_confirmed: bool = True, staff_after: bool = True, customer_after: bool = False) -> tuple[Any, uuid.UUID, uuid.UUID, datetime, datetime]:
+    """(world, customer, staff, trigger_at, status_at)."""
     w = await mk_world(db, await mk_org(db))
     cust, ci, _ = await _mk(db, w, "Khách", ptype="customer", member=True)
     staff, si, _ = await _mk(db, w, "NV", staff_confirmed=staff_confirmed, member=True)
     if not staff_confirmed:
         await db.execute(text("UPDATE core.persons SET person_type = 'staff' WHERE id = :p"), {"p": staff})   # đặt bằng đường cũ: chưa xác nhận
     trigger = NOW - timedelta(minutes=30)
-    r1 = await mk_raw(db, w.org, w.channel, identity=ci, body="sao giao trễ vậy", at=trigger, group=w.group)
-    r2 = await mk_raw(db, w.org, w.channel, identity=si, body="em đang xử lý, 15h giao", at=NOW - timedelta(minutes=(10 if staff_after else 40)), group=w.group)
-    raws = [r1, r2]
+    status_at = NOW - timedelta(minutes=(10 if staff_after else 40))
+    await mk_raw(db, w.org, w.channel, identity=ci, body="sao giao trễ vậy", at=trigger, group=w.group)
+    await mk_raw(db, w.org, w.channel, identity=si, body="em đang xử lý, 15h giao", at=status_at, group=w.group)
     if customer_after:
-        raws.append(await mk_raw(db, w.org, w.channel, identity=ci, body="nhanh lên", at=NOW - timedelta(minutes=5), group=w.group))
-    return w, cust, staff, raws, trigger
+        await mk_raw(db, w.org, w.channel, identity=ci, body="nhanh lên", at=NOW - timedelta(minutes=5), group=w.group)
+    return w, cust, staff, trigger, status_at
 
 
-async def _ref(db: AsyncSession, w: Any, cust: uuid.UUID, staff: uuid.UUID, raws: list[uuid.UUID], trigger: datetime, **kw: Any) -> str | None:
-    args: dict[str, Any] = {"status_hint": "dang_xu_ly", "status_by_person_id": staff, "raw_event_ids": raws, "customer_person_id": cust, "group_id": w.group, "trigger_at": trigger}
+async def _ref(db: AsyncSession, w: Any, cust: uuid.UUID, staff: uuid.UUID, trigger: datetime, status_at: datetime | None, **kw: Any) -> str | None:
+    args: dict[str, Any] = {"status_hint": "dang_xu_ly", "status_by_person_id": staff, "customer_person_id": cust, "group_id": w.group, "trigger_at": trigger,
+                            "status_at": status_at}
     args.update(kw)
     return await person_role.staff_owner_ref(db, w.org, **args)
 
 
 async def test_staff_owner_ref_confirmed_staff_after_trigger_owns(db: AsyncSession) -> None:
-    w, cust, staff, raws, trig = await _scene(db)
-    assert await _ref(db, w, cust, staff, raws, trig) == f"u_{staff}"
+    w, cust, staff, trig, st = await _scene(db)
+    assert await _ref(db, w, cust, staff, trig, st) == f"u_{staff}"
+    assert await _ref(db, w, cust, staff, trig, st, status_hint="da_xu_ly") == f"u_{staff}"        # cùng điều kiện; bên gọi đặt closure = staff
 
 
 async def test_staff_owner_ref_refusals(db: AsyncSession) -> None:
-    w, cust, staff, raws, trig = await _scene(db)
-    assert await _ref(db, w, cust, staff, raws, trig, status_hint="da_xu_ly") is None             # da_xu_ly là `closure = staff`, không phải staff_owned
-    assert await _ref(db, w, cust, staff, raws, trig, status_hint=None) is None
-    assert await _ref(db, w, cust, staff, raws, trig, status_by_person_id=None) is None
-    assert await _ref(db, w, cust, staff, raws, trig, asks_for_owner=True) is None                # asks_for_owner thắng
-    assert await _ref(db, w, cust, cust, raws, trig) is None                                       # người trả lời là khách, không phải NV
-    assert await _ref(db, w, cust, staff, raws, trig + timedelta(hours=1)) is None                # tin NV TRƯỚC tin kích hoạt
+    w, cust, staff, trig, st = await _scene(db)
+    assert await _ref(db, w, cust, staff, trig, st, status_hint="dang_mo") is None
+    assert await _ref(db, w, cust, staff, trig, st, status_hint=None) is None
+    assert await _ref(db, w, cust, staff, trig, st, status_by_person_id=None) is None
+    assert await _ref(db, w, cust, staff, trig, None) is None                                      # thiếu status_at ⇒ None
+    assert await _ref(db, w, cust, staff, trig, st, asks_for_owner=True) is None                   # asks_for_owner thắng
+    assert await _ref(db, w, cust, cust, trig, st) is None                                         # người trả lời là khách, không phải NV
+    assert await _ref(db, w, cust, staff, trig + timedelta(hours=1), st) is None                   # tin NV TRƯỚC tin kích hoạt
 
 
 async def test_staff_owner_ref_unconfirmed_staff_or_customer_after_staff_is_not_owned(db: AsyncSession) -> None:
-    w, cust, staff, raws, trig = await _scene(db, staff_confirmed=False)
-    assert await _ref(db, w, cust, staff, raws, trig) is None                                      # staff chưa có khoá + staff_marked_at (D3)
-    w, cust, staff, raws, trig = await _scene(db, customer_after=True)
-    assert await _ref(db, w, cust, staff, raws, trig) is None                                      # khách nhắn SAU tin NV ⇒ false
-    w, cust, staff, raws, trig = await _scene(db, staff_after=False)
-    assert await _ref(db, w, cust, staff, raws, trig) is None                                      # NV trả lời trước khi khách chê (không phải đáp lại)
+    w, cust, staff, trig, st = await _scene(db, staff_confirmed=False)
+    assert await _ref(db, w, cust, staff, trig, st) is None                                        # staff chưa có khoá + staff_marked_at (D3)
+    w, cust, staff, trig, st = await _scene(db, customer_after=True)
+    assert await _ref(db, w, cust, staff, trig, st) is None                                        # khách nhắn SAU tin NV ⇒ false
+    w, cust, staff, trig, st = await _scene(db, staff_after=False)
+    assert await _ref(db, w, cust, staff, trig, st) is None                                        # NV trả lời trước khi khách chê
+
+
+async def test_staff_owner_ref_anchor_is_the_status_message_not_latest_staff_message(db: AsyncSession) -> None:
+    """t1 khách chê · t2 NV "em đang xử lý" · t3 khách doạ · t4 NV "dạ" ⇒ staff_owned = false (mốc là t2, tin doạ t3 đứng sau)."""
+    w = await mk_world(db, await mk_org(db))
+    cust, ci, _ = await _mk(db, w, "Khách", ptype="customer", member=True)
+    staff, si, _ = await _mk(db, w, "NV", staff_confirmed=True, member=True)
+    t1, t2, t3, t4 = (NOW - timedelta(minutes=m) for m in (40, 30, 20, 10))
+    await mk_raw(db, w.org, w.channel, identity=ci, body="giao trễ quá", at=t1, group=w.group)
+    await mk_raw(db, w.org, w.channel, identity=si, body="em đang xử lý", at=t2, group=w.group)
+    await mk_raw(db, w.org, w.channel, identity=ci, body="không giao là em huỷ", at=t3, group=w.group)
+    await mk_raw(db, w.org, w.channel, identity=si, body="dạ", at=t4, group=w.group)
+    assert await _ref(db, w, cust, staff, t1, t2) is None

@@ -141,29 +141,44 @@ async def _repeat_n(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID, c
 async def prior_threat_no_exit_n(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID, case_key: str, now: datetime) -> int:
     """`prior_threat_no_exit_n` (r7.1 (c′), CNS-171): số VỤ ĐÃ ĐÓNG của cùng khách, KHÁC `case_key` hiện tại, trong 90 ngày, có lời doạ
     (`stage_eff = 'ultimatum'`) mà không có `exit_*` và không công khai. Vụ đã đóng = `closure ∈ {owner, customer, staff}`, hoặc vụ ≥ 14 ngày không
-    `exit_*` mà khách còn đặt việc sau đó (đơn thắng). Không bao giờ đếm vụ đang mở / lời doạ cùng vụ.
+    `exit_*` mà khách còn đặt việc sau đó (đơn thắng). Không bao giờ đếm vụ đang mở / lời doạ cùng vụ. Sếp "Đã xử lý" (`owner_resolved`) = đã đóng; vụ Sếp chấm Sai (`signal_feedback.verdict = 'wrong'`) không tính.
     `stage_eff` đọc từ `level_input.stage_eff` (bên ghi ở signals/P4, (h)); chưa có ⇒ `complaint_stage` ⇒ đường tương thích (`said_will_leave` ⇒
     ultimatum, ngược lại voice) — cùng quy tắc nên số đếm không phụ thuộc bên ghi. "Không công khai" xấp xỉ bảo thủ: vụ có `flags.public` hay
     `public_venue` không bị đếm (đếm ít ⇒ hạ bậc ít ⇒ thừa 🟠, không thiếu)."""
     rows = (await db.execute(text("""
-        SELECT case_key,
-               bool_or(COALESCE(level_input ->> 'stage_eff', level_input ->> 'complaint_stage',
-                                CASE WHEN level_input #>> '{flags,said_will_leave}' = 'true' THEN 'ultimatum' ELSE 'voice' END) = 'ultimatum') AS threat,
-               bool_or(COALESCE(level_input ->> 'stage_eff', level_input ->> 'complaint_stage', '') LIKE 'exit!_%' ESCAPE '!') AS exit_seen,
-               bool_or(COALESCE(level_input #>> '{flags,public}', 'false') = 'true' OR level_input ->> 'public_venue' IS NOT NULL) AS public,
-               bool_or(COALESCE(level_input ->> 'closure', 'none') IN ('owner', 'customer', 'staff')) AS closed,
-               min(created_at) AS first_at, max(COALESCE((level_input ->> 'msg_at')::timestamptz, created_at)) AS last_at
-        FROM biz.alerts WHERE org_id = :o AND kind IN (:a, :b) AND case_key IS NOT NULL AND case_key <> :ck
-          AND COALESCE((level_input ->> 'msg_at')::timestamptz, created_at) > :t AND level_input IS NOT NULL AND facts -> 'person_ids' ? CAST(:p AS text)
-        GROUP BY case_key"""), {"o": org_id, "a": KIND, "b": KIND_REL, "ck": case_key, "p": str(person_id),
-                                "t": now - timedelta(days=PRIOR_THREAT_DAYS)})).all()
-    n = 0
+        SELECT a.id, a.case_key, a.created_at, a.level_input ->> 'msg_at' AS msg_at,
+               COALESCE(a.level_input ->> 'stage_eff', a.level_input ->> 'complaint_stage',
+                        CASE WHEN a.level_input #>> '{flags,said_will_leave}' = 'true' THEN 'ultimatum' ELSE 'voice' END) AS stage,
+               (COALESCE(a.level_input #>> '{flags,public}', 'false') = 'true' OR a.level_input ->> 'public_venue' IS NOT NULL) AS public,
+               (COALESCE(a.level_input ->> 'closure', 'none') IN ('owner', 'customer', 'staff')
+                OR COALESCE(a.level_input ->> 'owner_resolved', 'false') = 'true') AS closed,
+               EXISTS (SELECT 1 FROM biz.signal_feedback f WHERE f.signal_id = a.id AND f.verdict = 'wrong') AS wrong
+        FROM biz.alerts a WHERE a.org_id = :o AND a.kind IN (:a, :b) AND a.case_key IS NOT NULL AND a.created_at > :t
+          AND a.subject_type = 'person' AND a.subject_id = :p AND a.level_input IS NOT NULL
+          AND NOT (a.case_key = :ck AND a.status IN ('open', 'acknowledged'))"""),             # chỉ loại VỤ ĐANG MỞ hiện tại; vụ cũ đã đóng cùng khoá vẫn đếm
+                          {"o": org_id, "a": KIND, "b": KIND_REL, "ck": case_key, "p": person_id, "t": now - timedelta(days=PRIOR_THREAT_DAYS)})).all()
+    cases: dict[str, dict[str, Any]] = {}
     for r in rows:
-        if not r.threat or r.exit_seen or r.public:
+        try:
+            at = levels._aware(datetime.fromisoformat(r.msg_at)) if r.msg_at else levels._aware(r.created_at)
+        except ValueError:
+            at = levels._aware(r.created_at)                 # msg_at sai định dạng: dùng lúc tạo, không làm lỗi emit
+        c = cases.setdefault(r.case_key, {"threat": False, "exit": False, "public": False, "closed": False, "wrong": False, "last": at})
+        c["threat"] |= r.stage == "ultimatum"
+        c["exit"] |= str(r.stage).startswith("exit_")
+        c["public"] |= bool(r.public)
+        c["closed"] |= bool(r.closed)
+        c["wrong"] |= bool(r.wrong)                          # Sếp chấm Sai ⇒ không phải tiền lệ
+        c["last"] = max(c["last"], at)
+    n = 0
+    for c in cases.values():
+        if c["last"] <= levels._aware(now) - timedelta(days=PRIOR_THREAT_DAYS):
             continue
-        closed = bool(r.closed)
-        if not closed and levels._aware(now) - levels._aware(r.last_at) >= timedelta(days=PRIOR_THREAT_QUIET_DAYS):
-            closed = await _ordered_after(db, org_id, person_id, r.last_at)
+        if not c["threat"] or c["exit"] or c["public"] or c["wrong"]:
+            continue
+        closed = c["closed"]
+        if not closed and levels._aware(now) - c["last"] >= timedelta(days=PRIOR_THREAT_QUIET_DAYS):
+            closed = await _ordered_after(db, org_id, person_id, c["last"])
         n += 1 if closed else 0
     return n
 

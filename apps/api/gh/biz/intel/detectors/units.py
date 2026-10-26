@@ -137,8 +137,9 @@ async def people(db: AsyncSession, org_id: uuid.UUID, u: Any, sets: g.OrgSets, r
         return (sender is not None and ent == sender.entity_id) or ent in members or (group_id is not None and not members)
 
     p = People(group_id, size, sender, forwarded=forwarded, hard=hard, outbound=outbound)
-    p.audience_n = await person_role.audience_n(db, org_id, group_id, speaker_person_id=u.person_id,
-                                                speaker_entity_id=sender.entity_id if sender else None, sets=sets)
+    if u.kind_hint in ("xung_dot_khieu_nai", "quan_he_nong_nguoi"):      # chỉ đường G3 đọc khán giả; lừa đảo/an toàn (Bước 0) không đếm
+        p.audience_n = await person_role.audience_n(db, org_id, group_id, speaker_person_id=u.person_id,
+                                                    speaker_entity_id=sender.entity_id if sender else None)
     seen: set[tuple[str, str]] = set()
     listed = verified(u).get("people")
     if isinstance(listed, list):
@@ -406,15 +407,16 @@ async def _route_conflict(db: AsyncSession, org_id: uuid.UUID, u: Any, p: People
     public = fl.get("public") is True and await public_place(db, org_id, p, s, sets, [mine])
     by = _uuid(v.get("status_by_person_id"))
     staff_ref = await person_role.staff_owner_ref(
-        db, org_id, status_hint=status, status_by_person_id=by, raw_event_ids=[e.raw_event_id for e in ev], customer_person_id=s.person_id,
-        group_id=p.group_id, trigger_at=trigger_at, asks_for_owner=g3["asks_for_owner"])
+        db, org_id, status_hint=status, status_by_person_id=by, customer_person_id=s.person_id, group_id=p.group_id, trigger_at=trigger_at,
+        status_at=_when(v.get("status_at")), asks_for_owner=g3["asks_for_owner"])
     c = conflicts.ComplaintIn(
         sent_at=li_at, raw_event_id=mine, customer_person_id=s.person_id, source_field=e0.sf or "body",  # type: ignore[arg-type]
         span_start=int(e0.s0 or 0), span_end=max(int(e0.s1 or 1), int(e0.s0 or 0) + 1),
         public=public, complaint_stage=g3["complaint_stage"], asks_for_owner=g3["asks_for_owner"], public_venue=g3["public_venue"],
-        staff_owned=staff_ref is not None, staff_ref=staff_ref,
+        staff_owned=staff_ref is not None and status == "dang_xu_ly", staff_ref=staff_ref if status == "dang_xu_ly" else None,
         said_will_leave=fl.get("said_will_leave") is True, repeat_claimed=int(fl["repeat_n"]) if isinstance(fl.get("repeat_n"), int) and not isinstance(fl.get("repeat_n"), bool) else 0,
-        closure="customer" if status in STATUS_CLOSED and v.get("status_by_person_id") == str(s.person_id) else "none",
+        closure=("customer" if status in STATUS_CLOSED and v.get("status_by_person_id") == str(s.person_id)
+                 else "staff" if staff_ref is not None and status == "da_xu_ly" else "none"),   # NV đã xác nhận `da_xu_ly` ⇒ closure = staff (N1, (c′))
         thread=g.thread_of(p.group_id, p.size, p.audience_n), thread_key=f"g:{p.group_id}" if p.group_id else None, group_id=p.group_id,
         title="Khách phàn nàn" if not fl.get("said_will_leave") else "Khách phàn nàn, doạ bỏ")
     out = await conflicts.emit(db, org_id, c, now, cold_customer=cold, extra_evidence=unit_evidence(u, ev), facts_extra={"unit_id": str(u.id)})

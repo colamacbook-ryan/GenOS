@@ -321,12 +321,11 @@ async def _unit_ctx(db: AsyncSession, org_id: uuid.UUID, u: Any, sets: OrgSets, 
         victims.append(who_rel(ws, sets, thread_member=True) if ws else person_rel(sender, sets, ref=await _ref(db, sender), thread_member=True))
         victim_ents.append(sender)
     insider = sender is not None and sender in victim_ents       # người gửi nói về chính mình ⇒ người trong cuộc
-    audience = await person_role.audience_n(db, org_id, group_id, speaker_person_id=u.person_id, speaker_entity_id=sender, sets=sets)
     harm = u.harm.get("what") if isinstance(u.harm, dict) and isinstance(u.harm.get("what"), str) else ""
     return UnitCtx(kind=u.kind_hint, unit_id=u.id, observed_at=u.observed_at, conclusion=u.conclusion or "", flags=dict(u.flags or {}),
                    harm_what=harm or "", gate_candidate=u.gate_candidate, confidence_exist=float(u.confidence or 0.8),
                    source_class="insider" if insider else "member", forwarded=forwarded, victims=victims,
-                   thread=thread_of(group_id, size, audience), hard_rules=hard, owner_work=(sender in sets.staff or sets.is_owner(sender)) if sender else False,
+                   thread=thread_of(group_id, size), hard_rules=hard, owner_work=(sender in sets.staff or sets.is_owner(sender)) if sender else False,
                    victim_entity=victim_ents[0] if victim_ents else None)
 
 
