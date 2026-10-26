@@ -56,6 +56,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gh import suspicious
 from gh.biz.hooks import CronJob, Hook
 from gh.biz.intel import levels, signals
+from gh.biz.intel.detectors import generic
 from gh.textnorm import strip_accents
 
 log = logging.getLogger("gh.intel.fraud")
@@ -521,7 +522,7 @@ class Who:
     key_relation: bool = False
     business_contact: bool = False      # NCC / đối tác / khách / nhân viên (bên có giao dịch tiền với Sếp)
     present_in_thread: bool = False
-    staff_by_owner: bool = False        # `person_type=staff` do Sếp đặt (khoá loại) — không phải quy tắc sàng lọc tự gán
+    staff_locked: bool = False          # `person_type=staff` do Sếp đặt (khoá loại) — không phải quy tắc/seed tự gán
     staff_marked_at: datetime | None = None   # lúc Sếp đánh dấu nhân viên (Owner + PIN, T14); None = dữ liệu cũ
 
     def rel(self, *, thread_member: bool = True) -> levels.PersonRel:
@@ -921,24 +922,13 @@ async def _who(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID | None,
     return Who(ref=f"u_{person_id}", person_id=person_id, entity_id=ent, name=p.display_name, is_owner=is_owner,
                team=p.person_type == "staff", customer=customer, key_relation=ent in key_rel if ent else False,
                business_contact=is_owner or p.person_type in ("supplier", "partner", "customer", "staff") or customer,
-               present_in_thread=present or is_owner, staff_by_owner=p.person_type == "staff" and bool(p.locked),
-               staff_marked_at=_iso(p.marked))
+               present_in_thread=present or is_owner, staff_locked=p.person_type == "staff" and bool(p.locked),
+               staff_marked_at=generic.parse_marked(p.marked))
 
 
-def _iso(v: Any) -> datetime | None:
-    try:
-        return datetime.fromisoformat(v) if isinstance(v, str) and v else None
-    except ValueError:
-        return None
-
-
-def _staff_fresh(w: Who, at: datetime) -> bool:
-    """Nhân viên vừa được đánh dấu < 7 ngày: luật cứng lừa đảo CHƯA tin vai nhân viên (kẻ chiếm phiên đánh dấu rồi lừa ngay — review T14)."""
-    m = w.staff_marked_at
-    if m is None:
-        return False
-    m = m if m.tzinfo is not None else m.replace(tzinfo=at.tzinfo)
-    return (at - m).total_seconds() < STRANGER_DAYS * 86400
+def _staff_trusted(w: Who, at: datetime) -> bool:
+    """Luật CHUNG `generic.staff_trusted`: vai nhân viên chỉ tin khi Sếp đặt (khoá) và đã đánh dấu ≥ 7 ngày (hoặc dữ liệu cũ, Nợ #97)."""
+    return generic.staff_trusted("staff" if w.team else None, locked=w.staff_locked, marked_at=w.staff_marked_at, at=at)
 
 
 async def _stranger(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID | None, group_id: uuid.UUID | None, at: datetime) -> tuple[bool, bool]:
@@ -1163,13 +1153,13 @@ async def prepare(db: AsyncSession, org_id: uuid.UUID, row: _Row, *, key_rel: fr
             pass
     sender = await _who(db, org_id, row.person_id, key_rel=key_rel, owner_people=owner_people, group_id=row.group_id)
     stranger, _known = await _stranger(db, org_id, row.person_id, row.group_id, row.occurred_at)
-    if sender.team and _staff_fresh(sender, row.occurred_at):
-        sender = replace(sender, team=False, staff_by_owner=False)      # vai nhân viên mới đánh dấu < 7 ngày: chưa tin
-    if sender.is_owner or sender.team:
+    # Vai nhân viên chỉ được dùng để HẠ phòng thủ (bỏ "người lạ", bỏ xét mạo danh) khi tin được; làm NẠN NHÂN (nâng bảo vệ) thì giữ nguyên.
+    trusted = _staff_trusted(sender, row.occurred_at)
+    if sender.is_owner or trusted:
         stranger = False
     imp = None
-    # Nhân viên do Sếp đánh dấu (khoá loại, ≥ 7 ngày) trùng tên người khác ⇒ không coi là mạo danh (review T14 D2-a).
-    if not sender.is_owner and not sender.staff_by_owner and (stranger or not _known):
+    # Nhân viên Sếp tin được trùng tên người khác ⇒ không coi là mạo danh (review T14 D2-a).
+    if not sender.is_owner and not trusted and (stranger or not _known):
         imp = await _impersonated(db, org_id, sender, row.group_id, key_rel=key_rel, owner_people=owner_people)
     owner = None
     if owner_entity is not None and owner_people:

@@ -162,3 +162,25 @@ async def test_setup_unlabeled_count_not_capped_and_left_groups_ignored(owner_ap
     s = (await owner_api.get("/intel/setup")).json()
     assert n_active >= 305 and s["groups"]["unlabeled_count"] == n_active and s["groups"]["done"] is False
     assert "Nhóm đã rời" not in {g["name"] for g in s["groups"]["unlabeled"]}
+
+
+# ─── security review 5bd15456 (L-90 "một rào cho mọi đường"): luật sàng lọc không gán được `staff` ─────────────
+
+def test_refinery_rule_cannot_set_staff_and_runner_never_writes_staff() -> None:
+    from gh.refinery import rules, runner
+
+    errs = rules.validate([{"type": "keyword_any", "values": ["nhân viên"]}], [{"set": "person_type", "value": "staff"}])
+    assert "outputs.0" in errs and "nhân viên" in errs["outputs.0"]
+    assert rules.validate([{"type": "keyword_any", "values": ["ứng tuyển"]}], [{"set": "person_type", "value": "candidate"}]) == {}
+    assert "staff" not in runner.PERSON_TYPES
+
+
+async def test_create_or_update_rule_setting_staff_is_rejected(owner_api: Api) -> None:
+    body = {"name": "Gán nhân viên", "kind": "custom", "threshold": 0.5, "conditions": [{"type": "keyword_any", "values": ["ca sáng"]}],
+            "outputs": [{"set": "person_type", "value": "staff"}]}
+    r = await owner_api.send("POST", "/rules", body)
+    assert r.status_code == 422 and "nhân viên" in r.text
+    ok = await owner_api.send("POST", "/rules", {**body, "outputs": [{"set": "person_type", "value": "candidate"}]})
+    assert ok.status_code == 201, ok.text
+    r = await owner_api.send("PUT", f"/rules/{ok.json()['id']}", body)
+    assert r.status_code == 422

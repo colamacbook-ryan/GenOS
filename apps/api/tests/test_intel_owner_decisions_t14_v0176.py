@@ -399,3 +399,25 @@ async def test_pt1_generic_safety_victim_marked_customer_is_red(db: AsyncSession
     out = await generic.project_units(db, w.org, now)
     await db.commit()
     assert [(s.level, s.gate) for s in out] == [("red", levels.G2)]
+
+
+async def test_untrusted_staff_type_is_still_stranger_for_fraud(db: AsyncSession) -> None:
+    """Phòng thủ chiều sâu (security review 5bd15456): `person_type=staff` KHÔNG do Sếp đánh dấu (không khoá — vd quy tắc/seed) ⇒ luật
+    lừa đảo vẫn coi là người lạ (nhờ ứng tiền ⇒ 🔴) và vẫn xét mạo danh."""
+    w = await world(db)
+    await w.group("gd", "Nhân viên cửa hàng", 25)
+    _p, iid = await w.person("Minh Mới", ptype="staff", group="gd", joined_days_ago=1)
+    await w.raw("Mọi người ơi ứng giúp em 3 triệu, chiều em trả liền", sender=iid, group="gd")
+    out = await fraud.run(db, w.org, w.now)
+    assert len(out) == 1 and out[0].level == "red"
+
+
+def test_staff_trust_rule_shared() -> None:
+    from gh.biz.intel.detectors import generic
+
+    at = H.NOW
+    assert not generic.staff_trusted("staff", locked=False, marked_at=None, at=at)                       # quy tắc / seed tự gán
+    assert generic.staff_trusted("staff", locked=True, marked_at=None, at=at)                            # Sếp đặt trước v0.1.76 (Nợ #97)
+    assert generic.staff_trusted("staff", locked=True, marked_at=at - timedelta(days=8), at=at)
+    assert not generic.staff_trusted("staff", locked=True, marked_at=at - timedelta(days=1), at=at)      # mới đánh dấu < 7 ngày
+    assert not generic.staff_trusted("customer", locked=True, marked_at=None, at=at)

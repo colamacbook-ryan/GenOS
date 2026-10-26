@@ -110,6 +110,8 @@ class Who:
     entity_id: uuid.UUID
     person_id: uuid.UUID | None = None
     person_type: str | None = None
+    locked: bool = False                    # `attrs.person_type_locked` — loại do Sếp tự đặt
+    staff_marked_at: datetime | None = None  # lúc Sếp đánh dấu nhân viên (Owner + PIN, v0.1.76)
 
     @property
     def ref(self) -> str:
@@ -125,9 +127,12 @@ async def who(db: AsyncSession, entity_id: uuid.UUID | None) -> Who | None:
     ent = await canonical(db, entity_id)
     if ent is None:
         return None
-    r = (await db.execute(text("""SELECT e.person_id, p.person_type FROM mem.entities e LEFT JOIN core.persons p ON p.id = e.person_id
-                                  WHERE e.id = :e"""), {"e": ent})).one_or_none()
-    return Who(ent, r.person_id if r else None, r.person_type if r else None)
+    r = (await db.execute(text("""SELECT e.person_id, p.person_type, COALESCE(p.attrs ->> 'person_type_locked', '') = 'true' AS locked,
+                                         p.attrs ->> 'staff_marked_at' AS marked
+                                  FROM mem.entities e LEFT JOIN core.persons p ON p.id = e.person_id WHERE e.id = :e"""), {"e": ent})).one_or_none()
+    if r is None:
+        return Who(ent)
+    return Who(ent, r.person_id, r.person_type, bool(r.locked), parse_marked(r.marked))
 
 
 async def who_person(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID | None) -> Who | None:
@@ -139,6 +144,34 @@ async def who_person(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID |
     except entities.EntityError:
         return None
     return await who(db, ent)
+
+
+STAFF_TRUST_DAYS = 7
+
+
+def staff_trusted(person_type: str | None, *, locked: bool, marked_at: datetime | None, at: datetime) -> bool:
+    """MỘT luật cho mọi detector (security review T14, L-90): vai NHÂN VIÊN chỉ được tin để hạ phòng thủ lừa đảo (bỏ "người lạ", bỏ xét mạo
+    danh, tin "đã xử lý" là phía Sếp) khi Sếp tự đặt (`attrs.person_type_locked`) VÀ đã đánh dấu ≥ 7 ngày. Khoá mà chưa có `staff_marked_at`
+    = dữ liệu Sếp đặt trước v0.1.76 (Nợ #97) ⇒ tin. Quy tắc/seed tự gán (không khoá) ⇒ không tin."""
+    if person_type != "staff" or not locked:
+        return False
+    if marked_at is None:
+        return True
+    m = marked_at if marked_at.tzinfo is not None else marked_at.replace(tzinfo=at.tzinfo)
+    return (at - m).total_seconds() >= STAFF_TRUST_DAYS * 86400
+
+
+def parse_marked(v: object) -> datetime | None:
+    try:
+        return datetime.fromisoformat(v) if isinstance(v, str) and v else None
+    except ValueError:
+        return None
+
+
+def trusted_owner_side(w: Who | None, sets: OrgSets, at: datetime) -> bool:
+    """Phía Sếp ĐỦ TIN để hạ phòng thủ lừa đảo/an toàn (tin "đã xử lý"): Sếp, fact `staff_of`, hoặc nhân viên theo `staff_trusted`."""
+    return w is not None and (sets.is_owner(w.entity_id) or w.entity_id in sets.staff
+                              or staff_trusted(w.person_type, locked=w.locked, marked_at=w.staff_marked_at, at=at))
 
 
 def hard_customer(w: Who | None, sets: OrgSets) -> bool:
