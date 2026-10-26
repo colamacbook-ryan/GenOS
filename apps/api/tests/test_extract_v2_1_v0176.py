@@ -161,7 +161,7 @@ def test_extract_v2_1_skill_matches_contract() -> None:
     for name in ("event_time", "ongoing_message_ids", "status_message_id", "delivery_form_hint", "txn", "irreversible", "nguoi_nhan_tien",
                  "warning_story", "credentials_entered", "account_takeover"):
         assert name in sk, name
-    assert '"level_hint":"red|amber|grey|off"' in sk and "brain-out/1" in sk
+    assert '"level_hint":"red|amber|grey|off"' in sk and "brain-out/2" in sk
 
 
 def test_extract_v2_1_no_final_level_or_own_ceiling_table_in_skill() -> None:

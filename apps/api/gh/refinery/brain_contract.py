@@ -1,5 +1,5 @@
 # ruff: noqa: E501
-"""Hợp đồng đầu ra bộ não `brain-out/1` (spec §4F) — MỘT nguồn sự thật cho kỹ năng v2.1, `extract.py`, `verify.py` (L3) và bộ chấm
+"""Hợp đồng đầu ra bộ não `brain-out/2` (spec §4F + §4F.2 r7; `brain-out/1` vẫn đọc được: trường mới đều tuỳ chọn có mặc định) — MỘT nguồn sự thật cho kỹ năng v2.2, `extract.py`, `verify.py` (L3) và bộ chấm
 G-KB (L6). Đổi hợp đồng = tăng `CONTRACT_VERSION` + chạy lại G-KB.
 
 Phân vai: model thấy sự việc, tách đơn vị, chọn `kind`, trích nguyên văn, nêu cờ, `harm`, đề cử `gate_candidate`, nối Hồ sơ bằng
@@ -17,7 +17,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
-CONTRACT_VERSION = "brain-out/1"
+CONTRACT_VERSION = "brain-out/2"
+CONTRACT_VERSIONS = ("brain-out/1", "brain-out/2")      # /1 parse được bằng schema /2 (§4F.2)
 
 KINDS = ("nghia_vu_loi_hua", "viec_han", "cau_hoi_cho_xu_ly", "su_kien_dip", "suc_khoe_an_toan", "xung_dot_khieu_nai",
          "quan_he_nong_nguoi", "co_hoi_ket_noi", "rui_ro_lua_dao", "thi_truong_thong_tin")
@@ -26,7 +27,10 @@ GATES = ("lua_dao_dang_dien_ra", "an_toan", "khach_che_cong_khai_doa_bo", "loi_h
 QUOTE_FIELDS = ("body", "transcript", "ocr", "caption")
 ROLES = ("nguoi_hua", "nguoi_duoc_hua", "nguoi_hoi", "nguoi_bi_anh_huong", "nguoi_gui", "nguoi_bi_mao_danh", "nguoi_nhan_tien",
          "khac")
-STATUS_HINTS = ("dang_mo", "sap_han", "qua_han", "da_xu_ly", "da_giu", "theo_doi")
+STATUS_HINTS = ("dang_mo", "sap_han", "qua_han", "da_xu_ly", "da_giu", "theo_doi", "dang_xu_ly")
+COMPLAINT_STAGES = ("vent", "voice", "ultimatum", "exit_pending", "exit_done", "third_party")     # thang Singh + 3 bậc chat Việt (r7 §4.2.1 (d′))
+PUBLIC_VENUES = ("group", "social", "authority")
+MAX_OWNER_ACTION_WORDS = 14
 MODALITIES = ("text", "voice_transcript", "ocr", "caption", "forward", "forward_suspected")
 RELEVANCE_HOW = ("goal", "resource", "limit_conflict", "key_relation", "rhythm")
 DECISION_KINDS = ("self", "internal", "outbound", "console")        # đúng 4 giá trị của ops.asks (r4 §4.4)
@@ -141,6 +145,25 @@ class Action(_Strict):
     draft: Text | None = None
 
 
+class NeedCell(_Strict):
+    """Một ô của `need` (§4F.2): chữ nguyên văn + tin chứa nó (phải ∈ `quotes` của đơn vị; `verify.py` kiểm trích dẫn `verified`)."""
+
+    text: Annotated[str, StringConstraints(min_length=1, max_length=200)]
+    message_id: MessageId
+
+
+class Need(_Strict):
+    """Độ chín nhu cầu của `co_hoi_ket_noi` (4 ô, bản 3 §2.2 `need_fields_n`): code chỉ đếm ô có trích dẫn đã kiểm."""
+
+    what: NeedCell | None = None
+    qty: NeedCell | None = None
+    when: NeedCell | None = None
+    who: NeedCell | None = None
+
+
+NEED_CELLS = ("what", "qty", "when", "who")
+
+
 class Unit(_Strict):
     unit_ref: ShortKey
     event_ref: ShortKey
@@ -155,8 +178,19 @@ class Unit(_Strict):
     deadline: Deadline = Field(default_factory=Deadline)
     amount_text: Text | None = None
     condition: Condition = Field(default_factory=Condition)
-    status_hint: Literal["dang_mo", "sap_han", "qua_han", "da_xu_ly", "da_giu", "theo_doi"] = "dang_mo"
+    status_hint: Literal["dang_mo", "sap_han", "qua_han", "da_xu_ly", "da_giu", "theo_doi", "dang_xu_ly"] = "dang_mo"
     status_message_id: MessageId | None = None           # §4F.1 #4: tin chứng minh status_hint (phải nằm trong quotes)
+    # ── brain-out/2 (§4F.2): mọi trường tuỳ chọn, có mặc định ──
+    complaint_stage: Literal["vent", "voice", "ultimatum", "exit_pending", "exit_done", "third_party"] | None = None
+    stage_message_id: MessageId | None = None            # tin KHÁCH chứng minh bậc; thiếu ⇒ complaint_stage = null
+    asks_for_owner: bool = False                         # khách đòi chính Sếp ra mặt
+    asks_message_id: MessageId | None = None             # thiếu ⇒ asks_for_owner = false
+    public_venue: Literal["group", "social", "authority"] | None = None      # `flags.public` không kèm ⇒ public = false
+    need: Need | None = None
+    fixed_occasion: bool = False                         # lời hứa gắn dịp cố định (khai trương, cưới, giỗ, hội chợ)
+    occasion_message_id: MessageId | None = None         # tin chứa từ khoá dịp; thiếu ⇒ fixed_occasion = false
+    nudge_message_id: MessageId | None = None            # tin KHÁCH/người được hứa nhắc lại lời hứa
+    owner_action: Text | None = None                     # "Việc Sếp cần làm": một dòng ≤ 14 từ, không chào bán (Q18)
     ongoing_message_ids: list[MessageId] = Field(default_factory=list)   # §4F.1 #2: ⊆ quotes; rỗng ⇒ flags.ongoing = False
     event_time: EventTime | None = None                  # §4F.1 #3
     delivery_form_hint: Literal["direct", "warning_story"] = "direct"   # §4F.1 #9: code (chuyển tiếp/simhash) thắng ⇒ forwarded
@@ -194,9 +228,50 @@ class Unit(_Strict):
         if self.flags.ongoing and not self.ongoing_message_ids:
             notes.append("ongoing_forced_false")
             self.flags = self.flags.model_copy(update={"ongoing": False})
+        self._normalize_v2(quoted, notes)
         if notes:
             self.normalization_notes = [n[:200] for n in notes]
         return self
+
+    def _normalize_v2(self, quoted: set[str], notes: list[str]) -> None:
+        _normalize_v2_impl(self, quoted, notes)
+
+
+def _normalize_v2_impl(u: Unit, quoted: set[str], notes: list[str]) -> None:
+    """Chuẩn hoá trường `brain-out/2` (§4F.2, cùng kiểu §4F.1): id lạ ⇒ null + ghi chú; thiếu id đi kèm ⇒ về mặc định; không raise."""
+    for fld in ("stage_message_id", "asks_message_id", "occasion_message_id", "nudge_message_id"):
+        mid = getattr(u, fld)
+        if mid is not None and mid not in quoted:
+            notes.append(f"{fld}_dropped:{mid}")
+            setattr(u, fld, None)
+    if u.complaint_stage is not None and u.stage_message_id is None:
+        notes.append("complaint_stage_no_message")
+        u.complaint_stage = None
+    if u.asks_for_owner and u.asks_message_id is None:
+        notes.append("asks_for_owner_no_message")
+        u.asks_for_owner = False
+    if u.fixed_occasion and u.occasion_message_id is None:
+        notes.append("fixed_occasion_no_message")
+        u.fixed_occasion = False
+    if u.flags.public and u.public_venue is None:
+        notes.append("public_without_venue")
+        u.flags = u.flags.model_copy(update={"public": False})
+    if u.need is not None:
+        cells = {}
+        for name in NEED_CELLS:
+            cell = getattr(u.need, name)
+            if cell is not None and cell.message_id not in quoted:
+                notes.append(f"need_{name}_message_id_dropped:{cell.message_id}")
+                cell = None
+            cells[name] = cell
+        u.need = Need(**cells)
+    if u.owner_action is not None:
+        words = u.owner_action.split()
+        if not words:
+            u.owner_action = None
+        elif len(words) > MAX_OWNER_ACTION_WORDS:
+            notes.append("owner_action_too_long")
+            u.owner_action = None
 
 
 def check_event_time_text(unit: Unit, message_text_by_id: dict[str, str]) -> bool:
@@ -242,7 +317,7 @@ class Unreadable(_Strict):
 
 
 class BrainOut(_Strict):
-    contract_version: Literal["brain-out/1"] = CONTRACT_VERSION     # type: ignore[assignment]
+    contract_version: Literal["brain-out/1", "brain-out/2"] = CONTRACT_VERSION     # type: ignore[assignment]
     thread_ref: ThreadRef
     units: list[Unit] = Field(default_factory=list)
     facts_proposed: list[FactProposed] = Field(default_factory=list)
@@ -252,11 +327,11 @@ class BrainOut(_Strict):
 
 
 def json_schema() -> dict[str, Any]:
-    """JSON Schema của `brain-out/1` (cho kỹ năng v2.1 và bộ chấm G-KB đọc đúng một khuôn)."""
+    """JSON Schema của `brain-out/2` (cho kỹ năng v2.2 và bộ chấm G-KB đọc đúng một khuôn)."""
     s = BrainOut.model_json_schema()
     s["$id"] = f"urn:genos:{CONTRACT_VERSION}"
     s["title"] = "BrainOut"
-    s["description"] = "Hợp đồng đầu ra bộ não brain-out/1 — gh/refinery/brain_contract.py (spec Bước 1 r6.1 §4F)"
+    s["description"] = "Hợp đồng đầu ra bộ não brain-out/2 — gh/refinery/brain_contract.py (spec Bước 1 r6.1 §4F)"
     return s
 
 

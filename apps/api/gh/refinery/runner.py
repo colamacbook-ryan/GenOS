@@ -25,7 +25,7 @@ import logging
 import re
 import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -782,6 +782,7 @@ BURST_WINDOW = timedelta(minutes=10)
 CONTEXT_EVENTS = 30
 CONTEXT_WINDOW = timedelta(hours=24)
 RETRY_BACKOFF = timedelta(minutes=5)
+HISTORY_EVIDENCE_FIRST_KINDS = ("nghia_vu_loi_hua", "viec_han")        # đơn vị lời hứa/việc có hạn: bằng chứng chọn trước khi áp trần
 HISTORY_EVIDENCE_MAX = 10          # tin bằng chứng của khối Lịch sử thêm vào tin ngữ cảnh (để trích được)
 HISTORY_EVIDENCE_CHARS = 3000
 ACK_LOOKBACK = timedelta(days=1)    # biên lệch giờ của cận dưới updated_at/received_at lời xác nhận (index org/state/updated_at + partition)
@@ -790,6 +791,21 @@ ACK_MAX = 30                        # lời xác nhận ngắn (đã loại kh�
 FREE_MODE_RETRY = timedelta(minutes=15)
 TEMPLATE_WINDOW = timedelta(days=7)
 UNVERIFIED_CONFIDENCE = 0.8              # §4D.4: đơn vị model có trích dẫn verified, chưa qua (d) — T1 tính lại độ chắc
+
+
+def pick_history_evidence(history: Sequence[Any], have: set[uuid.UUID], *, limit: int = HISTORY_EVIDENCE_MAX) -> dict[uuid.UUID, datetime]:
+    """Chọn tin bằng chứng của khối "Lịch sử" (`pack.history`) để kéo vào tin ngữ cảnh, tối đa `limit`. Hai lượt, mỗi lượt mới nhất trước
+    (trần cắt tin cũ hơn): đơn vị `kind_hint ∈ HISTORY_EVIDENCE_FIRST_KINDS` (lời hứa, việc có hạn — cần mã tin hứa để đóng sổ) rồi các đơn
+    vị còn lại. Tin đã có (`have`) không lặp lại."""
+    want: dict[uuid.UUID, datetime] = {}
+    ordered = list(reversed(history))
+    first = [it for it in ordered if it.meta.get("kind_hint") in HISTORY_EVIDENCE_FIRST_KINDS]
+    rest = [it for it in ordered if it.meta.get("kind_hint") not in HISTORY_EVIDENCE_FIRST_KINDS]
+    for it in (*first, *rest):
+        for rid, rr in it.meta.get("evidence", ()):
+            if rid not in have and rid not in want and len(want) < limit:
+                want[rid] = rr
+    return want
 
 
 def verified_fields(vu: Any, u: Any, people: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1620,13 +1636,10 @@ class GroupTurns:
                                 pack: Any) -> list[Any]:
         """Tin bằng chứng của các đơn vị trong khối "Lịch sử" (`retrieve.pack`, cùng luồng) được thêm vào tin ngữ cảnh — để model
         TRÍCH được việc trước đó (lời hứa giữ giá, đợt thanh toán…) và code kiểm được trích dẫn. Trần `HISTORY_EVIDENCE_MAX` tin /
-        `HISTORY_EVIDENCE_CHARS` ký tự (một phần trần lịch sử ≈ 2.400 token); tin đã có trong cửa sổ không lặp lại."""
+        `HISTORY_EVIDENCE_CHARS` ký tự (một phần trần lịch sử ≈ 2.400 token); tin đã có trong cửa sổ không lặp lại. Tin bằng chứng của đơn vị
+        `nghia_vu_loi_hua`/`viec_han` được chọn TRƯỚC khi áp trần (`pick_history_evidence`): lời hứa cũ thiếu mã tin hứa thì không đóng được."""
         have = {m.event_id for b in blocks for m in b.all_events} | {c.raw_event_id for c in ctx_events if c.raw_event_id}
-        want: dict[uuid.UUID, datetime] = {}
-        for it in reversed(pack.history):                       # mới nhất trước: trần cắt tin cũ hơn
-            for rid, rr in it.meta.get("evidence", ()):
-                if rid not in have and rid not in want and len(want) < HISTORY_EVIDENCE_MAX:
-                    want[rid] = rr
+        want = pick_history_evidence(pack.history, have)
         scope = await self._thread_scope(db, tk)
         if not want or scope is None:
             return ctx_events

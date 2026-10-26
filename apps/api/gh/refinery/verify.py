@@ -22,10 +22,11 @@ import uuid
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from difflib import SequenceMatcher
 from typing import Any
 
 from gh.biz.mem import vi_time
-from gh.refinery.brain_contract import BrainOut, FactProposed, MemoryUpdate, Unit
+from gh.refinery.brain_contract import NEED_CELLS, BrainOut, FactProposed, MemoryUpdate, Need, Unit
 from gh.textnorm import strip_accents
 
 DEFAULT_TZ = vi_time.DEFAULT_TZ
@@ -34,6 +35,15 @@ _LABEL_RE = re.compile(r"\[(?:đã che|OTP \d+ số|mật khẩu|token|CVV|thẻ
 TXN_JUST_DONE = timedelta(hours=24)
 #: `quotes[].field` → loại `clean.media_texts` (body/caption nằm ở thân tin).
 FIELD_TO_MEDIA_KIND = {"transcript": "transcript", "ocr": "ocr"}
+#: Vai người gửi tin (đọc từ thuộc tính/khoá `sender_role` của tin; P2 điền theo `person_type`/`person_role`): "customer" | "staff" | "owner" | …;
+#: thiếu ⇒ không kiểm được vai (giữ trường, ghi `*_role_unchecked`). Trường của KHÁCH (bậc khiếu nại, đòi Sếp, nhắc) không nhận tin của NV/Sếp.
+NON_CUSTOMER_ROLES = frozenset({"staff", "owner"})
+#: Từ khoá dịp cố định (§4F.2 `fixed_occasion`): phải có trong tin `occasion_message_id` (so trên chữ thường, giữ dấu).
+OCCASION_RE = re.compile(r"khai trương|cưới|giỗ|hội chợ|tân gia|tất niên|sinh nhật|lễ kỷ niệm|triển lãm")
+#: Từ cấm của `owner_action` (Q18, spec §4.2 "Việc Sếp cần làm"): so trên chữ bỏ dấu.
+SELLING_RE = re.compile(r"chao hang|moi mua|upsell|ban them|goi y mua|khuyen mai de chot|chot don|chot sale")
+ASKED_PRICE_RE = re.compile(r"\bgia\b|bao nhieu|bao gia")
+MIN_QUOTE_COPY_CHARS = 20      # `owner_action` chứa một đoạn liền ≥ ngần này ký tự của trích dẫn ⇒ coi là chép lời khách
 
 
 # ─── đầu vào ───────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -114,6 +124,8 @@ class VerifiedUnit:
     money_basis: str | None = None           # amount_text | harm.amount_text
     status_by_person_id: uuid.UUID | None = None
     status_at: datetime | None = None
+    status_by_role: str | None = None        # vai người gửi tin `status_message_id` (nếu tin có `sender_role`); P2 kiểm NV
+    need_fields_n: int | None = None         # r7: số ô `need` có trích dẫn verified (0–4); None = đơn vị không khai `need`
     txn_state: str | None = None             # pending | just_done | done_cannot_stop
     txn_at: datetime | None = None
     delivery_form: str = "direct"            # direct | warning_story | forwarded
@@ -611,6 +623,8 @@ def _verify_unit(res: Verified, vu: VerifiedUnit, ev_by_id: Mapping[str, Any], m
         if sq is not None and sq.status == "verified":
             vu.status_by_person_id, vu.status_at = sq.sender_person_id, sq.sent_at
 
+    u = _verify_v2(res, vu, u, q_by_msg, ev_by_id, media)
+
     # txn (#10)
     if u.txn is not None and u.txn.state_hint and u.txn.message_id:
         tq = q_by_msg.get(u.txn.message_id)
@@ -641,6 +655,108 @@ def _verify_unit(res: Verified, vu: VerifiedUnit, ev_by_id: Mapping[str, Any], m
     vu.unit = u
 
 
+def _verified_msg(q_by_msg: Mapping[str, VerifiedQuote], mid: str | None) -> VerifiedQuote | None:
+    q = q_by_msg.get(mid or "")
+    return q if q is not None and q.status == "verified" else None
+
+
+def _verify_v2(res: Verified, vu: VerifiedUnit, u: Unit, q_by_msg: Mapping[str, VerifiedQuote], ev_by_id: Mapping[str, Any],
+               media: Mapping[str, list[Any]]) -> Unit:
+    """Kiểm trường `brain-out/2` (§4F.2, bản 3 §2.2 cột "Code kiểm"). Trường không kiểm được ⇒ về MẶC ĐỊNH + ghi chú (không loại đơn vị)."""
+    notes = vu.notes
+    upd: dict[str, Any] = {}
+
+    def role_of(q: VerifiedQuote) -> str | None:
+        ev = ev_by_id.get(q.message_id)
+        r = _g(ev, "sender_role") if ev is not None else None
+        return str(r) if r else None
+
+    def customer_msg(field_name: str, mid: str | None) -> bool:
+        """Tin `mid` phải verified và do KHÁCH gửi (không phải NV/Sếp); thiếu vai ⇒ chấp nhận nhưng ghi `*_role_unchecked`."""
+        q = _verified_msg(q_by_msg, mid)
+        if q is None:
+            notes.append(f"{field_name}_unverified")
+            res.bump(f"{field_name}_unverified")
+            return False
+        role = role_of(q)
+        if role is None:
+            notes.append(f"{field_name}_role_unchecked")
+            res.bump(f"{field_name}_role_unchecked")
+            return True
+        if role in NON_CUSTOMER_ROLES:
+            notes.append(f"{field_name}_sender_not_customer")
+            res.bump(f"{field_name}_sender_not_customer")
+            return False
+        return True
+
+    if u.complaint_stage is not None and not customer_msg("stage_message", u.stage_message_id):
+        upd.update(complaint_stage=None, stage_message_id=None)
+    if u.asks_for_owner and not customer_msg("asks_message", u.asks_message_id):
+        upd.update(asks_for_owner=False, asks_message_id=None)
+    if u.nudge_message_id is not None and not customer_msg("nudge_message", u.nudge_message_id):
+        upd["nudge_message_id"] = None
+
+    # status `dang_xu_ly`: cần tin chứng minh verified (vai NV do P2 kiểm theo `status_by_role`/`status_by_person_id`); không ⇒ `dang_mo`
+    sq = _verified_msg(q_by_msg, u.status_message_id)
+    if sq is not None:
+        vu.status_by_role = role_of(sq)
+    if u.status_hint == "dang_xu_ly" and sq is None:
+        notes.append("dang_xu_ly_unverified")
+        res.bump("dang_xu_ly_unverified")
+        upd.update(status_hint="dang_mo", status_message_id=None)
+
+    # need: chỉ ô có trích dẫn verified VÀ chữ của ô nằm nguyên văn trong tin đó mới được giữ; đếm ô giữ lại
+    if u.need is not None:
+        kept: dict[str, Any] = {}
+        for name in NEED_CELLS:
+            cell = getattr(u.need, name)
+            nq = _verified_msg(q_by_msg, cell.message_id) if cell is not None else None
+            if cell is not None and nq is not None and norm(cell.text) in norm(_message_text(ev_by_id[nq.message_id], media)):
+                kept[name] = cell
+            else:
+                if cell is not None:
+                    notes.append(f"need_{name}_unverified")
+                    res.bump("need_cell_unverified")
+                kept[name] = None
+        vu.need_fields_n = sum(1 for c in kept.values() if c is not None)
+        upd["need"] = Need(**kept)
+
+    # fixed_occasion: từ khoá dịp phải có trong tin `occasion_message_id` đã kiểm
+    if u.fixed_occasion:
+        oq = _verified_msg(q_by_msg, u.occasion_message_id)
+        if oq is None or not OCCASION_RE.search(norm(_message_text(ev_by_id[oq.message_id], media)).lower()):
+            notes.append("fixed_occasion_unverified")
+            res.bump("fixed_occasion_unverified")
+            upd.update(fixed_occasion=False, occasion_message_id=None)
+
+    # owner_action (Q18): không chép lời trong tin, không từ chào bán; "báo giá" chỉ khi khách đã hỏi giá
+    if u.owner_action is not None:
+        reason = _owner_action_problem(u.owner_action, [q for q in q_by_msg.values() if q.status == "verified"], ev_by_id, media)
+        if reason is not None:
+            notes.append(f"owner_action_dropped:{reason}")
+            res.bump("owner_action_dropped")
+            upd["owner_action"] = None
+    return u.model_copy(update=upd) if upd else u
+
+
+def _owner_action_problem(action: str, quotes: Sequence[VerifiedQuote], ev_by_id: Mapping[str, Any], media: Mapping[str, list[Any]]) -> str | None:
+    a = norm(action)
+    for q in quotes:
+        qt = norm(q.text)
+        if len(qt) >= MIN_QUOTE_COPY_CHARS or len(qt) >= len(a):
+            m = SequenceMatcher(None, a.lower(), qt.lower(), autojunk=False).find_longest_match(0, len(a), 0, len(qt))
+            if m.size >= min(MIN_QUOTE_COPY_CHARS, len(qt)):
+                return "copies_quote"
+    af = _fold(a)
+    if SELLING_RE.search(af):
+        return "selling_verb"
+    if "bao gia" in af:
+        blob = _fold("\n".join(_message_text(ev_by_id[q.message_id], media) for q in quotes if q.message_id in ev_by_id))
+        if not ASKED_PRICE_RE.search(blob):
+            return "quote_price_not_asked"
+    return None
+
+
 def _verify_facts(res: Verified, facts: Sequence[FactProposed], unit_by_ref: Mapping[str, VerifiedUnit], ev_by_id: Mapping[str, Any],
                   known_predicates: Collection[str] | None) -> None:
     known = set(known_predicates) if known_predicates is not None else None
@@ -661,4 +777,4 @@ def _verify_facts(res: Verified, facts: Sequence[FactProposed], unit_by_ref: Map
 
 
 __all__ = ["MediaText", "Verified", "VerifiedUnit", "VerifiedQuote", "VerifiedFact", "check", "norm", "parse_money_vnd",
-           "ONGOING_WINDOW"]
+           "ONGOING_WINDOW", "NON_CUSTOMER_ROLES"]
