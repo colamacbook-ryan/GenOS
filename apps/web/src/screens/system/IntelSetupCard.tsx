@@ -192,6 +192,20 @@ function StaffStep({ s, asStep }: { s: IntelSetup; asStep?: boolean }) {
                   {p.name}
                   <span className="intel-setup__meta">{personTypeLabel(p.person_type)}</span>
                 </span>
+                {p.needs_reconfirm ? (
+                  <span className="intel-setup__reconfirm">
+                    <Badge kind="status" tone="warn">Cần xác nhận lại</Badge>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      aria-label={`Xác nhận lại ${p.name} là nhân viên (cần mã PIN)`}
+                      disabled={setStaff.isPending}
+                      onClick={() => setStaff.mutate({ id: p.id, staff: true }, { onSuccess: () => toast(`Đã xác nhận ${p.name} là nhân viên`) })}
+                    >
+                      Xác nhận
+                    </Button>
+                  </span>
+                ) : null}
                 <Switch
                   checked={on}
                   label={`${p.name} là nhân viên`}

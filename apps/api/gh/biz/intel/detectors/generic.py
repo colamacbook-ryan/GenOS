@@ -146,19 +146,12 @@ async def who_person(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID |
     return await who(db, ent)
 
 
-STAFF_TRUST_DAYS = 7
-
-
-def staff_trusted(person_type: str | None, *, locked: bool, marked_at: datetime | None, at: datetime) -> bool:
-    """MỘT luật cho mọi detector (security review T14, L-90): vai NHÂN VIÊN chỉ được tin để hạ phòng thủ lừa đảo (bỏ "người lạ", bỏ xét mạo
-    danh, tin "đã xử lý" là phía Sếp) khi Sếp tự đặt (`attrs.person_type_locked`) VÀ đã đánh dấu ≥ 7 ngày. Khoá mà chưa có `staff_marked_at`
-    = dữ liệu Sếp đặt trước v0.1.76 (Nợ #97) ⇒ tin. Quy tắc/seed tự gán (không khoá) ⇒ không tin."""
-    if person_type != "staff" or not locked:
-        return False
-    if marked_at is None:
-        return True
-    m = marked_at if marked_at.tzinfo is not None else marked_at.replace(tzinfo=at.tzinfo)
-    return (at - m).total_seconds() >= STAFF_TRUST_DAYS * 86400
+def staff_trusted(person_type: str | None, *, locked: bool, marked_at: datetime | None) -> bool:
+    """MỘT luật cho mọi detector (security review T14, L-90; Ryan chốt 26/10: bước xác nhận của Sếp là đủ, không chờ 7 ngày): vai NHÂN VIÊN
+    chỉ được tin để hạ phòng thủ lừa đảo (bỏ "người lạ", bỏ xét mạo danh, tin "đã xử lý" là phía Sếp) khi Sếp đã xác nhận — khoá loại
+    (`attrs.person_type_locked`) VÀ có `staff_marked_at` (chỉ ghi qua Owner + PIN). Không có `staff_marked_at` (đặt trước v0.1.76, quy tắc/
+    seed/demo, đường cũ) ⇒ không tin — Sếp xác nhận lại ở thẻ Thiết lập (Nợ #97)."""
+    return person_type == "staff" and locked and marked_at is not None
 
 
 def parse_marked(v: object) -> datetime | None:
@@ -168,10 +161,10 @@ def parse_marked(v: object) -> datetime | None:
         return None
 
 
-def trusted_owner_side(w: Who | None, sets: OrgSets, at: datetime) -> bool:
+def trusted_owner_side(w: Who | None, sets: OrgSets) -> bool:
     """Phía Sếp ĐỦ TIN để hạ phòng thủ lừa đảo/an toàn (tin "đã xử lý"): Sếp, fact `staff_of`, hoặc nhân viên theo `staff_trusted`."""
     return w is not None and (sets.is_owner(w.entity_id) or w.entity_id in sets.staff
-                              or staff_trusted(w.person_type, locked=w.locked, marked_at=w.staff_marked_at, at=at))
+                              or staff_trusted(w.person_type, locked=w.locked, marked_at=w.staff_marked_at))
 
 
 def hard_customer(w: Who | None, sets: OrgSets) -> bool:

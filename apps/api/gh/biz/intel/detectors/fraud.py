@@ -926,9 +926,9 @@ async def _who(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID | None,
                staff_marked_at=generic.parse_marked(p.marked))
 
 
-def _staff_trusted(w: Who, at: datetime) -> bool:
-    """Luật CHUNG `generic.staff_trusted`: vai nhân viên chỉ tin khi Sếp đặt (khoá) và đã đánh dấu ≥ 7 ngày (hoặc dữ liệu cũ, Nợ #97)."""
-    return generic.staff_trusted("staff" if w.team else None, locked=w.staff_locked, marked_at=w.staff_marked_at, at=at)
+def _staff_trusted(w: Who) -> bool:
+    """Luật CHUNG `generic.staff_trusted`: vai nhân viên chỉ tin khi Sếp đã xác nhận (khoá + `staff_marked_at`, Owner + PIN)."""
+    return generic.staff_trusted("staff" if w.team else None, locked=w.staff_locked, marked_at=w.staff_marked_at)
 
 
 async def _stranger(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID | None, group_id: uuid.UUID | None, at: datetime) -> tuple[bool, bool]:
@@ -1154,7 +1154,7 @@ async def prepare(db: AsyncSession, org_id: uuid.UUID, row: _Row, *, key_rel: fr
     sender = await _who(db, org_id, row.person_id, key_rel=key_rel, owner_people=owner_people, group_id=row.group_id)
     stranger, _known = await _stranger(db, org_id, row.person_id, row.group_id, row.occurred_at)
     # Vai nhân viên chỉ được dùng để HẠ phòng thủ (bỏ "người lạ", bỏ xét mạo danh) khi tin được; làm NẠN NHÂN (nâng bảo vệ) thì giữ nguyên.
-    trusted = _staff_trusted(sender, row.occurred_at)
+    trusted = _staff_trusted(sender)
     if sender.is_owner or trusted:
         stranger = False
     imp = None

@@ -263,7 +263,8 @@ async def setup_state(user: service.CurrentUser = Depends(require_owner), db: As
                                                    AND c.group_id = g.id AND c.source = 'owner')) AS unlabeled
         FROM core.groups g WHERE g.org_id = :o AND g.left_at IS NULL"""), {"o": org})).one()
     people = (await db.execute(text("""
-        SELECT p.id, p.display_name, p.person_type, p.attrs -> 'before_staff' ->> 'type' AS prev_type FROM core.persons p
+        SELECT p.id, p.display_name, p.person_type, p.attrs -> 'before_staff' ->> 'type' AS prev_type,
+               (p.person_type = 'staff' AND COALESCE(p.attrs ->> 'staff_marked_at', '') = '') AS needs_reconfirm FROM core.persons p
         WHERE p.org_id = :o AND p.deleted_at IS NULL AND p.merged_into_id IS NULL
           AND COALESCE(p.attrs ->> 'is_owner', '') <> 'true'
           AND NOT EXISTS (SELECT 1 FROM core.users u WHERE u.org_id = p.org_id AND u.person_id = p.id)
@@ -281,7 +282,7 @@ async def setup_state(user: service.CurrentUser = Depends(require_owner), db: As
                    "unlabeled": [{"id": str(g.id), "name": g.name, "member_count": g.member_count} for g in unlabeled]},
         "staff": {"done": staff_done, "confirmed_at": confirmed_at, "staff_count": int(staff_n),
                   "people": [{"id": str(p.id), "name": p.display_name, "person_type": p.person_type or "unknown",
-                              "prev_type": p.prev_type} for p in people]},
+                              "prev_type": p.prev_type, "needs_reconfirm": bool(p.needs_reconfirm)} for p in people]},
         "contexts": list(contexts.CONTEXT_CODES),
         "gated_kinds": list(SETUP_GATED_VI),
     }

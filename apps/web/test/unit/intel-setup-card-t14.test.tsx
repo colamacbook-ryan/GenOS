@@ -25,7 +25,8 @@ function setup(over: Partial<IntelSetup> = {}): IntelSetup {
     ready: false,
     groups: { done: false, total: 3, unlabeled_count: 2, unlabeled: [{ id: 'g1', name: 'Khách sỉ Nhà Xinh', member_count: 40 }, { id: 'g2', name: 'Nhân viên cửa hàng', member_count: 6 }] },
     staff: { done: false, confirmed_at: null, staff_count: 0, people: [{ id: 'p1', name: 'Ngọc bán hàng', person_type: 'unknown', prev_type: null }, { id: 'p2', name: 'Chú Bảy', person_type: 'customer', prev_type: null },
-      { id: 'p3', name: 'Chị Mai', person_type: 'staff', prev_type: 'customer' }] },
+      { id: 'p3', name: 'Chị Mai', person_type: 'staff', prev_type: 'customer' },
+      { id: 'p4', name: 'Hùng cũ', person_type: 'staff', prev_type: null, needs_reconfirm: true }] },
     contexts: ['kinh_doanh', 'nhan_vien', 'gia_dinh', 'khac'],
     gated_kinds: ['lời hứa với khách', 'câu hỏi chờ trả lời'],
     ...over,
@@ -122,6 +123,15 @@ describe('<IntelSetupCard> Thiết lập Tình báo', () => {
     const step = await screen.findByTestId('intel-setup-staff');
     await userEvent.click(within(step).getByRole('switch', { name: 'Chị Mai là nhân viên' }));
     await waitFor(() => expect(calls.find((c) => c.url === '/profile/p3')).toMatchObject({ method: 'PATCH', body: { person_type: 'customer' } }));
+  });
+
+  it('nhân viên đánh dấu từ trước: hiện "Cần xác nhận lại", bấm ⇒ PATCH person_type staff (máy chủ đòi mã PIN)', async () => {
+    const calls = mockApi(setup());
+    renderCard(<IntelSetupCard />);
+    const step = await screen.findByTestId('intel-setup-staff');
+    expect(within(step).getByText('Cần xác nhận lại')).toBeInTheDocument();
+    await userEvent.click(within(step).getByRole('button', { name: 'Xác nhận lại Hùng cũ là nhân viên (cần mã PIN)' }));
+    await waitFor(() => expect(calls.find((c) => c.url === '/profile/p4')).toMatchObject({ method: 'PATCH', body: { person_type: 'staff', relation_to_owner: 'staff' } }));
   });
 
   it('đã xong: một dòng tóm tắt, tiến độ 2/2, không còn danh sách nhóm', async () => {

@@ -53,6 +53,8 @@ export interface IntelSetupPerson {
   person_type: string;
   /** Loại trước khi được đánh dấu nhân viên (tắt nhân viên ⇒ trả về đúng loại này). */
   prev_type?: string | null;
+  /** Đang là nhân viên nhưng chưa được Sếp đánh dấu bằng mã PIN (trước v0.1.76 / quy tắc cũ) ⇒ Gen chưa tin vai này cho cảnh báo lừa đảo. */
+  needs_reconfirm?: boolean;
 }
 export interface IntelSetup {
   ready: boolean;

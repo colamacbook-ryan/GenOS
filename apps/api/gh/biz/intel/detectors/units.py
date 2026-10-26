@@ -487,7 +487,7 @@ async def _project_one(db: AsyncSession, org_id: uuid.UUID, u: Any, ev: list[Any
             return routed
     cust = (u.kind_hint in ("xung_dot_khieu_nai", "quan_he_nong_nguoi") and p.sender is not None and g.hard_customer(p.sender, sets))
     by_w = await g.who_person(db, org_id, _uuid(verified(u).get("status_by_person_id")))
-    li = signal_input(u.kind_hint, u, p, sets, customer_of_owner=cust, status_by_owner_side=g.trusted_owner_side(by_w, sets, now))
+    li = signal_input(u.kind_hint, u, p, sets, customer_of_owner=cust, status_by_owner_side=g.trusted_owner_side(by_w, sets))
     if u.kind_hint == levels.FR:
         li = await _goods_impersonation(db, org_id, u, p, sets, li, [e.raw_event_id for e in ev])
     tk = f"g:{u.group_id}" if u.group_id else ""
