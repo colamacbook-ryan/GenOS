@@ -24,7 +24,8 @@ from gh.biz.intel import levels
 TOP = ("digest_top", "digest_morning")
 SHOWN = TOP + ("digest", "digest_low")
 REASON_VI = {"shadow": "(đáng lẽ báo ngay lúc {wp})", "capped": "(đáng lẽ báo ngay)", "precision": "(đáng lẽ báo ngay)",
-             "window_expired": "đã quá thời điểm báo ngay", "low_confidence": "chưa đủ để báo ngay: chưa chắc",
+             "window_expired": "đã quá thời điểm báo ngay", "txn_pending": "giao dịch chưa thấy xảy ra — vẫn kịp chặn",
+             "big_opportunity_no_catalog": "cơ hội lớn sắp hết hạn, chưa khớp hàng/dịch vụ của Sếp", "low_confidence": "chưa đủ để báo ngay: chưa chắc",
              "no_harm": "chưa đủ để báo ngay: chưa rõ thiệt hại", "remediated": "đã có người phía Sếp khắc phục",
              "closed_by_staff": "nhân viên báo đã xử lý", "safety_wide_circle": "trong nhóm có người gặp nạn",
              "fraud_wide_circle": "trong nhóm có người bị nhắm lừa", "agent_probe": "có người thử lừa tài khoản trợ lý",
@@ -73,7 +74,10 @@ def _quote(evidence: Any) -> str | None:
 
 def _facts_line(r: Any) -> list[str]:
     out: list[str] = []
-    for code in r.reasons or []:
+    codes = list(r.reasons or [])
+    if "txn_pending" in codes:
+        codes = [c for c in codes if c != "window_expired"]   # D1: giao dịch chưa tới ⇒ không ghi "đã quá thời điểm báo ngay"
+    for code in codes:
         t = REASON_VI.get(code)
         if t:
             out.append(t.format(wp=r.would_push_at.astimezone(levels.VN).strftime("%H:%M") if r.would_push_at else "--:--"))
