@@ -33,7 +33,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gh.biz.hooks import CronJob
-from gh.biz.intel import levels, signals
+from gh.biz.intel import levels, person_role, signals
 from gh.biz.intel.detectors import generic as g
 from gh.biz.mem import profile_read
 
@@ -64,6 +64,8 @@ VICTIM_ROLES = ("nguoi_bi_anh_huong", "nguoi_hoi", "nguoi_duoc_hua")
 TITLES = {"rui_ro_lua_dao": "Dấu hiệu lừa đảo / rủi ro", "xung_dot_khieu_nai": "Xung đột / khiếu nại", "quan_he_nong_nguoi": "Quan hệ cần để ý",
           "co_hoi_ket_noi": "Cơ hội / kết nối", "su_kien_dip": "Sắp tới dịp / sự kiện"}
 STATUS_CLOSED = ("da_xu_ly", "da_giu")
+STAGES = ("vent", "voice", "ultimatum", "exit_pending", "exit_done", "third_party")
+VENUES = ("group", "social", "authority")
 
 
 def _when(v: Any) -> datetime | None:
@@ -89,6 +91,14 @@ def verified(u: Any) -> dict[str, Any]:
     return v if isinstance(v, dict) else {}
 
 
+def g3_fields(v: dict[str, Any]) -> dict[str, Any]:
+    """Trường G3 của `brain-out/2` (r7 (c′)) từ giá trị ĐÃ KIỂM `entities.v` (verify P3a: người gửi/trích dẫn đã kiểm; không đạt ⇒ null/false).
+    Đọc bằng `.get`, thiếu / sai kiểu ⇒ mặc định ("không có nguồn thì không dùng", CNS-156)."""
+    stage, venue = v.get("complaint_stage"), v.get("public_venue")
+    return {"complaint_stage": stage if stage in STAGES else None, "asks_for_owner": v.get("asks_for_owner") is True,
+            "public_venue": venue if venue in VENUES else None}
+
+
 # ─── người: vai của model + tra cứu của code ─────────────────────────────────
 
 @dataclass
@@ -105,6 +115,7 @@ class People:
     forwarded: bool = False
     hard: list[str] = field(default_factory=list)
     outbound: bool = False
+    audience_n: int | None = None       # r7 (c′) `Thread.customer_audience_n` (person_role.audience_n); None = không đếm được
 
 
 async def people(db: AsyncSession, org_id: uuid.UUID, u: Any, sets: g.OrgSets, raws: list[uuid.UUID]) -> People:
@@ -126,6 +137,8 @@ async def people(db: AsyncSession, org_id: uuid.UUID, u: Any, sets: g.OrgSets, r
         return (sender is not None and ent == sender.entity_id) or ent in members or (group_id is not None and not members)
 
     p = People(group_id, size, sender, forwarded=forwarded, hard=hard, outbound=outbound)
+    p.audience_n = await person_role.audience_n(db, org_id, group_id, speaker_person_id=u.person_id,
+                                                speaker_entity_id=sender.entity_id if sender else None, sets=sets)
     seen: set[tuple[str, str]] = set()
     listed = verified(u).get("people")
     if isinstance(listed, list):
@@ -208,13 +221,15 @@ def signal_input(kind: str, u: Any, p: People, sets: g.OrgSets, *, customer_of_o
     d: dict[str, Any] = dict(
         kind=kind, msg_at=msg_at, event_at=event_at, deadline_at=_when(v.get("deadline_at")), ongoing=ongoing, flags=f,
         hard_rule_hit=list(p.hard), harm_what=str(harm.get("what") or "") if isinstance(harm.get("what"), str) else "",
-        irreversible=bool(harm.get("irreversible")), gate_candidate=u.gate_candidate, thread=g.thread_of(p.group_id, p.size),
+        irreversible=bool(harm.get("irreversible")), gate_candidate=u.gate_candidate, thread=g.thread_of(p.group_id, p.size, p.audience_n),
         victims=list(p.victims), impersonated=list(p.impersonated), payee_refs=list(p.payee_refs),
         delivery_form="forwarded" if forwarded else ("warning_story" if v.get("delivery_form") == "warning_story" else "direct"),
         customer_of_owner=customer_of_owner, event_time_unparsed=bool(v.get("event_time_unparsed")),
         source_class=src, non_forwarded_sources_n=0 if forwarded else 1, confidence_exist=float(u.confidence or 0.8),
         confidence_content=g.conf_content(src), impact_base=ib, money_vnd=money, money_basis="quoted" if money else None,
         subject_entity_id=p.victim_who[0].entity_id if p.victim_who else None)
+    if kind in ("xung_dot_khieu_nai", "quan_he_nong_nguoi"):
+        d.update(g3_fields(v))
     txn = v.get("txn_state")
     if txn in ("pending", "just_done", "done_cannot_stop"):
         d["txn_state"] = txn
@@ -377,22 +392,30 @@ async def _route_conflict(db: AsyncSession, org_id: uuid.UUID, u: Any, p: People
     cold = not g.hard_customer(s, sets) and g.cold_customer(s, sets, biz_group=await g.business_group(db, org_id, p.group_id))
     if not (g.hard_customer(s, sets) or cold):
         return None
-    mine = (await db.execute(text("""SELECT e.id FROM raw.events e JOIN core.person_identities pi ON pi.id = e.sender_identity_id
+    mine_row = (await db.execute(text("""SELECT e.id, e.occurred_at FROM raw.events e JOIN core.person_identities pi ON pi.id = e.sender_identity_id
                                      WHERE e.id = ANY(:r) AND e.org_id = :o AND e.direction = 'inbound' AND pi.person_id = :p
-                                     ORDER BY e.occurred_at DESC LIMIT 1"""), {"r": [e.raw_event_id for e in ev], "o": org_id, "p": s.person_id})).scalar_one_or_none()
-    if mine is None:
+                                     ORDER BY e.occurred_at DESC LIMIT 1"""), {"r": [e.raw_event_id for e in ev], "o": org_id, "p": s.person_id})).one_or_none()
+    if mine_row is None:
         return None
+    mine, trigger_at = mine_row.id, mine_row.occurred_at
     e0 = next(e for e in ev if e.raw_event_id == mine)
     v = verified(u)
     status = str(v.get("status_hint") or "dang_mo")
     li_at = _when(v.get("msg_at")) or u.observed_at
+    g3 = g3_fields(v)
+    public = fl.get("public") is True and await public_place(db, org_id, p, s, sets, [mine])
+    by = _uuid(v.get("status_by_person_id"))
+    staff_ref = await person_role.staff_owner_ref(
+        db, org_id, status_hint=status, status_by_person_id=by, raw_event_ids=[e.raw_event_id for e in ev], customer_person_id=s.person_id,
+        group_id=p.group_id, trigger_at=trigger_at, asks_for_owner=g3["asks_for_owner"])
     c = conflicts.ComplaintIn(
         sent_at=li_at, raw_event_id=mine, customer_person_id=s.person_id, source_field=e0.sf or "body",  # type: ignore[arg-type]
         span_start=int(e0.s0 or 0), span_end=max(int(e0.s1 or 1), int(e0.s0 or 0) + 1),
-        public=fl.get("public") is True and await public_place(db, org_id, p, s, sets, [mine]),
+        public=public, complaint_stage=g3["complaint_stage"], asks_for_owner=g3["asks_for_owner"], public_venue=g3["public_venue"],
+        staff_owned=staff_ref is not None, staff_ref=staff_ref,
         said_will_leave=fl.get("said_will_leave") is True, repeat_claimed=int(fl["repeat_n"]) if isinstance(fl.get("repeat_n"), int) and not isinstance(fl.get("repeat_n"), bool) else 0,
         closure="customer" if status in STATUS_CLOSED and v.get("status_by_person_id") == str(s.person_id) else "none",
-        thread=g.thread_of(p.group_id, p.size), thread_key=f"g:{p.group_id}" if p.group_id else None, group_id=p.group_id,
+        thread=g.thread_of(p.group_id, p.size, p.audience_n), thread_key=f"g:{p.group_id}" if p.group_id else None, group_id=p.group_id,
         title="Khách phàn nàn" if not fl.get("said_will_leave") else "Khách phàn nàn, doạ bỏ")
     out = await conflicts.emit(db, org_id, c, now, cold_customer=cold, extra_evidence=unit_evidence(u, ev), facts_extra={"unit_id": str(u.id)})
     return out or None

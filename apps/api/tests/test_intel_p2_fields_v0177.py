@@ -1,0 +1,204 @@
+# ruff: noqa: E501
+"""v0.1.77 (gói P2) — các trường (c′) do người/khách/khán giả: `prior_threat_no_exit_n`, trường G3 ở conflicts/units/heat, `customer_audience_n`
+ở mọi đường chiếu có luồng nhóm, `staff_owned`/`staff_ref` end-to-end, khách chủ chốt (`subject_entity_id`). Trên PostgreSQL thật."""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timedelta
+from typing import Any
+
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from gh.biz.intel import levels
+from gh.biz.intel.detectors import conflicts
+from gh.biz.intel.detectors import heat as heat_det
+from gh.biz.intel.detectors import units as U
+from gh.biz.mem import facts
+from tests.mem_helpers import T, mkfact
+from tests.test_intel_units_t12_v0176 import _person, _unit, _world
+from tests.test_owner_profile_support import mk_raw, mk_user
+
+NOW = datetime(2026, 10, 23, 14, 0, tzinfo=levels.VN)
+
+
+async def _li(db: AsyncSession, org: uuid.UUID, kind: str = "xung_dot_khieu_nai") -> list[dict[str, Any]]:
+    return [r.level_input for r in (await db.execute(text("SELECT level_input FROM biz.alerts WHERE org_id = :o AND kind = :k ORDER BY created_at"),
+                                                     {"o": org, "k": kind})).all()]
+
+
+async def _complain(db: AsyncSession, w: Any, pid: uuid.UUID, iid: uuid.UUID, at: datetime, *, chain: str, now: datetime | None = None, **kw: Any) -> list[Any]:
+    raw = await mk_raw(db, w.org, w.channel, identity=iid, body="giao trễ quá, lần sau lấy chỗ khác", at=at, group=w.group)
+    data: dict[str, Any] = {"sent_at": at, "raw_event_id": raw, "customer_person_id": pid, "quote": "lần sau lấy chỗ khác", "span_end": 20,
+                            "said_will_leave": True, "reply_chain_id": chain, "thread": levels.Thread(type="group", size=20, owner_in_thread=True, agent_in_thread=True),
+                            "thread_key": f"g:{w.group}", "group_id": w.group}
+    data.update(kw)
+    out = await conflicts.emit(db, w.org, conflicts.ComplaintIn(**data), now or at)
+    await db.commit()
+    assert out
+    return out
+
+
+async def _prior(db: AsyncSession, w: Any, pid: uuid.UUID, ck: str = "case3:khac|x") -> int:
+    return await conflicts.prior_threat_no_exit_n(db, w.org, pid, ck, NOW)
+
+
+# ─── prior_threat_no_exit_n (c′) ─────────────────────────────────────────────
+
+async def test_prior_threat_counts_only_closed_other_cases_in_90_days(db: AsyncSession) -> None:
+    w = await _world(db)
+    pid, iid, _ = await _person(db, w, "Chú Bảy", ptype="customer")
+    assert await _prior(db, w, pid) == 0                                                      # chưa có lịch sử
+    await _complain(db, w, pid, iid, NOW - timedelta(days=20), chain="c1", closure="owner")   # doạ, đã đóng (Sếp) ⇒ đếm
+    assert await _prior(db, w, pid) == 1
+    await _complain(db, w, pid, iid, NOW - timedelta(days=10), chain="c2")                    # doạ, ĐANG MỞ ⇒ không đếm (cùng vụ/leo thang không phải tiền lệ)
+    assert await _prior(db, w, pid) == 1
+    await _complain(db, w, pid, iid, NOW - timedelta(days=8), chain="c3", closure="customer", complaint_stage="exit_pending")   # đã có exit_* ⇒ không đếm
+    await _complain(db, w, pid, iid, NOW - timedelta(days=7), chain="c4", closure="staff", public=True, public_venue="social")   # công khai ⇒ không đếm
+    await _complain(db, w, pid, iid, NOW - timedelta(days=6), chain="c5", closure="staff", said_will_leave=False, complaint_stage="voice")   # không phải lời doạ
+    assert await _prior(db, w, pid) == 1
+    await _complain(db, w, pid, iid, NOW - timedelta(days=100), chain="c6", closure="owner", now=NOW - timedelta(days=100))      # quá 90 ngày
+    assert await _prior(db, w, pid) == 1
+    await _complain(db, w, pid, iid, NOW - timedelta(days=30), chain="c7", closure="customer")
+    assert await _prior(db, w, pid) == 2                                                      # đếm theo VỤ (case_key), không theo hàng
+    other, oiid, _ = await _person(db, w, "Khách khác", ptype="customer")
+    assert await _prior(db, w, other) == 0                                                    # lời doạ của người khác không tính
+
+
+async def test_prior_threat_excludes_current_case_key_and_open_quiet_case_needs_later_order(db: AsyncSession) -> None:
+    w = await _world(db)
+    pid, iid, _ = await _person(db, w, "Chị Mai", ptype="customer")
+    out = await _complain(db, w, pid, iid, NOW - timedelta(days=30), chain="q1")              # vụ mở, ≥ 14 ngày không exit_*
+    ck = (await db.execute(text("SELECT case_key FROM biz.alerts WHERE id = :i"), {"i": out[0].id})).scalar_one()
+    assert await _prior(db, w, pid) == 0                                                      # khách chưa đặt việc nào sau đó
+    assert await conflicts.prior_threat_no_exit_n(db, w.org, pid, ck, NOW) == 0               # đúng case_key hiện tại: luôn loại
+    await db.execute(text("INSERT INTO biz.deals (org_id, code, person_id, amount_vnd, status, won_at) VALUES (:o, 'DQ1', :p, 1, 'won', :t)"),
+                     {"o": w.org, "p": pid, "t": NOW - timedelta(days=5)})
+    await db.commit()
+    assert await _prior(db, w, pid) == 1                                                      # doạ, không bỏ: còn đặt việc sau đó ⇒ coi như đã đóng
+    assert await conflicts.prior_threat_no_exit_n(db, w.org, pid, ck, NOW) == 0
+    out2 = await _complain(db, w, pid, iid, NOW - timedelta(hours=1), chain="q2", now=NOW)    # emit đưa số đếm vào level_input
+    assert (await _li(db, w.org))[-1]["prior_threat_no_exit_n"] == 1 and out2
+
+
+async def test_prior_threat_reads_stage_eff_when_writer_stores_it(db: AsyncSession) -> None:
+    w = await _world(db)
+    pid, iid, _ = await _person(db, w, "Anh Tư", ptype="customer")
+    out = await _complain(db, w, pid, iid, NOW - timedelta(days=12), chain="s1", closure="owner")
+    assert await _prior(db, w, pid) == 1
+    # bên ghi (P4) lưu `stage_eff` = vent (sau θ1) ⇒ không còn là lời doạ; ghi `exit_pending` ⇒ loại
+    await db.execute(text("UPDATE biz.alerts SET level_input = level_input || '{\"stage_eff\": \"vent\"}'::jsonb WHERE id = :i"), {"i": out[0].id})
+    await db.execute(text("UPDATE biz.alerts SET level_input = level_input || '{\"stage_eff\": \"vent\"}'::jsonb WHERE case_key = (SELECT case_key FROM biz.alerts WHERE id = :i)"), {"i": out[0].id})
+    assert await _prior(db, w, pid) == 0
+    await db.execute(text("UPDATE biz.alerts SET level_input = level_input || '{\"stage_eff\": \"ultimatum\"}'::jsonb WHERE case_key = (SELECT case_key FROM biz.alerts WHERE id = :i)"), {"i": out[0].id})
+    assert await _prior(db, w, pid) == 1
+
+
+# ─── trường G3 ở conflicts ───────────────────────────────────────────────────
+
+async def test_conflicts_fills_g3_fields_and_subject_is_key_customer_entity(db: AsyncSession) -> None:
+    w = await _world(db)
+    user = await mk_user(db, w.org)
+    pid, iid, ent = await _person(db, w, "Khách chủ chốt", ptype="customer")
+    await facts.assert_fact(db, mkfact(w.org, w.owner, None, T(1), predicate="owner_key_relation", object_entity=ent, cls="owner", confirmed_by=user))
+    await db.commit()
+    await _complain(db, w, pid, iid, NOW - timedelta(hours=1), chain="g1", public=True, public_venue="group", complaint_stage="ultimatum", asks_for_owner=True)
+    li = (await _li(db, w.org))[0]
+    assert (li["complaint_stage"], li["asks_for_owner"], li["public_venue"]) == ("ultimatum", True, "group")
+    assert li["customer_of_owner"] is True and li["subject_entity_id"] == str(ent)           # khách chủ chốt = key_relations ∩ khách: đối tượng đúng
+    from gh.biz.mem import profile_read
+    assert ent in (await profile_read.snapshot(db, w.org)).key_relation_entity_ids()
+    assert li["thread"]["customer_audience_n"] is None                                        # nhóm chưa có danh sách thành viên ⇒ không đếm được
+    # public_venue chỉ mang theo khi `public` còn; mặc định = tương thích r6.6.1 (null)
+    await _complain(db, w, pid, iid, NOW - timedelta(days=5), chain="g2", public=False, public_venue="social")
+    li2 = (await _li(db, w.org))[1]
+    assert li2["public_venue"] is None and li2["complaint_stage"] is None and li2["asks_for_owner"] is False and li2["prior_threat_no_exit_n"] == 0
+
+
+async def test_conflicts_fills_customer_audience_from_group_members(db: AsyncSession) -> None:
+    w = await _world(db)
+    pid, iid, _ = await _person(db, w, "Người nói", ptype="customer")
+    for name in ("K1", "K2", "K3"):
+        k, _, _ = await _person(db, w, name, ptype="customer")
+        await db.execute(text("INSERT INTO core.group_members (group_id, person_id) VALUES (:g, :p)"), {"g": w.group, "p": k})
+    await db.execute(text("INSERT INTO core.group_members (group_id, person_id) VALUES (:g, :p)"), {"g": w.group, "p": pid})
+    await db.commit()
+    await _complain(db, w, pid, iid, NOW - timedelta(hours=1), chain="a1", public=True, public_venue="group")
+    assert (await _li(db, w.org))[0]["thread"]["customer_audience_n"] == 3                  # thành viên KHÁC người nói là khách
+
+
+async def test_conflicts_staff_owned_and_asks_for_owner_wins(db: AsyncSession) -> None:
+    w = await _world(db)
+    pid, iid, _ = await _person(db, w, "Khách A", ptype="customer")
+    await _complain(db, w, pid, iid, NOW - timedelta(hours=1), chain="o1", staff_owned=True, staff_ref="u_nv")
+    li = (await _li(db, w.org))[0]
+    assert li["staff_owned"] is True and li["staff_ref"] == "u_nv"
+    pid2, iid2, _ = await _person(db, w, "Khách B", ptype="customer")
+    await _complain(db, w, pid2, iid2, NOW - timedelta(hours=1), chain="o2", staff_owned=True, staff_ref="u_nv", asks_for_owner=True)
+    li = (await _li(db, w.org))[1]
+    assert li["staff_owned"] is False and li["staff_ref"] is None and li["asks_for_owner"] is True   # asks_for_owner thắng
+
+
+# ─── units: đọc entities.v bằng .get, kiểm người gửi NV ──────────────────────
+
+async def test_units_route_reads_g3_fields_and_staff_owned_from_verified(db: AsyncSession) -> None:
+    w = await _world(db)
+    cpid, ciid, _ = await _person(db, w, "Anh Bình", ptype="customer")
+    spid, siid, _ = await _person(db, w, "NV Hoa")
+    await db.execute(text("""UPDATE core.persons SET person_type = 'staff', attrs = attrs || jsonb_build_object('person_type_locked', true, 'staff_marked_at', CAST(:t AS text))
+                             WHERE id = :p"""), {"t": (NOW - timedelta(days=2)).isoformat(), "p": spid})
+    await db.commit()
+    r1 = await mk_raw(db, w.org, w.channel, identity=ciid, body="trễ nữa là em huỷ đơn", group=w.group, at=NOW - timedelta(minutes=50))
+    r2 = await mk_raw(db, w.org, w.channel, identity=siid, body="em đang xử lý anh nhé", group=w.group, at=NOW - timedelta(minutes=30))
+    uid = await _unit(db, w, r1, "xung_dot_khieu_nai", person=cpid, flags={"said_will_leave": True}, people=[("nguoi_gui", None)],
+                      v={"complaint_stage": "exit_pending", "asks_for_owner": False, "public_venue": "bogus", "status_hint": "dang_xu_ly",
+                         "status_by_person_id": str(spid)}, at=NOW - timedelta(minutes=50))
+    rec = (await db.execute(text("SELECT received_at FROM raw.events WHERE id = :i"), {"i": r2})).scalar_one()
+    await db.execute(text("""INSERT INTO clean.evidence (meaning_unit_id, meaning_observed_at, raw_event_id, raw_received_at, quote, quote_status, source_field, span_start, span_end)
+                             VALUES (:u, :t, :r, :rr, 'trích', 'verified', 'body', 0, 5)"""), {"u": uid, "t": NOW - timedelta(minutes=50), "r": r2, "rr": rec})
+    await db.commit()
+    await U.project(db, w.org, NOW)
+    await db.commit()
+    li = (await _li(db, w.org))[0]
+    assert li["complaint_stage"] == "exit_pending" and li["public_venue"] is None             # venue sai ⇒ mặc định
+    assert li["staff_owned"] is True and li["staff_ref"] == f"u_{spid}"
+
+
+async def test_units_route_without_brain_out_2_fields_keeps_defaults(db: AsyncSession) -> None:
+    w = await _world(db)
+    cpid, ciid, _ = await _person(db, w, "Anh Bình", ptype="customer")
+    raw = await mk_raw(db, w.org, w.channel, identity=ciid, body="giao trễ lần thứ ba rồi", group=w.group, at=NOW - timedelta(hours=1))
+    await _unit(db, w, raw, "xung_dot_khieu_nai", person=cpid, flags={"public": True, "said_will_leave": True}, people=[("nguoi_gui", None)], at=NOW - timedelta(hours=1))
+    await U.project(db, w.org, NOW)
+    await db.commit()
+    li = (await _li(db, w.org))[0]
+    assert (li["complaint_stage"], li["asks_for_owner"], li["public_venue"], li["staff_owned"], li["staff_ref"]) == (None, False, None, False, None)
+    assert li["flags"]["public"] is True                                                      # brain-out/1: public giữ như r6.6.1 (không venue ⇒ tương thích)
+
+
+def test_units_g3_fields_pure_defaults_and_validation() -> None:
+    assert U.g3_fields({}) == {"complaint_stage": None, "asks_for_owner": False, "public_venue": None}
+    assert U.g3_fields({"complaint_stage": "voice", "asks_for_owner": True, "public_venue": "authority"}) == {
+        "complaint_stage": "voice", "asks_for_owner": True, "public_venue": "authority"}
+    assert U.g3_fields({"complaint_stage": "lạ", "asks_for_owner": "yes", "public_venue": 3})["asks_for_owner"] is False
+
+
+# ─── heat ────────────────────────────────────────────────────────────────────
+
+async def test_heat_fills_audience_for_group_and_none_for_dm(db: AsyncSession) -> None:
+    w = await _world(db)
+    pid, iid, ent = await _person(db, w, "Chị Hoa", ptype="customer")
+    k, _, _ = await _person(db, w, "Khách cùng nhóm", ptype="customer")
+    for p in (pid, k):
+        await db.execute(text("INSERT INTO core.group_members (group_id, person_id) VALUES (:g, :p)"), {"g": w.group, "p": p})
+    await mk_raw(db, w.org, w.channel, identity=iid, body="Chị lấy thêm 10 thùng nhé", group=w.group, at=NOW - timedelta(days=15))
+    for i, d in enumerate([39, 33, 27, 21, 15]):
+        await db.execute(text("INSERT INTO biz.deals (org_id, code, person_id, amount_vnd, status, won_at) VALUES (:o, :c, :p, 1, 'won', :t)"),
+                         {"o": w.org, "c": f"H{i}", "p": pid, "t": NOW - timedelta(days=d)})
+    await db.commit()
+    await heat_det.scan(db, w.org, NOW)
+    await db.commit()
+    li = (await _li(db, w.org, "quan_he_nong_nguoi"))[0]
+    assert li["thread"]["type"] == "group" and li["thread"]["customer_audience_n"] == 1 and li["customer_of_owner"] is True
+    assert li["subject_entity_id"] == str(ent)

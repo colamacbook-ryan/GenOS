@@ -23,7 +23,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gh.biz.hooks import CronJob, Hook
-from gh.biz.intel import levels, signals
+from gh.biz.intel import levels, person_role, signals
+from gh.biz.intel.detectors import generic
 from gh.biz.mem import entities, heat, profile_read
 
 log = logging.getLogger("gh.intel.heat")
@@ -86,6 +87,7 @@ async def scan(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> dict[str, 
     for r in (await db.execute(text("SELECT person_id, won_at FROM biz.deals WHERE org_id = :o AND status = 'won' AND won_at IS NOT NULL "
                                     "AND person_id = ANY(:p)"), {"o": org_id, "p": list(cands)})).all():
         deals.setdefault(r.person_id, []).append(r.won_at)
+    sets: generic.OrgSets | None = None
     lines = await heat.series_many(db, org_id, owner.id, [c["entity"] for c in cands.values()], HEAT_WEEKS, now=now)
     for pid, c in cands.items():
         silence = order_silence(deals.get(pid, []), now) if c["customer"] else None
@@ -107,10 +109,15 @@ async def scan(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> dict[str, 
             why.append(f"{silence[0]} ngày chưa đặt (nhịp thường {silence[1]:g} ngày)")
         if cooling:
             why.append("nhịp trao đổi giảm mạnh so với các tuần trước")
+        aud: int | None = None
+        if last[2] is not None:                                # khán giả nhóm (r7 (c′)): code đếm khách KHÁC người này; không đếm được ⇒ None
+            sets = sets or await generic.org_sets(db, org_id)
+            aud = await person_role.audience_n(db, org_id, last[2], speaker_person_id=pid, speaker_entity_id=c["entity"], sets=sets)
         li = levels.SignalIn(kind=KIND, msg_at=last[1], event_at=now, ongoing=True, customer_of_owner=c["customer"], source_class="rule",
                              confidence_exist=1.0, confidence_content=0.8, subject_entity_id=c["entity"],
                              impact_base=levels.impact_base(KIND, important=c["customer"] or c["key"]),
-                             thread=levels.Thread(type="group" if last[2] else "dm_owner", owner_in_thread=True, agent_in_thread=True))
+                             thread=levels.Thread(type="group" if last[2] else "dm_owner", owner_in_thread=True, agent_in_thread=True,
+                                                  customer_audience_n=aud))
         up = signals.UpsertIn(kind=KIND, title=f"{c['name']} đang nguội đi", summary="; ".join(why), detector="heat", detector_version="1",
                               suggested_action="Chủ động hỏi thăm hoặc gọi lại", level_input=li, case_key=case_key,
                               evidence=[signals.EvidenceIn(type="raw_event", id=last[0], source_field="body", span_start=0, span_end=1)],

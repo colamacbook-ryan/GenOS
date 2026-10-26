@@ -23,7 +23,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gh.biz.hooks import CronJob, Hook
-from gh.biz.intel import levels, signals
+from gh.biz.intel import levels, person_role, signals
 from gh.biz.mem import entities
 
 log = logging.getLogger("gh.intel.conflicts")
@@ -34,6 +34,10 @@ LEAVE_MARKERS = ("lần sau lấy chỗ khác", "lan sau lay cho khac", "thôi k
 REPEAT_WINDOW_DAYS = 30
 Tone = Literal["serious", "joke", "grumble"]
 Closure = Literal["none", "staff", "customer", "owner"]
+Stage = Literal["vent", "voice", "ultimatum", "exit_pending", "exit_done", "third_party"]
+Venue = Literal["group", "social", "authority"]
+PRIOR_THREAT_DAYS = 90                        # r7.1 (c′) `prior_threat_no_exit_n`: lời doạ của cùng khách trong 90 ngày
+PRIOR_THREAT_QUIET_DAYS = 14                  # vụ chưa đóng hẳn nhưng ≥ 14 ngày không có `exit_*` và khách còn đặt việc
 
 
 NOT_JOKE_MARKERS = ("không phải đùa", "không đùa", "chẳng đùa", "đâu có đùa", "đùa đâu", "nghiêm túc", "nói thật")
@@ -67,6 +71,11 @@ class ComplaintIn(BaseModel):
     repeat_claimed: int = 0                       # số lần khách nêu tường minh (trích dẫn đã kiểm)
     ordered_after: bool | None = None             # None ⇒ code tra `biz.deals`
     closure: Closure = "none"
+    complaint_stage: Stage | None = None          # r7 (c′): model `units[].complaint_stage` (verify P3a đã kiểm người gửi/trích dẫn); None ⇒ đường tương thích
+    asks_for_owner: bool = False                  # r7 (c′): khách đòi gặp chủ (đã kiểm: người gửi = khách, trích dẫn verified)
+    public_venue: Venue | None = None             # r7 (c′): chỉ khi `public` còn sau `public_place`/`benign`
+    staff_owned: bool = False                     # r7 (c′): `person_role.staff_owner_ref` ≠ None
+    staff_ref: str | None = None
     reply_chain_id: str | None = None
     thread: levels.Thread = Field(default_factory=levels.Thread)
     thread_key: str | None = None
@@ -89,7 +98,7 @@ def effective_flags(c: ComplaintIn, ordered_after: bool) -> tuple[bool, bool, Cl
 
 
 def build_input(c: ComplaintIn, *, customer_entity_id: uuid.UUID, repeat_n: int, ordered_after: bool,
-                history: list[levels.CaseEvent]) -> levels.SignalIn:
+                history: list[levels.CaseEvent], prior_threat_no_exit_n: int = 0) -> levels.SignalIn:
     public, leave, closure = effective_flags(c, ordered_after)
     gate_on = (public or leave) and closure == "none"
     return levels.SignalIn(
@@ -97,15 +106,15 @@ def build_input(c: ComplaintIn, *, customer_entity_id: uuid.UUID, repeat_n: int,
         gate_candidate=levels.G3 if (public or leave) else None, customer_of_owner=True, closure=closure, case_history=history,
         thread=c.thread, source_class="outsider", confidence_exist=1.0, confidence_content=c.confidence_content,
         subject_entity_id=customer_entity_id, impact_base=levels.impact_base(KIND, important=True),
+        complaint_stage=c.complaint_stage, asks_for_owner=c.asks_for_owner, public_venue=c.public_venue if public else None,
+        prior_threat_no_exit_n=prior_threat_no_exit_n, staff_owned=c.staff_owned and not c.asks_for_owner,   # asks_for_owner thắng (CNS-179)
+        staff_ref=c.staff_ref if c.staff_owned and not c.asks_for_owner else None,
         harm_what="khách chê/doạ bỏ — có thể mất khách" if gate_on or public or leave else "",
         victims=[levels.PersonRel(ref=f"u_{c.customer_person_id}", customer=True, thread_member=c.group_id is not None)])
 
 
 async def is_customer(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID, entity_id: uuid.UUID) -> bool:
-    return (await db.execute(text("""
-        SELECT EXISTS (SELECT 1 FROM core.persons WHERE id = :p AND org_id = :o AND person_type = 'customer')
-            OR EXISTS (SELECT 1 FROM mem.facts WHERE org_id = :o AND subject_id = :e AND predicate = 'customer_of' AND valid_to IS NULL
-                       AND status IN ('asserted', 'owner_confirmed'))"""), {"p": person_id, "o": org_id, "e": entity_id})).scalar_one() is True
+    return await person_role.is_customer(db, org_id, person_id, entity_id)         # MỘT nguồn `customer_of_owner` (CNS-180)
 
 
 async def sent_by(db: AsyncSession, org_id: uuid.UUID, raw_event_id: uuid.UUID, person_id: uuid.UUID) -> bool:
@@ -127,6 +136,36 @@ async def _repeat_n(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID, c
           AND facts -> 'person_ids' ? CAST(:p AS text)"""),
                           {"o": org_id, "k": KIND, "t": now - timedelta(days=REPEAT_WINDOW_DAYS), "ck": case_key, "p": str(person_id)})).scalar_one()
     return max(int(n) + 1, claimed)
+
+
+async def prior_threat_no_exit_n(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID, case_key: str, now: datetime) -> int:
+    """`prior_threat_no_exit_n` (r7.1 (c′), CNS-171): số VỤ ĐÃ ĐÓNG của cùng khách, KHÁC `case_key` hiện tại, trong 90 ngày, có lời doạ
+    (`stage_eff = 'ultimatum'`) mà không có `exit_*` và không công khai. Vụ đã đóng = `closure ∈ {owner, customer, staff}`, hoặc vụ ≥ 14 ngày không
+    `exit_*` mà khách còn đặt việc sau đó (đơn thắng). Không bao giờ đếm vụ đang mở / lời doạ cùng vụ.
+    `stage_eff` đọc từ `level_input.stage_eff` (bên ghi ở signals/P4, (h)); chưa có ⇒ `complaint_stage` ⇒ đường tương thích (`said_will_leave` ⇒
+    ultimatum, ngược lại voice) — cùng quy tắc nên số đếm không phụ thuộc bên ghi. "Không công khai" xấp xỉ bảo thủ: vụ có `flags.public` hay
+    `public_venue` không bị đếm (đếm ít ⇒ hạ bậc ít ⇒ thừa 🟠, không thiếu)."""
+    rows = (await db.execute(text("""
+        SELECT case_key,
+               bool_or(COALESCE(level_input ->> 'stage_eff', level_input ->> 'complaint_stage',
+                                CASE WHEN level_input #>> '{flags,said_will_leave}' = 'true' THEN 'ultimatum' ELSE 'voice' END) = 'ultimatum') AS threat,
+               bool_or(COALESCE(level_input ->> 'stage_eff', level_input ->> 'complaint_stage', '') LIKE 'exit!_%' ESCAPE '!') AS exit_seen,
+               bool_or(COALESCE(level_input #>> '{flags,public}', 'false') = 'true' OR level_input ->> 'public_venue' IS NOT NULL) AS public,
+               bool_or(COALESCE(level_input ->> 'closure', 'none') IN ('owner', 'customer', 'staff')) AS closed,
+               min(created_at) AS first_at, max(COALESCE((level_input ->> 'msg_at')::timestamptz, created_at)) AS last_at
+        FROM biz.alerts WHERE org_id = :o AND kind IN (:a, :b) AND case_key IS NOT NULL AND case_key <> :ck
+          AND COALESCE((level_input ->> 'msg_at')::timestamptz, created_at) > :t AND level_input IS NOT NULL AND facts -> 'person_ids' ? CAST(:p AS text)
+        GROUP BY case_key"""), {"o": org_id, "a": KIND, "b": KIND_REL, "ck": case_key, "p": str(person_id),
+                                "t": now - timedelta(days=PRIOR_THREAT_DAYS)})).all()
+    n = 0
+    for r in rows:
+        if not r.threat or r.exit_seen or r.public:
+            continue
+        closed = bool(r.closed)
+        if not closed and levels._aware(now) - levels._aware(r.last_at) >= timedelta(days=PRIOR_THREAT_QUIET_DAYS):
+            closed = await _ordered_after(db, org_id, person_id, r.last_at)
+        n += 1 if closed else 0
+    return n
 
 
 async def _open_case(db: AsyncSession, org_id: uuid.UUID, base_key: str, at: datetime) -> tuple[str, list[levels.CaseEvent]]:
@@ -171,7 +210,11 @@ async def emit(db: AsyncSession, org_id: uuid.UUID, c: ComplaintIn, now: datetim
     if closure != "none" and not any(e.evt == "closure" for e in hist):
         hist.append(levels.CaseEvent(at=max(c.sent_at, now) if closure == "customer" else now, evt="closure"))
     repeat_n = await _repeat_n(db, org_id, c.customer_person_id, case_key, now, c.repeat_claimed)
-    li = build_input(c, customer_entity_id=ent, repeat_n=repeat_n, ordered_after=ordered, history=hist)
+    if c.thread.type == "group" and c.thread.customer_audience_n is None and c.group_id is not None:       # khán giả: code đếm, không có nguồn ⇒ None
+        aud = await person_role.audience_n(db, org_id, c.group_id, speaker_person_id=c.customer_person_id, speaker_entity_id=ent)
+        c = c.model_copy(update={"thread": c.thread.model_copy(update={"customer_audience_n": aud})})
+    prior = await prior_threat_no_exit_n(db, org_id, c.customer_person_id, case_key, now)
+    li = build_input(c, customer_entity_id=ent, repeat_n=repeat_n, ordered_after=ordered, history=hist, prior_threat_no_exit_n=prior)
     ev = signals.EvidenceIn(type="raw_event", id=c.raw_event_id, source_field=c.source_field, span_start=c.span_start,
                             span_end=c.span_end, quote=c.quote)
     base: dict[str, Any] = {"thread_key": c.thread_key, "group_id": c.group_id, "subject_type": "person", "subject_id": c.customer_person_id,

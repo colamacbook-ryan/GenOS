@@ -24,7 +24,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gh.biz.hooks import CronJob
-from gh.biz.intel import levels, signals
+from gh.biz.intel import levels, person_role, signals
 from gh.biz.mem import profile_read
 from gh.data.common import mask_text
 
@@ -195,10 +195,8 @@ def cold_customer(w: Who | None, sets: OrgSets, *, biz_group: bool) -> bool:
 
 
 def who_rel(w: Who, sets: OrgSets, *, thread_member: bool = False) -> levels.PersonRel:
-    """MỘT hàm dựng vai người cho detector chiếu đơn vị (units, generic…): tra cứu `OrgSets` (fact) CỘNG loại người Sếp đã đánh dấu ở
-    `core.persons.person_type` (khách ⇒ customer, nhân viên ⇒ team). P-T1 (G-KB sau T14): generic bỏ qua person_type ⇒ khách mất cổng an toàn."""
-    r = person_rel(w.entity_id, sets, ref=w.ref, thread_member=thread_member)
-    return r.model_copy(update={"customer": r.customer or w.person_type == "customer", "team": r.team or w.person_type == "staff"})
+    """MỘT hàm dựng vai người cho detector chiếu đơn vị (units, generic…): thân dời sang `person_role.rel_from_who` (v0.1.77 P2, L-96)."""
+    return person_role.rel_from_who(w, sets, thread_member=thread_member)
 
 
 def person_rel(ent: uuid.UUID, sets: OrgSets, *, ref: str, thread_member: bool = False, kin_of_member: bool = False) -> levels.PersonRel:
@@ -217,9 +215,10 @@ async def raw_group(db: AsyncSession, raw_id: uuid.UUID | None) -> tuple[uuid.UU
     return r.group_id, (None if r.group_id is not None and r.member_count is None else int(r.member_count or 0))
 
 
-def thread_of(group_id: uuid.UUID | None, size: int | None) -> levels.Thread:
+def thread_of(group_id: uuid.UUID | None, size: int | None, audience_n: int | None = None) -> levels.Thread:
+    """`audience_n` (r7 (c′) `customer_audience_n`): bên gọi đếm bằng `person_role.audience_n`; None = không đếm được."""
     return levels.Thread(type="group" if group_id else "dm_agent", size=size or 0, size_known=size is not None, owner_in_thread=False,
-                         agent_in_thread=True)
+                         agent_in_thread=True, customer_audience_n=audience_n)
 
 
 def flags_of(raw: dict[str, Any] | None) -> levels.Flags:
@@ -322,11 +321,12 @@ async def _unit_ctx(db: AsyncSession, org_id: uuid.UUID, u: Any, sets: OrgSets, 
         victims.append(who_rel(ws, sets, thread_member=True) if ws else person_rel(sender, sets, ref=await _ref(db, sender), thread_member=True))
         victim_ents.append(sender)
     insider = sender is not None and sender in victim_ents       # người gửi nói về chính mình ⇒ người trong cuộc
+    audience = await person_role.audience_n(db, org_id, group_id, speaker_person_id=u.person_id, speaker_entity_id=sender, sets=sets)
     harm = u.harm.get("what") if isinstance(u.harm, dict) and isinstance(u.harm.get("what"), str) else ""
     return UnitCtx(kind=u.kind_hint, unit_id=u.id, observed_at=u.observed_at, conclusion=u.conclusion or "", flags=dict(u.flags or {}),
                    harm_what=harm or "", gate_candidate=u.gate_candidate, confidence_exist=float(u.confidence or 0.8),
                    source_class="insider" if insider else "member", forwarded=forwarded, victims=victims,
-                   thread=thread_of(group_id, size), hard_rules=hard, owner_work=(sender in sets.staff or sets.is_owner(sender)) if sender else False,
+                   thread=thread_of(group_id, size, audience), hard_rules=hard, owner_work=(sender in sets.staff or sets.is_owner(sender)) if sender else False,
                    victim_entity=victim_ents[0] if victim_ents else None)
 
 
