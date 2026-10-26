@@ -11,8 +11,8 @@ Ghi chú vận hành riêng của Sếp (máy, tài khoản, địa chỉ, việ
 
 - **Làm gì**: Bước 1 Tình báo — Đợt 1 (L1–L6, PR #1–#10: trí nhớ 5 lớp, đa phương tiện, trích xuất 4 tầng, lượt theo luồng, G-KB, Hồ sơ Sếp) + Đợt 2 (T1 tín hiệu/migration `0044`, T2–T12, T13; PR #11–#13). Chi tiết: [v0.1.76.md](../releases/v0.1.76.md).
 - **Trạng thái**: đã vào main, CI xanh; **chưa tăng `VERSION`**, chưa tag. Chưa kiểm voice thật và chưa nghiệm thu bằng tài khoản Zalo/WhatsApp/Telegram thật.
-- **Còn dở**: **T14 đang thi công** (giữ 🔴 lừa đảo tới hạn giao dịch + nhắc sáng ngày chuyển; mạo danh ghi nợ/đổi địa chỉ = 🔴; bước «Thiết lập Tình báo» lúc cài; cơ hội lớn có hạn ≥ 🟠) — gộp rồi mới phát hành. G-KB còn yếu: lượt đồng hồ (hạn tới/im lặng), đóng/hạ đơn vị khi có xác nhận (kb3). Nợ mới **#73–#93** ở [ROADMAP](../ROADMAP.md); chờ Sếp quyết Nợ #82 (Hồ sơ Sếp vào prompt mọi nhóm), #88 (khoá trợ lý có chặn Telegram không), #90.
-- **Boss cần làm**: xem «Việc Boss phải làm» ở [v0.1.76.md](../releases/v0.1.76.md#việc-boss-phải-làm) (thiết lập Tình báo, 14 ngày chạy thử, mã PIN mở khoá, kênh phụ Telegram, đợt mục cũ trong bản tin).
+- **Còn dở**: T14 đã gộp (trừ ý «đổi nhân viên cần PIN», đang thi công); v0.1.76 chỉ phát hành phần chắc (🔴 ngay chỉ lừa đảo + an toàn; bốn cổng thường lên đầu bản tin) — quy cách phân loại mới làm ở v0.1.77. G-KB còn yếu: lượt đồng hồ (hạn tới/im lặng), đóng/hạ đơn vị khi có xác nhận (kb3). Nợ mới **#73–#93** ở [ROADMAP](../ROADMAP.md); chờ Sếp quyết Nợ #82 (Hồ sơ Sếp vào prompt mọi nhóm), #88 (khoá trợ lý có chặn Telegram không), #90.
+- **Boss cần làm**: xem «Việc Boss phải làm» ở [v0.1.76.md](../releases/v0.1.76.md#việc-boss-phải-làm) (thiết lập Tình báo, bốn cổng thường chưa nhắn ngay, mã PIN mở khoá, kênh phụ Telegram, đợt mục cũ trong bản tin).
 
 ## Hợp đồng chung
 
