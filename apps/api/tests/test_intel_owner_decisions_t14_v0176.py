@@ -166,6 +166,88 @@ async def test_d1_first_push_on_due_day_counts_as_reminder(db: AsyncSession) -> 
 
 # ─── D2: mạo danh đặt hàng / đổi địa chỉ giao ─────────────────────────────────
 
+GOODS_POS = ("Giao 10 cái tivi Sony về địa chỉ mới giúp em, ghi công nợ như mọi lần nhé", "em đổi địa chỉ giao hàng sang kho Bình Dương",
+             "Anh ơi em đổi địa chỉ giao hàng sang 12 Lê Lợi nhé", "đơn hàng hôm qua đổi người nhận là chị Hoa nhé", "lấy 2 thùng, ghi nợ nhé",
+             "Em lấy 50 thùng, ghi nợ cuối tháng trả, giao về kho mới ở Bình Dương nhé")
+#: Câu âm tính của review T14 (D2-a): người gửi mới trùng tên người đã biết mà nói chuyện thường ⇒ KHÔNG được ra mao_danh_dat_hang.
+GOODS_NEG = ("Việc này chị giao cho người khác làm nhé", "Em có địa chỉ mới rồi, cuối tuần giao lưu nhé", "Mai đổi chỗ gửi xe sang hầm B nhé cả nhà",
+             "Công ty đổi nơi nhận hồ sơ sang tầng 3", "Đổi người nhận giải thưởng tháng này là anh Tuấn nhé",
+             "Bên em không cọc đâu, đặt hàng thì thanh toán khi nhận nhé", "Em mới chuyển nhà, đổi địa chỉ nhà rồi nha mọi người",
+             "Cho em đổi địa chỉ email nhận hoá đơn với ạ", "Em chào anh chị, em là nhân viên mới, phụ trách giao hàng khu Q7",
+             "Lan đây, hôm nay em nghỉ ốm, bàn giao ca cho bạn Minh", "Chị ơi địa chỉ khác của chị là gì để em gửi thiệp cưới")
+
+
+def _imp_ctx() -> fraud.Ctx:
+    snd = fraud.Who(ref="u_s", person_id=uuid.uuid4(), entity_id=uuid.uuid4(), name="Lan")
+    imp = fraud.Who(ref="u_i", person_id=uuid.uuid4(), entity_id=uuid.uuid4(), name="Lan", customer=True, team=True, business_contact=True,
+                    present_in_thread=True)
+    own = fraud.Who(ref="u_o", person_id=uuid.uuid4(), entity_id=uuid.uuid4(), is_owner=True, business_contact=True, present_in_thread=True)
+    return fraud.Ctx(sender=snd, stranger=True, impersonated=imp, owner=own)
+
+
+def test_d2a_impersonator_small_talk_is_not_goods_rule_nor_red() -> None:
+    """Review D2-a: 11 câu thường của người mới trùng tên khách/nhân viên đã biết ⇒ không luật mạo danh đặt hàng, không 🔴 (nhóm nhỏ lẫn lớn)."""
+    ctx = _imp_ctx()
+    for t in GOODS_NEG:
+        d = fraud.decide(fraud.scan(t), ctx)
+        assert d is None or "impersonated_goods" not in d.rules, t
+        if d is not None:
+            for size in (8, 120):
+                li = fraud.signal_input(d, msg_at=H.NOW, thread=levels.Thread(type="group", size=size, owner_in_thread=True))
+                assert H.compute(li).level != "red", (t, size)
+    for t in GOODS_POS:
+        d = fraud.decide(fraud.scan(t), ctx)
+        assert d is not None and "impersonated_goods" in d.rules, t
+
+
+async def test_d2a_trusted_staff_sender_is_not_impersonation(db: AsyncSession) -> None:
+    """Người gửi đã được Sếp đánh dấu nhân viên (khoá loại, đánh dấu ≥ 7 ngày) trùng tên khách ⇒ không coi là mạo danh."""
+    w = await world(db)
+    await w.group("kh", "Đại lý điện máy", 120)
+    await w.person("Tuấn Điện Máy Q7", ptype="customer", group="kh", history_days_ago=60)
+    staff, iid = await w.person("Tuấn Điện Máy Q7", ptype="staff", group="kh", joined_days_ago=1)
+    await db.execute(text("""UPDATE core.persons SET attrs = attrs || jsonb_build_object('person_type_locked', true, 'staff_marked_at', CAST(:t AS text))
+                             WHERE id = :p"""), {"p": staff, "t": (w.now - timedelta(days=30)).isoformat()})
+    await w.raw("Anh ơi đổi địa chỉ giao hàng 10 cái tivi sang kho mới giúp em nhé", sender=iid, group="kh")
+    assert await fraud.run(db, w.org, w.now) == []
+
+
+async def test_d2a_staff_marked_recently_not_trusted_by_hard_rules(db: AsyncSession) -> None:
+    """Nhân viên mới được đánh dấu < 7 ngày: luật cứng lừa đảo không tin vai nhân viên (vẫn là người lạ nhờ ứng tiền ⇒ 🔴)."""
+    w = await world(db)
+    await w.group("gd", "Nhân viên cửa hàng", 25)
+    p, iid = await w.person("Minh Mới", ptype="staff", group="gd", joined_days_ago=1)
+    await db.execute(text("""UPDATE core.persons SET attrs = attrs || jsonb_build_object('person_type_locked', true, 'staff_marked_at', CAST(:t AS text))
+                             WHERE id = :p"""), {"p": p, "t": (w.now - timedelta(days=1)).isoformat()})
+    await w.raw("Mọi người ơi ứng giúp em 3 triệu, chiều em trả liền", sender=iid, group="gd")
+    out = await fraud.run(db, w.org, w.now)
+    assert len(out) == 1 and out[0].level == "red"
+
+
+async def test_d2c_units_scans_only_sender_quotes(db: AsyncSession) -> None:
+    """Review D2-c: trích dẫn "đổi địa chỉ giao hàng" của NGƯỜI KHÁC trong cùng đơn vị không làm kẻ trùng tên thành mạo danh đặt hàng."""
+    w = await T12._world(db, size=20)
+    _real, _riid, real_ent = await T12._person(db, w, "Tuấn Điện Máy", ptype="customer")
+    scam, siid, _ = await T12._person(db, w, "Tuấn Điện Máy")
+    _other, oiid, _ = await T12._person(db, w, "Cường giao nhận")
+    now = T12.NOW
+    raw = await mk_raw(db, w.org, w.channel, identity=siid, body="chào cả nhà, em mới vào nhóm", group=w.group, at=now - timedelta(minutes=20))
+    raw2 = await mk_raw(db, w.org, w.channel, identity=oiid, body="anh ơi khách đổi địa chỉ giao hàng 10 cái tivi sang kho mới",
+                        group=w.group, at=now - timedelta(minutes=19))
+    uid = await T12._unit(db, w, raw, FR, person=scam, people=[("nguoi_bi_mao_danh", real_ent)], harm="có thể mạo danh")
+    t = now - timedelta(minutes=20)
+    rec = (await db.execute(text("SELECT received_at FROM raw.events WHERE id = :i"), {"i": raw2})).scalar_one()
+    await db.execute(text("""INSERT INTO clean.evidence (meaning_unit_id, meaning_observed_at, raw_event_id, raw_received_at, quote, quote_status,
+                                                          source_field, span_start, span_end)
+                             VALUES (:u, :t, :r, :rr, 'khách đổi địa chỉ giao hàng 10 cái tivi sang kho mới', 'verified', 'body', 0, 20)"""),
+                     {"u": uid, "t": t, "r": raw2, "rr": rec})
+    await db.commit()
+    out = await U.project(db, w.org, now)
+    await db.commit()
+    assert out and all(s.level != "red" for s in out)
+    assert (await T12._rows(db, w.org))[0].level_input.get("goods_risk") is False
+
+
 def _imp(**kw: Any) -> levels.SignalIn:
     base: dict[str, Any] = {"victims": [], "impersonated": [H.person("u_tuan", customer=True, present_in_thread=True, thread_member=True)],
                             "goods_risk": True, "flags": {}, "confidence_exist": 0.8}
@@ -185,10 +267,9 @@ def test_d2_impersonated_known_customer_goods_order_is_red_gate1() -> None:
 
 
 def test_d2_scan_goods_redirect_vocabulary() -> None:
-    for t in ("Giao 10 cái tivi Sony về địa chỉ mới giúp em, ghi công nợ như mọi lần nhé", "em đổi địa chỉ giao hàng sang kho Bình Dương",
-              "đổi người nhận là chị Hoa nhé", "lấy 2 thùng, ghi nợ nhé"):
+    for t in GOODS_POS:
         assert fraud.goods_redirect(t) and fraud.scan(t).goods_imp, t
-    for t in ("địa chỉ mới của em là 12 Lê Lợi", "mai em ghé lấy hàng", "hôm nay giao hàng hơi trễ nha"):
+    for t in ("địa chỉ mới của em là 12 Lê Lợi", "mai em ghé lấy hàng", "hôm nay giao hàng hơi trễ nha", *GOODS_NEG):
         assert not fraud.goods_redirect(t), t
 
 
@@ -287,15 +368,56 @@ def test_d5_red_gate5_still_needs_catalog() -> None:
     assert (lv.level, lv.gate) == ("red", levels.G5)
 
 
-# ─── Gen: nhóm không rõ cỡ không phải "≤ 50 khách lõi" ────────────────────────
+# ─── Gen quyết D-T3 (2026-10-26, fail-high): nhóm không rõ cỡ ⇒ cổng an toàn/lừa đảo coi như vòng gần + khách lõi ──
 
-def test_gen_unknown_size_group_customer_is_not_core_safety() -> None:
+def test_gen_dt3_unknown_size_group_customer_emergency_is_red() -> None:
     def sk(**th: Any) -> levels.SignalIn:
         return H.sig(levels.SK, flags={"emergency": True}, victims=[H.person("c1", customer=True)],
                      thread={"type": "group", "owner_in_thread": True, "agent_in_thread": True, **th})
 
     assert levels.owner_side(sk(size=40), H.policy("kinh_doanh")).safety
     unk = levels.owner_side(sk(size=0, size_known=False), H.policy("kinh_doanh"))
-    assert not unk.safety and unk.safety_wide
-    assert H.compute(sk(size=0, size_known=False)).level == "amber"
+    assert unk.safety
+    assert (H.compute(sk(size=0, size_known=False)).level, H.compute(sk(size=0, size_known=False)).gate) == ("red", levels.G2)
+    assert H.compute(sk(size=0, size_known=False), ctx=None).level == "red"     # nhóm chưa xác nhận, không rõ cỡ: vẫn fail-high
     assert H.compute(sk(size=40)).level == "red"
+    assert H.compute(sk(size=120)).level == "amber"                               # cỡ ĐÃ BIẾT > 50 không gần: giữ luật cũ
+
+
+async def test_pt1_generic_safety_victim_marked_customer_is_red(db: AsyncSession) -> None:
+    """P-T1 (G-KB sau T14, kb3 S19): detector generic dựng nạn nhân theo CHUNG hàm vai người — khách Sếp đã đánh dấu (person_type=customer)
+    báo bình nóng lạnh rò điện trong nhóm kinh doanh 40 người ⇒ 🔴 cổng an toàn."""
+    from gh.biz.intel.detectors import generic
+
+    w = await T12._world(db, size=40, business=True)
+    pid, iid, ent = await T12._person(db, w, "Chị Hiền khách", ptype="customer")
+    now = T12.NOW
+    raw = await mk_raw(db, w.org, w.channel, identity=iid, body="bình nóng lạnh nhà chị mở vòi thấy tê tê tay, chắc rò điện em ơi",
+                       group=w.group, at=now - timedelta(minutes=20))
+    await T12._unit(db, w, raw, levels.SK, person=pid, flags={"emergency": True}, people=[("nguoi_bi_anh_huong", ent)], gate=levels.G2,
+                    harm="nguy cơ điện giật")
+    out = await generic.project_units(db, w.org, now)
+    await db.commit()
+    assert [(s.level, s.gate) for s in out] == [("red", levels.G2)]
+
+
+async def test_untrusted_staff_type_is_still_stranger_for_fraud(db: AsyncSession) -> None:
+    """Phòng thủ chiều sâu (security review 5bd15456): `person_type=staff` KHÔNG do Sếp đánh dấu (không khoá — vd quy tắc/seed) ⇒ luật
+    lừa đảo vẫn coi là người lạ (nhờ ứng tiền ⇒ 🔴) và vẫn xét mạo danh."""
+    w = await world(db)
+    await w.group("gd", "Nhân viên cửa hàng", 25)
+    _p, iid = await w.person("Minh Mới", ptype="staff", group="gd", joined_days_ago=1)
+    await w.raw("Mọi người ơi ứng giúp em 3 triệu, chiều em trả liền", sender=iid, group="gd")
+    out = await fraud.run(db, w.org, w.now)
+    assert len(out) == 1 and out[0].level == "red"
+
+
+def test_staff_trust_rule_shared() -> None:
+    from gh.biz.intel.detectors import generic
+
+    at = H.NOW
+    assert not generic.staff_trusted("staff", locked=False, marked_at=None, at=at)                       # quy tắc / seed tự gán
+    assert generic.staff_trusted("staff", locked=True, marked_at=None, at=at)                            # Sếp đặt trước v0.1.76 (Nợ #97)
+    assert generic.staff_trusted("staff", locked=True, marked_at=at - timedelta(days=8), at=at)
+    assert not generic.staff_trusted("staff", locked=True, marked_at=at - timedelta(days=1), at=at)      # mới đánh dấu < 7 ngày
+    assert not generic.staff_trusted("customer", locked=True, marked_at=None, at=at)

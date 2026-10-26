@@ -110,6 +110,8 @@ class Who:
     entity_id: uuid.UUID
     person_id: uuid.UUID | None = None
     person_type: str | None = None
+    locked: bool = False                    # `attrs.person_type_locked` — loại do Sếp tự đặt
+    staff_marked_at: datetime | None = None  # lúc Sếp đánh dấu nhân viên (Owner + PIN, v0.1.76)
 
     @property
     def ref(self) -> str:
@@ -125,9 +127,12 @@ async def who(db: AsyncSession, entity_id: uuid.UUID | None) -> Who | None:
     ent = await canonical(db, entity_id)
     if ent is None:
         return None
-    r = (await db.execute(text("""SELECT e.person_id, p.person_type FROM mem.entities e LEFT JOIN core.persons p ON p.id = e.person_id
-                                  WHERE e.id = :e"""), {"e": ent})).one_or_none()
-    return Who(ent, r.person_id if r else None, r.person_type if r else None)
+    r = (await db.execute(text("""SELECT e.person_id, p.person_type, COALESCE(p.attrs ->> 'person_type_locked', '') = 'true' AS locked,
+                                         p.attrs ->> 'staff_marked_at' AS marked
+                                  FROM mem.entities e LEFT JOIN core.persons p ON p.id = e.person_id WHERE e.id = :e"""), {"e": ent})).one_or_none()
+    if r is None:
+        return Who(ent)
+    return Who(ent, r.person_id, r.person_type, bool(r.locked), parse_marked(r.marked))
 
 
 async def who_person(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID | None) -> Who | None:
@@ -139,6 +144,34 @@ async def who_person(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID |
     except entities.EntityError:
         return None
     return await who(db, ent)
+
+
+STAFF_TRUST_DAYS = 7
+
+
+def staff_trusted(person_type: str | None, *, locked: bool, marked_at: datetime | None, at: datetime) -> bool:
+    """MỘT luật cho mọi detector (security review T14, L-90): vai NHÂN VIÊN chỉ được tin để hạ phòng thủ lừa đảo (bỏ "người lạ", bỏ xét mạo
+    danh, tin "đã xử lý" là phía Sếp) khi Sếp tự đặt (`attrs.person_type_locked`) VÀ đã đánh dấu ≥ 7 ngày. Khoá mà chưa có `staff_marked_at`
+    = dữ liệu Sếp đặt trước v0.1.76 (Nợ #97) ⇒ tin. Quy tắc/seed tự gán (không khoá) ⇒ không tin."""
+    if person_type != "staff" or not locked:
+        return False
+    if marked_at is None:
+        return True
+    m = marked_at if marked_at.tzinfo is not None else marked_at.replace(tzinfo=at.tzinfo)
+    return (at - m).total_seconds() >= STAFF_TRUST_DAYS * 86400
+
+
+def parse_marked(v: object) -> datetime | None:
+    try:
+        return datetime.fromisoformat(v) if isinstance(v, str) and v else None
+    except ValueError:
+        return None
+
+
+def trusted_owner_side(w: Who | None, sets: OrgSets, at: datetime) -> bool:
+    """Phía Sếp ĐỦ TIN để hạ phòng thủ lừa đảo/an toàn (tin "đã xử lý"): Sếp, fact `staff_of`, hoặc nhân viên theo `staff_trusted`."""
+    return w is not None and (sets.is_owner(w.entity_id) or w.entity_id in sets.staff
+                              or staff_trusted(w.person_type, locked=w.locked, marked_at=w.staff_marked_at, at=at))
 
 
 def hard_customer(w: Who | None, sets: OrgSets) -> bool:
@@ -166,6 +199,13 @@ def cold_customer(w: Who | None, sets: OrgSets, *, biz_group: bool) -> bool:
     của Sếp/người thân được coi là khách. Có dù một fact `customer_of` ⇒ tắt (chỉ tin dữ liệu). Bảo thủ: nhóm chưa xác nhận ⇒ không suy."""
     return (w is not None and biz_group and not sets.customers and not hard_owner_side(w, sets)
             and w.entity_id not in sets.key_relations)
+
+
+def who_rel(w: Who, sets: OrgSets, *, thread_member: bool = False) -> levels.PersonRel:
+    """MỘT hàm dựng vai người cho detector chiếu đơn vị (units, generic…): tra cứu `OrgSets` (fact) CỘNG loại người Sếp đã đánh dấu ở
+    `core.persons.person_type` (khách ⇒ customer, nhân viên ⇒ team). P-T1 (G-KB sau T14): generic bỏ qua person_type ⇒ khách mất cổng an toàn."""
+    r = person_rel(w.entity_id, sets, ref=w.ref, thread_member=thread_member)
+    return r.model_copy(update={"customer": r.customer or w.person_type == "customer", "team": r.team or w.person_type == "staff"})
 
 
 def person_rel(ent: uuid.UUID, sets: OrgSets, *, ref: str, thread_member: bool = False, kin_of_member: bool = False) -> levels.PersonRel:
@@ -278,12 +318,15 @@ async def _unit_ctx(db: AsyncSession, org_id: uuid.UUID, u: Any, sets: OrgSets, 
         ent = await canonical(db, m.entity_id)
         if ent is not None and ent not in seen:
             seen.add(ent)
-            victims.append(person_rel(ent, sets, ref=await _ref(db, ent), thread_member=in_group(ent)))   # ref chung với fraud/raw_tail (T12)
+            w = await who(db, ent)
+            victims.append(who_rel(w, sets, thread_member=in_group(ent)) if w else
+                           person_rel(ent, sets, ref=f"e_{ent}", thread_member=in_group(ent)))   # ref chung với fraud/raw_tail (T12)
             victim_ents.append(ent)
         elif ent is None and sender is not None and KIN.search(fold(m.surface or "")):
             victims.append(levels.PersonRel(ref=f"kin_{len(victims)}", kin_of_member=True))
     if not victims and sender is not None:
-        victims.append(person_rel(sender, sets, ref=await _ref(db, sender), thread_member=True))
+        ws = await who(db, sender)
+        victims.append(who_rel(ws, sets, thread_member=True) if ws else person_rel(sender, sets, ref=await _ref(db, sender), thread_member=True))
         victim_ents.append(sender)
     insider = sender is not None and sender in victim_ents       # người gửi nói về chính mình ⇒ người trong cuộc
     harm = u.harm.get("what") if isinstance(u.harm, dict) and isinstance(u.harm.get("what"), str) else ""

@@ -37,6 +37,8 @@ export interface IntelConsole {
   payees: IntelPayee[];
   groups: IntelGroup[];
   contexts: string[];
+  /** v0.1.76 (Ryan quyết 26/10): false ⇒ bốn cổng thường chỉ lên đầu bản tin, khoá «Báo ngay». Máy chủ cũ không gửi ⇒ coi như bật. */
+  regular_push_enabled?: boolean;
 }
 
 /** v0.1.76 (T14, Ryan chốt D3): `GET /intel/setup` — hai bước "Thiết lập Tình báo" (gán bối cảnh nhóm, khai nhân viên). */
@@ -49,6 +51,8 @@ export interface IntelSetupPerson {
   id: string;
   name: string;
   person_type: string;
+  /** Loại trước khi được đánh dấu nhân viên (tắt nhân viên ⇒ trả về đúng loại này). */
+  prev_type?: string | null;
 }
 export interface IntelSetup {
   ready: boolean;

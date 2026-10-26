@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import orjson
+import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -47,6 +48,7 @@ async def _sig(db: AsyncSession, org: uuid.UUID, kind: str, ck: str, *, privacy:
                                                                                        span_start=0, span_end=3, quote="abc")]), NOW)
 
 
+@pytest.mark.usefixtures("regular_push_on")
 async def test_intel_digest_executes_delivery_order_and_refs(db: AsyncSession) -> None:
     org = await mk_org(db)
     await _install(db, org)

@@ -177,8 +177,7 @@ def _sender_suspect(u: Any, p: People, sender: g.Who) -> bool:
 
 
 def _rel(w: g.Who, sets: g.OrgSets, *, thread_member: bool) -> levels.PersonRel:
-    r = g.person_rel(w.entity_id, sets, ref=w.ref, thread_member=thread_member)
-    return r.model_copy(update={"customer": r.customer or w.person_type == "customer", "team": r.team or w.person_type == "staff"})
+    return g.who_rel(w, sets, thread_member=thread_member)
 
 
 # ─── SignalIn (bảng nguồn §4.2.1 (c)) ─────────────────────────────────────────
@@ -334,12 +333,17 @@ async def _goods_impersonation(db: AsyncSession, org_id: uuid.UUID, u: Any, p: P
     s = p.sender
     if s is None or not any(w.entity_id != s.entity_id and not sets.is_owner(w.entity_id) for w in p.impersonated_who):
         return li
-    texts = list((await db.execute(text("""SELECT quote FROM clean.evidence WHERE meaning_unit_id = :u AND meaning_observed_at = :t
-                                            AND quote_status = 'verified' AND quote IS NOT NULL"""), {"u": u.id, "t": u.observed_at})).scalars().all())
-    if s.person_id is not None:
-        texts += list((await db.execute(text("""SELECT e.body_text FROM raw.events e JOIN core.person_identities pi ON pi.id = e.sender_identity_id
-                                                 WHERE e.id = ANY(:r) AND e.org_id = :o AND pi.person_id = :p AND e.body_text IS NOT NULL"""),
-                                         {"r": raws, "o": org_id, "p": s.person_id})).scalars().all())
+    if s.person_id is None:
+        return li
+    # CHỈ chữ của chính người gửi (review T14 D2-c): trích dẫn của người khác trong cùng đơn vị không làm kẻ trùng tên thành "đặt hàng".
+    texts = list((await db.execute(text("""SELECT ce.quote FROM clean.evidence ce JOIN raw.events e ON e.id = ce.raw_event_id AND e.received_at = ce.raw_received_at
+                                            JOIN core.person_identities pi ON pi.id = e.sender_identity_id
+                                            WHERE ce.meaning_unit_id = :u AND ce.meaning_observed_at = :t AND ce.quote_status = 'verified'
+                                              AND ce.quote IS NOT NULL AND pi.person_id = :p"""),
+                                   {"u": u.id, "t": u.observed_at, "p": s.person_id})).scalars().all())
+    texts += list((await db.execute(text("""SELECT e.body_text FROM raw.events e JOIN core.person_identities pi ON pi.id = e.sender_identity_id
+                                             WHERE e.id = ANY(:r) AND e.org_id = :o AND pi.person_id = :p AND e.body_text IS NOT NULL"""),
+                                     {"r": raws, "o": org_id, "p": s.person_id})).scalars().all())
     if not any(fraud.goods_redirect(t) for t in texts):
         return li
     victims = list(li.victims)
@@ -483,7 +487,7 @@ async def _project_one(db: AsyncSession, org_id: uuid.UUID, u: Any, ev: list[Any
             return routed
     cust = (u.kind_hint in ("xung_dot_khieu_nai", "quan_he_nong_nguoi") and p.sender is not None and g.hard_customer(p.sender, sets))
     by_w = await g.who_person(db, org_id, _uuid(verified(u).get("status_by_person_id")))
-    li = signal_input(u.kind_hint, u, p, sets, customer_of_owner=cust, status_by_owner_side=g.hard_owner_side(by_w, sets))
+    li = signal_input(u.kind_hint, u, p, sets, customer_of_owner=cust, status_by_owner_side=g.trusted_owner_side(by_w, sets, now))
     if u.kind_hint == levels.FR:
         li = await _goods_impersonation(db, org_id, u, p, sets, li, [e.raw_event_id for e in ev])
     tk = f"g:{u.group_id}" if u.group_id else ""

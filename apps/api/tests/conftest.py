@@ -217,3 +217,13 @@ async def verify_pin(api: Api, pin: str = OWNER["pin"]) -> None:
     """v0.1.35 (F-20): mở phiên PIN trước thao tác cần PIN (vd `ai.route_change` khi tạo/sửa nhà cung cấp AI)."""
     r = await api.send("POST", "/auth/pin/verify", {"pin": pin})
     assert r.status_code == 200, r.text
+
+
+@pytest.fixture
+def regular_push_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """v0.1.76 (T14, Ryan quyết 26/10): bốn cổng thường bị khoá ở đầu bản tin (`levels.REGULAR_PUSH_ENABLED=False`).
+    Test kiểm CƠ CHẾ đẩy 🔴 cổng thường (trần 3/ngày, leo thang, giữ chỗ trần nguyên tử…) — cơ chế còn nguyên cho
+    v0.1.77 — bật lại cờ trong phạm vi test đó. Hành vi bản này (khoá) do test_intel_regular_gates_shadow_t14 giữ."""
+    from gh.biz.intel import levels
+
+    monkeypatch.setattr(levels, "REGULAR_PUSH_ENABLED", True)

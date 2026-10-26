@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import orjson
+import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -105,6 +106,7 @@ async def test_question_answered_closes_signal(db) -> None:  # type: ignore[no-u
 
 # ─── W2: cổng khach_che_cong_khai_doa_bo ─────────────────────────────────────
 
+@pytest.mark.usefixtures("regular_push_on")
 async def test_public_complaint_by_customer_is_red_then_amber_top_after_24h(db) -> None:  # type: ignore[no-untyped-def]
     w, pid, iid, _ = await _customer(db)
     raw = await mk_raw(db, w.org, w.channel, identity=iid, body="dịch vụ tệ quá", at=NOW - timedelta(hours=1))
@@ -424,6 +426,7 @@ async def test_from_rule_finds_leave_threat_in_later_customer_message(db) -> Non
     assert out and len(out) == 2 and {s.kind for s in out} == {"xung_dot_khieu_nai", "quan_he_nong_nguoi"}
 
 
+@pytest.mark.usefixtures("regular_push_on")
 async def test_leave_threat_pushes_only_one_red_per_case(db) -> None:  # type: ignore[no-untyped-def]
     w, pid, iid, _ = await _customer(db, "Anh Bình")
     raw = await mk_raw(db, w.org, w.channel, identity=iid, body="thôi khỏi, lần sau lấy chỗ khác", at=NOW - timedelta(hours=1))

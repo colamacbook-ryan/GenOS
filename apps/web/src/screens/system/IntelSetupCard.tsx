@@ -27,7 +27,7 @@ export function IntelSetupCard() {
     <div id={INTEL_SETUP_ANCHOR} className="intel-setup-anchor">
       <Panel
         title="Thiết lập Tình báo"
-        kicker={s ? (s.ready ? 'Tình báo đầy đủ đang chạy' : 'Tình báo đầy đủ bật khi xong 2 bước') : 'Hai bước để Gen hiểu đúng nhóm và người của Sếp'}
+        kicker={s?.ready ? 'Đã thiết lập xong' : 'Hai bước để Gen hiểu đúng nhóm và người của Sếp'}
         aside={s ? <StepRail s={s} /> : undefined}
         label="Thiết lập Tình báo"
         bodyClass="intel-setup"
@@ -81,7 +81,8 @@ function SetupBody({ s }: { s: IntelSetup }) {
         <StaffStep s={s} asStep />
       </ol>
       <p className="muted-note intel-setup__foot">
-        Chưa xong thì {s.gated_kinds.join(', ')} vẫn chạy thận trọng (ít báo). Lừa đảo và an toàn luôn báo, không phụ thuộc bước này.
+        Những loại theo bối cảnh nhóm ({s.gated_kinds.join(', ')}) chỉ chạy ở nhóm đã gán bối cảnh; nhóm chưa gán được xử lý thận trọng (ít báo).
+        Danh sách nhân viên giúp Gen phân biệt khách và nhân viên chính xác hơn. Lừa đảo và an toàn luôn báo, không phụ thuộc hai bước này.
       </p>
     </>
   );
@@ -176,7 +177,8 @@ function StaffStep({ s, asStep }: { s: IntelSetup; asStep?: boolean }) {
   const body = (
     <>
       <p className="muted-note">
-        Bật cho người làm cho Sếp. Lời hứa và câu trả lời của nhân viên được tính là phía Sếp; khách của Sếp sẽ không bị nhầm thành nhân viên.
+        Bật cho người làm cho Sếp (cần mã PIN — Gen báo kênh phụ mỗi lần đổi). Lời hứa và câu trả lời của nhân viên được tính là phía Sếp; khách của
+        Sếp sẽ không bị nhầm thành nhân viên.
       </p>
       {rows.length === 0 ? (
         <p className="muted-note">Chưa thấy ai trong các nhóm. Không có nhân viên thì bấm “Đã khai xong” luôn.</p>
@@ -194,7 +196,7 @@ function StaffStep({ s, asStep }: { s: IntelSetup; asStep?: boolean }) {
                   checked={on}
                   label={`${p.name} là nhân viên`}
                   disabled={setStaff.isPending}
-                  onChange={(v) => setStaff.mutate({ id: p.id, staff: v }, { onSuccess: () => toast(v ? `Đã đánh dấu ${p.name} là nhân viên` : `Đã bỏ đánh dấu ${p.name}`) })}
+                  onChange={(v) => setStaff.mutate({ id: p.id, staff: v, prevType: p.prev_type }, { onSuccess: () => toast(v ? `Đã đánh dấu ${p.name} là nhân viên` : `Đã bỏ đánh dấu ${p.name}`) })}
                 />
               </li>
             );

@@ -123,6 +123,7 @@ async def _one(db: AsyncSession, org: uuid.UUID) -> Any:
 
 # ─── cổng 🔴 co_hoi_lon_sap_troi: chỉ khi thoả ĐỦ điều kiện ───────────────────
 
+@pytest.mark.usefixtures("regular_push_on")
 async def test_s22_regression_red_via_gate_and_catalog_match_saved(db, monkeypatch: pytest.MonkeyPatch) -> None:  # type: ignore[no-untyped-def]
     # cổng 5 không vượt giờ yên lặng (22:00–07:00 VN): cố định giờ làm việc, nếu không test đỏ khi CI chạy buổi tối giờ VN
     monkeypatch.setenv("GH_ENV", "eval")
