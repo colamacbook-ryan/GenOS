@@ -28,6 +28,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gh.biz.intel import levels
+from gh.textnorm import strip_accents
 
 TOP = ("digest_top", "digest_morning")
 SHOWN = TOP + ("digest", "digest_low")
@@ -40,25 +41,45 @@ REASON_VI = {"shadow": "(đáng lẽ báo ngay lúc {wp})", "capped": "(đáng l
              "impersonation_big_group": "có người xưng là anh trong nhóm", "impersonation_dm_agent": "có người xưng là anh nhắn trợ lý",
              "milestone_due_soon": "lời hứa với khách sắp tới hạn", "held_for_digest": "giữ đầu bản tin tới bản tin kế"}
 P2_MAX = 5                                                  # trần dòng P2 (không tính window_expired, milestone_due_soon) — [Gen chọn] chống phình đầu bản tin
-FORBIDDEN_ACTION = ("chào hàng", "mời mua", "upsell", "bán thêm", "gợi ý mua", "khuyến mãi để chốt", "chốt đơn", "chốt sale")
+FORBIDDEN_ACTION = ("chào hàng", "mời mua", "mời khách mua", "upsell", "bán thêm", "gợi ý mua", "khuyến mãi để chốt", "chốt đơn", "chốt sale")
 MAX_ACTION_CHARS = 140
+COPY_RUN_WORDS = 6                                         # ≥ 6 từ liền trùng trích dẫn/bằng chứng ⇒ coi là chép lời khách ⇒ bỏ
 _WS = re.compile(r"\s+")
+_PRICE_ASK = re.compile(r"gia bao nhieu|bao gia|bao nhieu tien|gia sao|hoi gia")
 
 
 def _fold(t: str) -> str:
-    return unicodedata.normalize("NFC", _WS.sub(" ", t)).casefold().strip()
+    """Chữ thường, bỏ dấu, gộp khoảng trắng — để so từ cấm / trùng lời không bị lách bằng dấu hoặc hoa-thường."""
+    return _WS.sub(" ", strip_accents(unicodedata.normalize("NFC", t))).casefold().strip()
 
 
-def checked_action(action: str | None, quote: str | None) -> str | None:
-    """"Việc Sếp cần làm" do model đề xuất (`suggested_action`, Q18/CNS-185) chỉ được dùng khi qua kiểm: không rỗng, ≤ `MAX_ACTION_CHARS`, không
-    chứa từ chào bán/chốt đơn, và "báo giá" chỉ khi trích dẫn cho thấy khách đã hỏi giá. Không đạt ⇒ None (bên gọi dùng mẫu)."""
+_FORBIDDEN_FOLDED = tuple(_fold(w) for w in FORBIDDEN_ACTION) + ("moi khach mua", "chao ban", "chot don", "chot sale", "ban them", "goi y mua")
+
+
+def _copies_quote(action_folded: str, quotes: list[str]) -> bool:
+    words = action_folded.split()
+    if len(words) < COPY_RUN_WORDS:
+        return False
+    for q in quotes:
+        qf = " " + _fold(q) + " "
+        for i in range(len(words) - COPY_RUN_WORDS + 1):
+            if " " + " ".join(words[i:i + COPY_RUN_WORDS]) + " " in qf:
+                return True
+    return False
+
+
+def checked_action(action: str | None, quote: str | list[str] | None) -> str | None:
+    """"Việc Sếp cần làm" do model đề xuất (`suggested_action`, Q18/CNS-185) chỉ được dùng khi qua kiểm: không rỗng, ≤ `MAX_ACTION_CHARS`, KHÔNG có
+    đoạn ≥ 6 từ trùng trích dẫn/bằng chứng (không chép lời khách), không chứa từ chào bán/chốt đơn (so cả trên bản bỏ dấu), và "báo giá" chỉ khi
+    trích dẫn có mẫu hỏi giá (giá bao nhiêu · báo giá · bao nhiêu tiền · giá sao · hỏi giá). Không đạt ⇒ None (bên gọi dùng mẫu)."""
     a = _WS.sub(" ", action or "").strip()
     if not a or len(a) > MAX_ACTION_CHARS:
         return None
+    quotes = [quote] if isinstance(quote, str) else [q for q in (quote or []) if q]
     f = _fold(a)
-    if any(w in f for w in FORBIDDEN_ACTION):
+    if any(w in f for w in _FORBIDDEN_FOLDED) or _copies_quote(f, quotes):
         return None
-    if "báo giá" in f and "giá" not in _fold(quote or ""):
+    if "bao gia" in f and not any(_PRICE_ASK.search(_fold(q)) for q in quotes):
         return None
     return a
 
@@ -118,6 +139,10 @@ class Digest:
         """Định dạng `ops.owner_outbox.refs` (hợp đồng T1 → T3): "1 ok / sai 2" trỏ đúng mục."""
         return [{"n": it.n, "signal_id": it.signal_id, "ask_id": it.ask_id, "ask_code": it.ask_code,
                  "cluster_ids": it.cluster_ids or None} for it in self.items]
+
+
+def _quotes(evidence: Any) -> list[str]:
+    return [str(e["quote_display"]) for e in evidence or [] if isinstance(e, dict) and e.get("quote_status") == "verified" and e.get("quote_display")]
 
 
 def _quote(evidence: Any) -> str | None:
@@ -215,10 +240,12 @@ async def build(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, audience:
             first_overflow = False
         quote = _quote(r.evidence)
         title = r.title
-        if grp == 5:
-            title = f"{await _staff_name(db, org_id, r.staff_ref)} đang lo: {r.title}"
-        action = checked_action(r.suggested_action, quote) or template_action(r.kind, list(r.reasons or []), r.gate or r.candidate, r.stage_eff,
-                                                                              await _staff_name(db, org_id, r.staff_ref) if grp == 5 else None)
+        rs = list(r.reasons or [])
+        staff = await _staff_name(db, org_id, r.staff_ref) if "staff_owned" in rs else None      # một lần/dòng; dòng staff_owned ở MỌI nhóm có tên NV
+        if staff:
+            title = f"{staff} đang lo: {r.title}"
+        own = None if r.kind in (levels.FR, levels.SK) else checked_action(r.suggested_action, _quotes(r.evidence))      # lừa đảo/an toàn: luôn mẫu cố định
+        action = own or template_action(r.kind, rs, r.gate or r.candidate, r.stage_eff, staff)
         items.append(DigestItem(len(items) + 1, str(r.id), r.code, r.kind, r.level, r.delivery, r.gate, r.candidate, title,
                                 facts_, quote, str(r.ask_id) if r.ask_id else None, r.ask_code,
                                 state_at_build={str(r.id): (r.level, r.delivery)}, action=action, reasons=list(r.reasons or [])))

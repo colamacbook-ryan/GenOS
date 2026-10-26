@@ -158,9 +158,9 @@ async def m1_ramp(db: AsyncSession, org_id: uuid.UUID) -> dict[str, Any]:
         SELECT gate, verdict, reason FROM (
           SELECT DISTINCT ON (f.signal_id) f.signal_id, f.gate, f.verdict, f.reason, f.shadow, f.rule_version, f.at
           FROM biz.signal_feedback f JOIN biz.alerts a ON a.id = f.signal_id AND a.org_id = f.org_id
-          WHERE f.org_id = :o AND f.verdict_by = 'owner' AND f.verdict IN ('correct', 'wrong') AND a.kind NOT IN ('system', 'legacy')
-          ORDER BY f.signal_id, f.at DESC) t
-        WHERE shadow AND rule_version = :rv AND at >= :s AND gate = ANY(:g)"""),
+          WHERE f.org_id = :o AND f.verdict_by = 'owner' AND a.kind NOT IN ('system', 'legacy')
+          ORDER BY f.signal_id, f.at DESC) t                       -- bản chấm MỚI NHẤT của Sếp quyết định (rồi mới lọc đúng/sai)
+        WHERE verdict IN ('correct', 'wrong') AND shadow AND rule_version = :rv AND at >= :s AND gate = ANY(:g)"""),
         {"o": org_id, "rv": RAMP_RULE_VERSION, "s": since, "g": list(levels.REGULAR_GATES)})).all()
     by: dict[str, list[int]] = {g: [0, 0] for g in levels.REGULAR_GATES}
     reasons = dict.fromkeys(WRONG_REASONS, 0)
@@ -347,17 +347,52 @@ async def intel_weekly(ctx: dict[str, Any]) -> dict[str, int]:
     return out
 
 
+STALL_DAYS = 30
+GATE_VI = {levels.G3: "khách chê / doạ bỏ", levels.G4: "lời hứa với khách sắp vỡ", levels.G5: "cơ hội sắp trôi", levels.G6: "sự cố công việc gấp"}
+
+
+async def _stalled_alerts(db: AsyncSession, org_id: uuid.UUID, m: dict[str, Any], now: datetime) -> list[str]:
+    """Loại thường còn ở chạy thử/bóng quá 30 ngày (chưa qua M1) ⇒ báo Sếp qua kênh quản trị (sự kiện đặc biệt, MỘT lần mỗi loại cho mỗi đợt chạy thử).
+    Dùng đúng đường báo-cho-Sếp sẵn có (`reports.enqueue` ⇒ `flush` ⇒ `send_auto`, ghi Nhật ký); khoá trợ lý/kênh tắt ⇒ không xếp, đêm sau thử lại."""
+    ramp = profile_read.parse_when(m.get("ramp_started_at"))
+    if ramp is None or (now - ramp) < timedelta(days=STALL_DAYS):
+        return []
+    ch = await delivery._channel(db, org_id)
+    if ch is None:
+        return []
+    sent: list[str] = []
+    for g in levels.REGULAR_GATES:
+        if g in m["passed_gates"]:
+            continue
+        key = f"intel-m1-stalled:{g}:{ramp.date().isoformat()}"
+        if (await db.execute(text("SELECT 1 FROM ops.owner_outbox WHERE org_id = :o AND channel_type = :c AND dedupe_key = :k"),
+                             {"o": org_id, "c": ch, "k": key})).first() is not None:
+            continue
+        body = (f"Loại «{GATE_VI[g]}» đã chạy thử hơn {STALL_DAYS} ngày mà chưa đủ lượt chấm Đúng/Sai để nhắn ngay "
+                f"(mới {m['pooled']['n']}/{M1_MIN_N} lượt gộp). Sếp chấm giúp các mục “đáng lẽ báo ngay” trên Console, hoặc để loại này ở đầu bản tin.")
+        if await reports.enqueue(db, org_id, ch, kind="alert", severity="important", text_=body, dedupe_key=key, now=now):
+            sent.append(g)
+            await actionlog.record(db, org_id=org_id, actor_type="system", actor_id="system:intel", action="intel.m1.stalled", target_type="settings",
+                                   target_id="intel", result="ok", detail={"gate": g, "n": m["pooled"]["n"]})
+    return sent
+
+
 async def run_m1_nightly(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> dict[str, Any]:
-    """`intel_m1_nightly` cho một tổ chức (spec r7.1 (e)2, CNS-181): đọc M1 R4 → ghi `settings.intel.m1_passed_gates` / `low_precision_gates` +
-    Nhật ký. Đạt ⇒ bốn mã thường TRỪ loại "Sai nhiều"; chưa đạt ⇒ rỗng. Cổng 1–2 không bao giờ nằm trong hai danh sách. Bên gọi commit."""
+    """`intel_m1_nightly` cho một tổ chức (spec r7.1 (e)2, CNS-181): đọc M1 R4 → ghi `settings.intel.m1_passed_gates` / `low_precision_gates`;
+    Nhật ký CHỈ khi hai danh sách đổi. Đạt ⇒ bốn mã thường TRỪ loại "Sai nhiều"; chưa đạt ⇒ rỗng. Cổng 1–2 không bao giờ nằm trong hai danh sách.
+    Loại ở bóng quá 30 ngày ⇒ báo Sếp (một lần mỗi loại). Bên gọi commit."""
     m = await m1_ramp(db, org_id)
+    cur = (await db.execute(text("SELECT settings -> 'intel' FROM core.organizations WHERE id = :o"), {"o": org_id})).scalar_one_or_none() or {}
+    changed = cur.get("m1_passed_gates") != m["passed_gates"] or cur.get("low_precision_gates") != m["low_precision_gates"]
     patch = {"m1_passed_gates": m["passed_gates"], "low_precision_gates": m["low_precision_gates"], "m1_checked_at": now.isoformat()}
     await db.execute(text("""UPDATE core.organizations SET settings = settings || jsonb_build_object('intel',
                                COALESCE(settings->'intel', '{}'::jsonb) || CAST(:p AS jsonb)) WHERE id = :o"""),
                      {"o": org_id, "p": orjson.dumps(patch).decode()})
-    await actionlog.record(db, org_id=org_id, actor_type="system", actor_id="system:intel", action="intel.m1.nightly", target_type="settings",
-                           target_id="intel", result="ok", detail={"n": m["pooled"]["n"], "m1_ok": m["pooled"]["m1_ok"],
-                                                                    "passed": m["passed_gates"], "low_precision": m["low_precision_gates"]})
+    if changed:
+        await actionlog.record(db, org_id=org_id, actor_type="system", actor_id="system:intel", action="intel.m1.nightly", target_type="settings",
+                               target_id="intel", result="ok", detail={"n": m["pooled"]["n"], "m1_ok": m["pooled"]["m1_ok"],
+                                                                        "passed": m["passed_gates"], "low_precision": m["low_precision_gates"]})
+    m["stalled_notified"] = await _stalled_alerts(db, org_id, m, now)
     return m
 
 

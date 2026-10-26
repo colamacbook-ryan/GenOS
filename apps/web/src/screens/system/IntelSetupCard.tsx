@@ -265,8 +265,8 @@ function KeyCustomersStep({ s, asStep }: { s: IntelSetup; asStep?: boolean }) {
   const body = (
     <>
       <p className="muted-note">
-        Khách chủ chốt do Sếp khai — Gen chỉ gợi ý tên, không tự chấm điểm. Bật cần mã PIN, Gen báo kênh phụ mỗi lần đổi. Khách chủ chốt chê hoặc doạ bỏ
-        được ưu tiên báo ngay; khách thường chỉ lên đầu bản tin.
+        Khách chủ chốt do Sếp khai — Gen chỉ gợi ý tên, không tự chấm điểm. Bật hoặc tắt cần mã PIN. Khách chủ chốt chê hoặc doạ bỏ sẽ được ưu tiên
+        báo ngay (sau giai đoạn chạy thử); khách thường chỉ lên đầu bản tin.
       </p>
       {rows.length === 0 ? (
         <p className="muted-note">Chưa có khách nào được đánh dấu là khách hàng. Không có khách chủ chốt thì bấm “Đã khai xong” luôn.</p>

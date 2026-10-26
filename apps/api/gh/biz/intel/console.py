@@ -23,10 +23,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gh.auth import service
 from gh.auth.deps import require_owner, require_pin
-from gh.biz.intel import access, levels, strong_confirm
+from gh.biz.intel import access, levels, signals, strong_confirm
 from gh.biz.intel.detectors import fraud
 from gh.biz.intel.pipes import metrics
-from gh.biz.mem import contexts, profile_read
+from gh.biz.mem import contexts
 from gh.chassis import actionlog
 from gh.db import DB
 from gh.errors import ApiError, not_found
@@ -80,7 +80,8 @@ async def console_state(user: service.CurrentUser = Depends(require_owner), db: 
     for lb in labels:
         by_group.setdefault(lb.group_id, []).append({"context": lb.context, "is_primary": lb.is_primary})
     mode = "shadow" if s.get("mode") == "shadow" else "live"
-    ramp = await ramp_state(db, org, s, now)
+    _s, installed = await signals.intel_settings(db, org)
+    ramp = await ramp_state(db, org, s, installed, now)
     shadow_items = await shadow_state(db, user)
     return {
         "pin_active": user.pin_active(),
@@ -108,18 +109,21 @@ RAMP_DAYS = 14
 SHADOW_LIST_MAX = 12
 
 
-async def ramp_state(db: AsyncSession, org_id: uuid.UUID, s: dict[str, Any], now: Any) -> dict[str, Any]:
-    """Banner "chạy thử lại 14 ngày (từ dd/mm)" (R4): bốn cổng thường chạy bóng 14 ngày kể từ `intel.ramp_started_at`; M1 gộp n ≥ 10.
-    Chỉ số + mã, không chữ tin. `in_trial` = còn trong 14 ngày HOẶC bốn cổng chưa qua M1 (đến lúc đó cổng thường chưa nhắn riêng)."""
-    ramp = profile_read.parse_when(s.get("ramp_started_at"))
+async def ramp_state(db: AsyncSession, org_id: uuid.UUID, s: dict[str, Any], installed: Any, now: Any) -> dict[str, Any]:
+    """Banner chạy thử (R4): bốn cổng thường chạy bóng 14 ngày kể từ mốc hiệu lực (cùng logic `signals.ramp_start/ramp_days`, có fallback ngày cài);
+    M1 gộp n ≥ 10. `in_trial` = chế độ chạy thử (`mode=shadow`) HOẶC (Sếp chưa chọn nhắn ngay sớm VÀ (chưa đủ 14 ngày HOẶC chưa cổng nào qua M1)).
+    `renewed` = chạy thử LẠI (mốc ramp muộn hơn ngày cài ≥ 1 ngày) — tổ chức cài mới thì chỉ là "chạy thử". Chỉ số + mã, không chữ tin."""
+    start = signals.ramp_start(s, installed, org_id)
     m = await metrics.m1_ramp(db, org_id)
     passed = [g for g in s.get("m1_passed_gates") or [] if g in levels.REGULAR_GATES] if isinstance(s.get("m1_passed_gates"), list) else []
-    days = max(0.0, (now - ramp).total_seconds() / 86400.0) if ramp else None
-    in_window = days is None or days < RAMP_DAYS
-    return {"started_at": ramp.isoformat() if ramp else None, "days": RAMP_DAYS,
-            "ends_at": (ramp + timedelta(days=RAMP_DAYS)).isoformat() if ramp else None,
-            "days_left": None if days is None else max(0, math.ceil(RAMP_DAYS - days)),
-            "in_trial": in_window or not passed, "passed_gates": passed,
+    days = signals.ramp_days(s, installed, now, org_id)
+    early = levels.REGULAR_PUSH_ENABLED and s.get("ramp_gates") == "push"
+    in_trial = s.get("mode") == "shadow" or (not early and (days < RAMP_DAYS or not passed))
+    first = signals._aware(installed)
+    renewed = start is not None and start - first >= timedelta(days=1)
+    return {"started_at": start.isoformat() if start else None, "days": RAMP_DAYS,
+            "ends_at": (start + timedelta(days=RAMP_DAYS)).isoformat() if start else None,
+            "days_left": max(0, math.ceil(RAMP_DAYS - days)), "red_cap_per_day": signals._int_setting(s, "red_cap_per_day", 3, org_id), "in_trial": in_trial, "renewed": renewed, "early_push": early, "passed_gates": passed,
             "m1": {"n": m["pooled"]["n"], "k": m["pooled"]["k"], "p": m["pooled"]["p"], "lo95": m["pooled"]["lo95"], "ok": m["pooled"]["m1_ok"],
                    "min_n": metrics.M1_MIN_N, "wrong_by_reason": m["wrong_by_reason"], "low_precision_gates": m["low_precision_gates"]}}
 
@@ -127,10 +131,10 @@ async def ramp_state(db: AsyncSession, org_id: uuid.UUID, s: dict[str, Any], now
 async def shadow_state(db: AsyncSession, user: service.CurrentUser) -> list[dict[str, Any]]:
     """Dòng bóng ("đáng lẽ báo ngay") của bốn cổng thường đang mở — Sếp chấm Đúng/Sai (Sai kèm 1 trong 3 lý do). Cùng cổng đọc với `/signals`
     (`access.alert_visible_sql`: `console_pin`/nhóm ẩn không lộ) và lọc `org_id` của người gọi."""
-    rows = (await db.execute(text(f"""SELECT a.id, a.kind, a.gate, a.title, a.reasons, a.would_push_at, a.feedback_verdict,
-                                             a.level_input ->> 'staff_ref' AS staff_ref
+    rows = (await db.execute(text(f"""SELECT a.id, a.kind, a.gate, a.title, a.reasons, a.would_push_at, a.feedback_verdict
                                       FROM biz.alerts a
                                       WHERE a.org_id = :o AND a.status IN ('open', 'acknowledged') AND a.would_push_at IS NOT NULL
+                                        AND a.pushed_at IS NULL
                                         AND a.level = 'red' AND a.gate = ANY(:g) AND a.kind NOT IN ('system', 'legacy')
                                         AND {access.alert_visible_sql(user, 'a')}
                                       ORDER BY a.would_push_at DESC LIMIT :n"""), {"o": user.org_id, "g": list(levels.REGULAR_GATES),  # noqa: S608

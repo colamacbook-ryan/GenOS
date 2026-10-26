@@ -312,6 +312,8 @@ async def digest_lines(ctx: Context, now: datetime) -> list[str]:
         if it.ask_code:
             parts.append(f"(#{it.ask_code})")
         out.append(otext.defang(" ".join(parts)))
+        if it.action:                                    # "Việc Sếp cần làm" (Q18): một dòng riêng, che như quote
+            out.append(otext.defang(f"   Việc Sếp cần làm: {otext.line(it.action, 100)}"))
     if len(d.items) > DIGEST_MAX_LINES:
         out.append(f"… và {len(d.items) - DIGEST_MAX_LINES} mục nữa (xem Console)")
     return out

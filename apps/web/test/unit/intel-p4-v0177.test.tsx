@@ -93,6 +93,13 @@ describe('intelModel v0.1.77', () => {
     expect(rampBannerText(ramp({ m1: { ...ramp().m1, n: 12, ok: false } }))).toContain('chưa đủ chính xác để nhắn ngay');
   });
 
+  it('rampBannerText: cài mới (renewed=false) nói "Chạy thử", không "lại"; reasonText dùng trần đã cấu hình', () => {
+    expect(rampBannerText(ramp({ renewed: false }))).toMatch(/^Chạy thử 14 ngày/);
+    expect(rampBannerText(ramp({ renewed: true }))).toMatch(/^Chạy thử lại 14 ngày/);
+    expect(reasonText(['capped'], 5)).toEqual(['quá 5 tin báo ngay hôm nay']);
+    expect(reasonText(['capped'])).toEqual(['quá 3 tin báo ngay hôm nay']);
+  });
+
   it('reasonText: mã lạ bị bỏ, không lộ mã máy', () => {
     expect(reasonText(['shadow', 'key_customer', 'ma_la'])).toEqual(['đang chạy thử, chưa nhắn riêng', 'khách chủ chốt (Sếp đã đánh dấu)']);
   });
@@ -194,6 +201,8 @@ describe('<IntelSetupCard> bước 3 Khách chủ chốt (R2)', () => {
     expect(within(step).getByRole('switch', { name: 'Chú Bảy là khách chủ chốt' })).not.toBeChecked();
     expect(step).toHaveTextContent('Trợ lý gợi ý — chờ Sếp xác nhận');
     expect(step).toHaveTextContent('Gen chỉ gợi ý tên, không tự chấm điểm');
+    expect(step).not.toHaveTextContent('kênh phụ');                          // không hứa điều chưa có
+    expect(step).toHaveTextContent('Bật hoặc tắt cần mã PIN');
   });
 
   it('bật ⇒ POST /me/profile/items key_relations + object_entity_id (đường Hồ sơ, máy chủ đòi PIN)', async () => {

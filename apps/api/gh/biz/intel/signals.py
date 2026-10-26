@@ -213,13 +213,23 @@ def work_hours_of(s: dict[str, Any], org_id: uuid.UUID) -> levels.WorkHours:
     return levels.WorkHours(start=_hhmm(s, "work_start", "08:00", org_id), end=_hhmm(s, "work_end", "17:30", org_id))
 
 
-def ramp_days(s: dict[str, Any], installed: datetime, now: datetime) -> float:
-    """R4: `days_since_install` = min(ngày từ cài, ngày từ `intel.ramp_started_at`). Thiếu/sai ramp ⇒ chỉ ngày từ cài."""
-    days = max(0.0, (_aware(now) - _aware(installed)).total_seconds() / 86400.0)
-    ramp = profile_read.parse_when(s.get("ramp_started_at"))
-    if ramp is not None:
-        days = min(days, max(0.0, (_aware(now) - _aware(ramp)).total_seconds() / 86400.0))
-    return days
+def ramp_start(s: dict[str, Any], installed: datetime, org_id: uuid.UUID | None = None) -> datetime | None:
+    """Mốc bắt đầu chạy thử hiệu lực = muộn hơn của (cài, `ramp_started_at`). `ramp_started_at` có giá trị mà sai định dạng ⇒ None (bên gọi coi như
+    chưa qua ngày nào, ghi log — fail-safe: không bao giờ tự đẩy thật vì cấu hình hỏng)."""
+    raw = s.get("ramp_started_at")
+    ramp = profile_read.parse_when(raw)
+    if ramp is None:
+        if raw not in (None, ""):
+            log.warning("intel settings: ramp_started_at sai định dạng ở tổ chức %s, coi như vừa bắt đầu chạy thử", org_id)
+            return None
+        return _aware(installed)
+    return max(_aware(installed), _aware(ramp))
+
+
+def ramp_days(s: dict[str, Any], installed: datetime, now: datetime, org_id: uuid.UUID | None = None) -> float:
+    """R4: `days_since_install` = min(ngày từ cài, ngày từ `intel.ramp_started_at`). Thiếu ramp ⇒ ngày từ cài; ramp sai định dạng ⇒ 0 + log."""
+    start = ramp_start(s, installed, org_id)
+    return 0.0 if start is None else max(0.0, (_aware(now) - start).total_seconds() / 86400.0)
 
 
 async def delivery_state(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, exclude: uuid.UUID | None = None) -> levels.DeliveryState:
@@ -238,7 +248,7 @@ async def delivery_state(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, 
         red_cap_per_day=_int_setting(s, "red_cap_per_day", 3, org_id), reds_pushed_today=int(reds),
         # v0.1.77 (R4): chạy thử 14 ngày tính từ `ramp_started_at` (migration 0045 đặt lúc lên bản này) — trong chạy thử `compute` ra 🔴 bóng
         # (digest_top + would_push) cho bốn cổng thường; qua 14 ngày VÀ mã ∈ `m1_passed_gates` (job đêm, M1 gộp n ≥ 10) mới đẩy thật.
-        days_since_install=ramp_days(s, installed, now),
+        days_since_install=ramp_days(s, installed, now, org_id),
         ramp_early_enable=levels.REGULAR_PUSH_ENABLED and s.get("ramp_gates") == "push",
         m1_passed_gates=gates("m1_passed_gates") if levels.REGULAR_PUSH_ENABLED else [], low_precision_gates=gates("low_precision_gates"), quiet_hours=quiet,
         money_small_vnd=int(s.get("money_small_vnd") or 5_000_000), money_big_vnd=int(s.get("money_big_vnd") or 50_000_000),
@@ -329,6 +339,17 @@ def _union_people(a: list[levels.PersonRel], b: list[levels.PersonRel]) -> list[
     return list(out.values())
 
 
+STAGE_RANK = {"vent": 0, "voice": 1, "ultimatum": 2, "third_party": 2, "exit_pending": 3, "exit_done": 4}
+
+
+def _merge_stage(old: str | None, new: str | None) -> str | None:
+    """Bậc hành vi gộp = bậc CAO nhất (vent < voice < ultimatum ≈ third_party < exit_pending < exit_done); hoà ⇒ bản mới. Đã có exit_* thì không
+    bao giờ bị bản sau (voice/third_party…) kéo xuống."""
+    if old is None or new is None:
+        return new or old
+    return new if STAGE_RANK[new] >= STAGE_RANK[old] else old
+
+
 def merge_level_input(old: levels.SignalIn, new: levels.SignalIn) -> levels.SignalIn:
     """Gộp tin mới vào vụ đang mở: HỢP với bản cũ, không thay thế — tin yếu hơn tới sau (cùng khoá / cùng tin gốc, OCR tới muộn) không
     bao giờ hạ được 🔴 lừa đảo/an toàn (fail-high). Tập (`hard_rule_hit`, victims, impersonated, payee_refs) hợp; cờ OR; `txn_state`
@@ -346,8 +367,8 @@ def merge_level_input(old: levels.SignalIn, new: levels.SignalIn) -> levels.Sign
     # r7 (c′): trường vắng ở bản mới KHÔNG làm rơi bản cũ. `asks_for_owner` gộp OR và THẮNG `staff_owned` (CNS-179: ai đòi gặp chủ thì
     # không còn "NV đang lo"); `prior_threat_no_exit_n` lấy max; nested (Promise/Opportunity/Thread) chỉ giữ phần "đã có nguồn" của bản cũ.
     asks = old.asks_for_owner or new.asks_for_owner
-    staff_owned = (old.staff_owned or new.staff_owned) and not asks
-    staff_ref = None if not staff_owned else (new.staff_ref or old.staff_ref)
+    staff_owned = new.staff_owned and not asks                 # detector tính lại mỗi lượt: khách nhắn sau NV ⇒ false (CNS-179)
+    staff_ref = new.staff_ref if staff_owned else None
     promise = new.promise.model_copy(update={"nudged_by_customer": old.promise.nudged_by_customer or new.promise.nudged_by_customer,
                                              "fixed_occasion": old.promise.fixed_occasion or new.promise.fixed_occasion})
     opportunity = new.opportunity.model_copy(update={"need_fields_n": new.opportunity.need_fields_n if new.opportunity.need_fields_n is not None
@@ -386,7 +407,7 @@ def merge_level_input(old: levels.SignalIn, new: levels.SignalIn) -> levels.Sign
         "subject_entity_id": new.subject_entity_id or old.subject_entity_id,
         "goal_priority1_match_valid": old.goal_priority1_match_valid or new.goal_priority1_match_valid,
         "goods_risk": old.goods_risk or new.goods_risk,
-        "complaint_stage": new.complaint_stage or old.complaint_stage, "asks_for_owner": asks,
+        "complaint_stage": _merge_stage(old.complaint_stage, new.complaint_stage), "asks_for_owner": asks,
         "public_venue": new.public_venue or old.public_venue,
         "prior_threat_no_exit_n": max(old.prior_threat_no_exit_n, new.prior_threat_no_exit_n),
         "staff_owned": staff_owned, "staff_ref": staff_ref,

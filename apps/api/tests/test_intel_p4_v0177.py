@@ -72,7 +72,7 @@ async def test_days_since_install_is_min_of_install_and_ramp(db: AsyncSession) -
     await _settings(db, org, ramp_started_at=(NOW - timedelta(days=90)).isoformat())
     assert round((await signals.delivery_state(db, org, NOW)).days_since_install) == 40                  # ramp cũ hơn cài ⇒ ngày từ cài
     await _settings(db, org, ramp_started_at="rác")
-    assert round((await signals.delivery_state(db, org, NOW)).days_since_install) == 40                  # sai định dạng ⇒ bỏ qua
+    assert (await signals.delivery_state(db, org, NOW)).days_since_install == 0.0                        # sai định dạng ⇒ 0 (không tự đẩy thật) + log
 
 
 async def test_new_install_and_ramp_trial_regular_red_is_shadow_not_pushed(db: AsyncSession) -> None:
@@ -143,11 +143,22 @@ def test_merge_keeps_r7_fields_of_old_when_new_is_silent() -> None:
               deadline_granularity="day", promise={"nudged_by_customer": True, "fixed_occasion": True},
               opportunity={"need_fields_n": 3}, thread={"type": "group", "size": 20, "customer_audience_n": 5})
     m = signals.merge_level_input(old, _si())                                        # tin mới vắng mọi trường r7
-    assert (m.staff_owned, m.staff_ref, m.prior_threat_no_exit_n) == (True, "u_nv1", 2)
+    assert (m.staff_owned, m.staff_ref, m.prior_threat_no_exit_n) == (False, None, 2)           # staff_owned theo bản MỚI (CNS-179)
     assert (m.complaint_stage, m.public_venue, m.deadline_granularity) == ("ultimatum", "group", "day")
     assert m.promise.nudged_by_customer and m.promise.fixed_occasion and m.opportunity.need_fields_n == 3 and m.thread.customer_audience_n == 5
     m2 = signals.merge_level_input(old, _si(prior_threat_no_exit_n=1, complaint_stage="exit_pending", opportunity={"need_fields_n": 1}))
     assert m2.prior_threat_no_exit_n == 2 and m2.complaint_stage == "exit_pending" and m2.opportunity.need_fields_n == 1     # có nguồn mới ⇒ theo mới
+    assert signals.merge_level_input(old, _si(staff_owned=True, staff_ref="u_nv2")).staff_ref == "u_nv2"
+
+
+def test_merge_staff_owned_old_true_new_false_stays_false_and_stage_is_highest() -> None:
+    m = signals.merge_level_input(_si(staff_owned=True, staff_ref="u_nv1", complaint_stage="voice"), _si(complaint_stage="exit_pending"))
+    assert m.staff_owned is False and m.staff_ref is None and m.complaint_stage == "exit_pending"
+    assert signals.merge_level_input(_si(complaint_stage="exit_pending"), _si(complaint_stage="voice")).complaint_stage == "exit_pending"
+    assert signals.merge_level_input(_si(complaint_stage="exit_done"), _si(complaint_stage="third_party")).complaint_stage == "exit_done"
+    assert signals.merge_level_input(_si(complaint_stage="voice"), _si(complaint_stage="ultimatum")).complaint_stage == "ultimatum"
+    assert signals.merge_level_input(_si(complaint_stage="ultimatum"), _si(complaint_stage="vent")).complaint_stage == "ultimatum"
+    assert signals.merge_level_input(_si(complaint_stage="ultimatum"), _si()).complaint_stage == "ultimatum"
 
 
 # ─── stage_eff lưu ngoài SignalIn ─────────────────────────────────────────────
@@ -631,7 +642,7 @@ async def test_console_state_has_ramp_banner_data_and_shadow_items_with_pin_priv
     now = datetime.now(VN)
     await db.execute(text("""UPDATE core.organizations SET settings = jsonb_set(COALESCE(settings, '{}'::jsonb), '{intel}',
                              COALESCE(settings -> 'intel', '{}'::jsonb) || CAST(:s AS jsonb)) WHERE id = :o"""),
-                     {"s": orjson.dumps({"ramp_started_at": (now - timedelta(days=2)).isoformat()}).decode(), "o": org})
+                     {"s": orjson.dumps({"installed_at": (now - timedelta(days=60)).isoformat(), "ramp_started_at": (now - timedelta(days=2)).isoformat()}).decode(), "o": org})
     pub = (await _g3_signal(db, org, "pub")).id                               # 🔴 G3 đang chạy thử (cài mới) ⇒ bóng
     priv = (await _g3_signal(db, org, "priv", privacy="console_pin")).id
     await db.commit()
@@ -665,7 +676,8 @@ async def test_console_ramp_ends_when_window_over_and_gates_passed(owner_api: Ap
     now = datetime.now(VN)
     await db.execute(text("""UPDATE core.organizations SET settings = jsonb_set(COALESCE(settings, '{}'::jsonb), '{intel}',
                              COALESCE(settings -> 'intel', '{}'::jsonb) || CAST(:s AS jsonb)) WHERE id = :o"""),
-                     {"s": orjson.dumps({"ramp_started_at": (now - timedelta(days=20)).isoformat(), "m1_passed_gates": list(levels.REGULAR_GATES)}).decode(), "o": org})
+                     {"s": orjson.dumps({"installed_at": (now - timedelta(days=60)).isoformat(), "ramp_started_at": (now - timedelta(days=20)).isoformat(),
+                                         "m1_passed_gates": list(levels.REGULAR_GATES)}).decode(), "o": org})
     await db.commit()
     r = (await owner_api.get("/intel/console")).json()["ramp"]
     assert r["in_trial"] is False and r["days_left"] == 0 and set(r["passed_gates"]) == set(levels.REGULAR_GATES)
@@ -697,3 +709,146 @@ def test_merge_new_value_wins_nudged_by_customer_true_in_new_is_kept() -> None:
     assert signals.merge_level_input(new, old).promise.nudged_by_customer is True        # đã nhắc thì giữ (OR), không bị bản sau vắng làm rơi
     m2 = signals.merge_level_input(_li("xung_dot_khieu_nai", complaint_stage="voice"), _li("xung_dot_khieu_nai", complaint_stage="exit_pending", staff_ref="u_n"))
     assert m2.complaint_stage == "exit_pending"                                           # bản mới có giá trị ⇒ theo bản mới
+
+
+# ─── review P4: banner, action ở kênh chính, checked_action, nightly 30 ngày ──
+
+async def test_ramp_banner_new_install_is_trial_not_renewed_and_early_push_turns_it_off(owner_api: Api, db: AsyncSession) -> None:
+    org = await _org(db)
+    now = datetime.now(VN)
+
+    async def ramp(**intel: Any) -> dict[str, Any]:
+        await db.execute(text("UPDATE core.organizations SET settings = settings - 'intel' WHERE id = :o"), {"o": org})
+        await _settings(db, org, **intel)
+        await db.commit()
+        return (await owner_api.get("/intel/console")).json()["ramp"]  # type: ignore[no-any-return]
+
+    r = await ramp(installed_at=(now - timedelta(days=3)).isoformat())                  # cài mới, chưa có ramp ⇒ fallback ngày cài, "chạy thử" (không "lại")
+    assert r["in_trial"] is True and r["renewed"] is False and r["days_left"] in (11, 12) and r["started_at"]
+    r = await ramp(installed_at=(now - timedelta(days=60)).isoformat(), ramp_started_at=(now - timedelta(days=3)).isoformat())
+    assert r["in_trial"] is True and r["renewed"] is True                               # cài lâu, ramp mới ⇒ chạy thử LẠI
+    r = await ramp(installed_at=(now - timedelta(days=60)).isoformat(), ramp_started_at=(now - timedelta(days=3)).isoformat(), ramp_gates="push")
+    assert r["in_trial"] is False and r["early_push"] is True                           # Sếp chọn nhắn ngay sớm ⇒ banner tắt
+    r = await ramp(installed_at=(now - timedelta(days=60)).isoformat(), ramp_started_at=(now - timedelta(days=20)).isoformat(),
+                   m1_passed_gates=list(levels.REGULAR_GATES), mode="shadow")
+    assert r["in_trial"] is True                                                         # chế độ chạy thử toàn bộ
+    r = await ramp(installed_at=(now - timedelta(days=60)).isoformat(), ramp_started_at=(now - timedelta(days=20)).isoformat(), m1_passed_gates=[])
+    assert r["in_trial"] is True                                                         # qua 14 ngày nhưng chưa cổng nào đạt M1
+    r = await ramp(installed_at=(now - timedelta(days=60)).isoformat(), ramp_started_at=(now - timedelta(days=20)).isoformat(),
+                   m1_passed_gates=list(levels.REGULAR_GATES))
+    assert r["in_trial"] is False and r["red_cap_per_day"] == 3
+
+
+def test_checked_action_review_rules_copy_accents_and_price_pattern() -> None:
+    q = ["Khách nói giao hàng trễ quá em không chịu được nữa đâu"]
+    assert digest.checked_action("Khách nói giao hàng trễ quá em không chịu", q) is None          # ≥ 6 từ liền trùng lời khách
+    assert digest.checked_action("Gọi khách xin lỗi vụ trễ", q) == "Gọi khách xin lỗi vụ trễ"
+    for bad in ("CHOT DON luon", "Moi khach mua them", "chao ban combo", "Chốt Đơn ngay", "BÁN THÊM phụ kiện"):
+        assert digest.checked_action(bad, None) is None, bad
+    for ok in ("giá bao nhiêu vậy shop", "cho em xin báo giá", "bao nhiêu tiền một bao", "giá sao anh", "hỏi giá giúp em"):
+        assert digest.checked_action("Báo giá cho khách", ok) == "Báo giá cho khách", ok
+    assert digest.checked_action("Báo giá cho khách", "khách chê trễ") is None
+    assert digest.checked_action("Báo giá cho khách", ["giá của anh cao quá"]) is None           # "giá" trơn không phải câu hỏi giá
+
+
+async def test_digest_fraud_and_safety_always_use_fixed_template_even_with_model_action(db: AsyncSession) -> None:
+    org = await mk_org(db)
+    await _row(db, org, "fr", kind=levels.FR, level="red", gate=levels.G1, reasons=["window_expired"], action="Gọi khách xác nhận giờ giao")
+    await _row(db, org, "sk", kind=levels.SK, level="red", gate=levels.G2, action="Nhắn tin hỏi thăm")
+    acts = {it.kind: it.action for it in (await _order(db, org)).items}
+    assert acts[levels.FR] == "Gọi xác minh trực tiếp, chưa chuyển tiền/giao hàng" and acts[levels.SK] == "Gọi hỏi tình hình, cần thì gọi 115"
+
+
+async def test_digest_staff_owned_line_in_digest_group_also_names_staff(db: AsyncSession) -> None:
+    org = await mk_org(db)
+    pid = (await db.execute(text("INSERT INTO core.persons (org_id, code, display_name, person_type) VALUES (:o, core.next_code('PER'), 'Lan', 'staff') RETURNING id"),
+                            {"o": org})).scalar_one()
+    await _row(db, org, "n", kind="xung_dot_khieu_nai", delivery="digest", reasons=["staff_owned"], staff_ref=f"u_{pid}", title="Khách chê")
+    [it] = (await _order(db, org)).items
+    assert it.title == "NV Lan đang lo: Khách chê" and it.action == "Không cần làm gì, NV Lan đang lo"
+
+
+async def test_zalo_digest_text_prints_owner_action_line_masked_and_within_ten_lines(db: AsyncSession) -> None:
+    from gh.biz.intel.pipes import delivery
+
+    org = await mk_org(db)
+    for i in range(4):
+        await _row(db, org, f"a{i}", delivery="digest", action="Gọi khách theo số 0912345678 xác nhận giờ giao" if i == 0 else None)
+    d = await _order(db, org)
+    text_, shown = delivery.render(d, label="07:30", shadow=False, hidden_console=0, coverage_line="Độ phủ: ok", recovered=[])
+    assert "Việc Sếp cần làm:" in text_ and "0912345678" not in text_              # che số như quote
+    assert len(text_.splitlines()) <= 10 and len(text_) <= 1500 and shown
+
+
+async def test_owner_chat_hom_nay_prints_owner_action_line(db: AsyncSession) -> None:
+    from types import SimpleNamespace
+
+    from gh.db import sessionmaker
+    from gh.owner_cmd import core
+
+    org = await mk_org(db)
+    await _row(db, org, "a", delivery="digest", action="Gọi khách xác nhận giờ giao")
+    await db.commit()
+    lines = await core.digest_lines(SimpleNamespace(sm=sessionmaker(), org_id=org), NOW)  # type: ignore[arg-type]
+    assert any(ln.strip().startswith("Việc Sếp cần làm: Gọi khách xác nhận giờ giao") for ln in lines)
+
+
+async def test_m1_latest_owner_verdict_decides_even_if_not_correct_wrong(db: AsyncSession) -> None:
+    org = await _ramp_org(db, NOW - timedelta(days=5))
+    [a, b] = await _shadow_ids(db, org, 2)
+    await _fb(db, org, a, "correct")
+    await _fb(db, org, a, "unimportant", at=NOW + timedelta(minutes=1))                # bản mới nhất là "không quan trọng" ⇒ không còn tính Đúng
+    await _fb(db, org, b, "wrong", reason="not_urgent")
+    await _fb(db, org, b, "correct", at=NOW + timedelta(minutes=1))
+    m = await metrics.m1_ramp(db, org)
+    assert (m["pooled"]["k"], m["pooled"]["n"]) == (1, 1)
+
+
+async def test_console_shadow_items_exclude_really_pushed(owner_api: Api, db: AsyncSession) -> None:
+    org = await _org(db)
+    sid = (await _g3_signal(db, org, "p")).id
+    await db.commit()
+    assert {i["id"] for i in (await owner_api.get("/intel/console")).json()["shadow_items"]} == {str(sid)}
+    await db.execute(text("UPDATE biz.alerts SET pushed_at = now() WHERE id = :i"), {"i": sid})
+    await db.commit()
+    assert (await owner_api.get("/intel/console")).json()["shadow_items"] == []
+
+
+async def test_nightly_stalled_alert_once_per_gate_after_30_days_via_owner_channel(db: AsyncSession) -> None:
+    from tests.owner_helpers import bot_world
+
+    org = await _ramp_org(db, NOW - timedelta(days=40))
+    await _raw(db, org)                                                                     # tạo kênh trước khi dựng bot
+    await bot_world(db, org)
+    ids = await _shadow_ids(db, org, 3)
+    for sid in ids:
+        await _fb(db, org, sid, "correct", gate=levels.G3)
+    m = await metrics.run_m1_nightly(db, org, NOW)
+    assert set(m["stalled_notified"]) == set(levels.REGULAR_GATES)                      # chưa đạt M1 sau > 30 ngày ⇒ báo từng loại
+    rows = (await db.execute(text("SELECT text, dedupe_key, kind FROM ops.owner_outbox WHERE org_id = :o AND dedupe_key LIKE 'intel-m1-stalled:%'"), {"o": org})).all()
+    assert len(rows) == 4 and all(r.kind == "alert" and "30 ngày" in r.text and "3/10" in r.text for r in rows)
+    assert "khách chê" in " ".join(r.text for r in rows)
+    m2 = await metrics.run_m1_nightly(db, org, NOW + timedelta(days=1))                  # đêm sau: không lặp
+    assert m2["stalled_notified"] == []
+    assert (await db.execute(text("SELECT count(*) FROM ops.owner_outbox WHERE org_id = :o AND dedupe_key LIKE 'intel-m1-stalled:%'"), {"o": org})).scalar_one() == 4
+    assert (await db.execute(text("SELECT count(*) FROM ops.action_log WHERE org_id = :o AND action = 'intel.m1.stalled'"), {"o": org})).scalar_one() == 4
+    # nhật ký đêm chỉ khi danh sách đổi: hai đêm giống nhau ⇒ một dòng
+    assert (await db.execute(text("SELECT count(*) FROM ops.action_log WHERE org_id = :o AND action = 'intel.m1.nightly'"), {"o": org})).scalar_one() == 1
+
+
+async def test_nightly_no_stalled_alert_before_30_days_or_without_channel_or_when_passed(db: AsyncSession) -> None:
+    from tests.owner_helpers import bot_world
+
+    young = await _ramp_org(db, NOW - timedelta(days=20))
+    await _raw(db, young)                                                                     # tạo kênh trước khi dựng bot
+    await bot_world(db, young)
+    assert (await metrics.run_m1_nightly(db, young, NOW))["stalled_notified"] == []
+    nochan = await _ramp_org(db, NOW - timedelta(days=40))                               # chưa bật kênh quản trị ⇒ không xếp
+    assert (await metrics.run_m1_nightly(db, nochan, NOW))["stalled_notified"] == []
+    done = await _ramp_org(db, NOW - timedelta(days=40))
+    await _raw(db, done)                                                                     # tạo kênh trước khi dựng bot
+    await bot_world(db, done)
+    for sid in await _shadow_ids(db, done, 10):
+        await _fb(db, done, sid, "correct", gate=levels.G3)
+    m = await metrics.run_m1_nightly(db, done, NOW)
+    assert m["pooled"]["m1_ok"] and m["stalled_notified"] == []

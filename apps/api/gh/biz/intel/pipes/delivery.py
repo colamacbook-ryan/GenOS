@@ -39,6 +39,7 @@ log = logging.getLogger("gh.intel.delivery")
 
 JOB = "intel.digest_zalo"
 MAX_LINES, MAX_CHARS, MAX_ITEMS, QUOTE_MAX = 10, reports.TEXT_MAX, 6, 80
+ACTION_MAX = 100
 HINT = "Trả lời: «1 ok» · «2 sai» · «3 không cần báo» · «em sót: …»"
 QUIET_DAY = "Hôm nay yên, không có gì cần Sếp ra tay."
 URGENT_HEAD = "Điểm gấp trong ngày"
@@ -163,6 +164,8 @@ def _item_line(it: digest_mod.DigestItem) -> str:
         head += " " + _one_line(" · ".join(it.line_facts), 60)
     if it.quote:
         head += f" «{_one_line(it.quote, QUOTE_MAX)}»"
+    if it.action:                                       # "Việc Sếp cần làm" (Q18): dòng riêng cuối mục; `render` che số như phần còn lại
+        head += f"\n   Việc Sếp cần làm: {_one_line(it.action, ACTION_MAX)}"
     return head
 
 
@@ -196,7 +199,7 @@ def render(d: digest_mod.Digest, *, label: str, shadow: bool, hidden_console: in
         return display_mask("\n".join(lines + tail))
 
     out = build(k)
-    while len(out) > MAX_CHARS and k > 0:
+    while (len(out) > MAX_CHARS or len(out.splitlines()) > MAX_LINES) and k > 0:      # mỗi mục có thể 2 dòng (kèm "Việc Sếp cần làm")
         k -= 1
         out = build(k)
     return out[:MAX_CHARS], d.items[:k]

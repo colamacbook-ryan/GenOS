@@ -53,6 +53,10 @@ export interface IntelRampState {
   /** Còn trong 14 ngày hoặc bốn cổng chưa qua M1 ⇒ bốn cổng thường chưa nhắn riêng. */
   in_trial: boolean;
   passed_gates: string[];
+  /** true ⇒ chạy thử LẠI (ramp muộn hơn ngày cài); false/vắng-mới-cài ⇒ chỉ "chạy thử". Máy chủ cũ không gửi ⇒ coi như "lại". */
+  renewed?: boolean;
+  /** Trần 🔴 báo ngay/ngày đã cấu hình (cho chữ "quá N tin báo ngay hôm nay"). */
+  red_cap_per_day?: number;
   m1: { n: number; k: number; p: number | null; lo95: number | null; ok: boolean; min_n: number; wrong_by_reason: Record<string, number>; low_precision_gates: string[] };
 }
 
@@ -82,10 +86,10 @@ export const REASON_LABEL: Record<string, string> = {
   milestone_due_soon: 'sắp tới hạn lời hứa',
   staff_owned: 'nhân viên đang lo',
   asks_for_owner: 'khách đòi gặp Sếp',
-  capped: 'quá 3 tin báo ngay hôm nay',
   precision: 'loại này bị chấm Sai nhiều',
 };
-export const reasonText = (codes: string[]): string[] => codes.map((c) => REASON_LABEL[c]).filter((x): x is string => !!x);
+export const reasonText = (codes: string[], redCap = 3): string[] =>
+  codes.map((c) => (c === 'capped' ? `quá ${redCap} tin báo ngay hôm nay` : REASON_LABEL[c])).filter((x): x is string => !!x);
 
 /** Tên loại tín hiệu cho Sếp; loại lạ ⇒ "Tín hiệu". */
 export const KIND_LABEL: Record<string, string> = {
@@ -114,7 +118,7 @@ export function vnDay(iso: string | null | undefined): string {
 export function rampBannerText(r: IntelRampState | undefined): string {
   if (!r || !r.in_trial) return '';
   const from = vnDay(r.started_at);
-  const head = `Chạy thử lại ${r.days} ngày${from ? ` (từ ${from})` : ''}`;
+  const head = `Chạy thử${r.renewed === false ? '' : ' lại'} ${r.days} ngày${from ? ` (từ ${from})` : ''}`;
   const left = r.days_left != null && r.days_left > 0 ? `, còn ${r.days_left} ngày` : '';
   const need = Math.max(0, r.m1.min_n - r.m1.n);
   const m1 = need > 0 ? `Sếp đã chấm ${r.m1.n}/${r.m1.min_n} lượt` : r.m1.ok ? 'Độ đúng đã đạt' : `Đã chấm ${r.m1.n} lượt, chưa đủ chính xác để nhắn ngay`;

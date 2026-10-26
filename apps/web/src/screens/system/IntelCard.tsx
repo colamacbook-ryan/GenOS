@@ -126,7 +126,7 @@ function ShadowRow({ s }: { s: IntelConsole }) {
           <p className="muted-note">Gen chưa nhắn riêng các mục này. Sếp chấm Đúng hoặc Sai để Gen biết khi nào đủ chính xác để nhắn ngay.</p>
           <ul className="intel-list">
             {items.map((it) => {
-              const why = reasonText(it.reasons);
+              const why = reasonText(it.reasons, s.ramp?.red_cap_per_day);
               return (
                 <li key={it.id} className="intel-list__item intel-shadow__item">
                   <span className="intel-list__text">
