@@ -78,7 +78,8 @@ PART_WORST_S = 2 * AGY_BACKGROUND_TIMEOUT_S
 ATTENTION_TYPES = {"Complained", "MentionsCompetitor", "WentSilent"}
 OPEN_THREAD_TYPES = {"PromisedDelivery", "ScheduledMeeting", "AskedStatus", "RequestedSample", "SentQuotation"}
 #: Giá trị `core.persons.person_type` quy tắc sàng lọc được phép đặt (khớp bảng lookup / hợp đồng PersonType).
-PERSON_TYPES = frozenset({"customer", "partner", "staff", "candidate", "learner", "supplier"})
+#: KHÔNG có "staff" (v0.1.76, security review T14): vai nhân viên chỉ do Sếp đặt qua `PATCH /profile` (Owner + PIN + strong_confirm).
+PERSON_TYPES = frozenset({"customer", "partner", "candidate", "learner", "supplier"})
 RULE_KIND_ALERT = {"risk": "repeated_complaint", "competition": "competitor", "hr": "people_signal",
                    "intent": "opportunity_signal", "custom": "rule_alert", "hygiene": "rule_alert"}
 

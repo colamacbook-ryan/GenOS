@@ -265,6 +265,11 @@ def validate(conditions: list[dict[str, Any]], outputs: list[dict[str, Any]]) ->
         if "set" in o:
             if o["set"] not in SET_FIELDS or not isinstance(o.get("value"), str) or not o["value"]:
                 errors[key] = f"set phải thuộc {', '.join(SET_FIELDS)} và có value"
+            elif o["set"] == "person_type" and o["value"].strip().lower() == "staff":
+                # v0.1.76 (security review T14, L-90): vai nhân viên hạ phòng thủ lừa đảo
+                # ⇒ chỉ Sếp đánh dấu trong hồ sơ (Owner + PIN).
+                errors[key] = ("Quy tắc không được gán loại «nhân viên» — Sếp đánh dấu nhân viên "
+                               "trong hồ sơ người (cần mã PIN)")
         elif "add" in o:
             if o["add"] not in ADD_FIELDS or not isinstance(o.get("value"), (int, float)) \
                     or not -100 <= o["value"] <= 100:

@@ -101,6 +101,7 @@ async def test_intel_core_quote_display_is_masked_and_short(db: AsyncSession) ->
 
 # ─── (a) một sự việc = một tín hiệu, không lặp 🔴 ─────────────────────────────
 
+@pytest.mark.usefixtures("regular_push_on")
 async def test_intel_case_key_same_case_merges_one_signal_no_repeat_red(db: AsyncSession) -> None:
     org = await mk_org(db)
     await _install(db, org)
@@ -120,6 +121,7 @@ async def test_intel_case_key_same_case_merges_one_signal_no_repeat_red(db: Asyn
     assert (await db.execute(text("SELECT count(*) FROM biz.alerts WHERE org_id = :o AND cap_day IS NOT NULL"), {"o": org})).scalar_one() == 1
 
 
+@pytest.mark.usefixtures("regular_push_on")
 async def test_intel_case_key_escalation_repushes_once(db: AsyncSession) -> None:
     org = await mk_org(db)
     await _install(db, org)
@@ -220,6 +222,7 @@ async def test_intel_feedback_owner_correct_beats_system_reject(db: AsyncSession
 
 # ─── (c) tính lại theo đồng hồ ────────────────────────────────────────────────
 
+@pytest.mark.usefixtures("regular_push_on")
 async def test_intel_reeval_clock_promise_escalates_to_red_without_new_message(db: AsyncSession) -> None:
     org = await mk_org(db)
     await _install(db, org)
@@ -260,6 +263,7 @@ async def test_intel_reeval_ignores_closed_and_other_org(db: AsyncSession) -> No
 
 # ─── trần nguyên tử, bóng, mute ───────────────────────────────────────────────
 
+@pytest.mark.usefixtures("regular_push_on")
 async def test_intel_cap_three_reds_per_day_then_capped_fraud_uncapped(db: AsyncSession) -> None:
     org = await mk_org(db)
     await _install(db, org)
@@ -356,6 +360,7 @@ def test_intel_cap_day_evening_quiet_counts_next_day() -> None:
     assert signals.wilson_low(9, 10) < 0.6 <= signals.wilson_low(10, 10)
 
 
+@pytest.mark.usefixtures("regular_push_on")
 async def test_intel_cap_reservation_is_atomic_across_parallel_sessions(db: AsyncSession) -> None:
     """Giữ chỗ trần nguyên tử (CNS-126): đã 2/3 🔴 hôm nay, hai lượt SONG SONG cùng ra 🔴 ⇒ đúng MỘT được push_now, lượt kia bị trần."""
     import asyncio

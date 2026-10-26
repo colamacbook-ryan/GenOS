@@ -291,7 +291,7 @@ async def push_alerts(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> int
         return 0
     # Chỉ lấy dòng CHƯA có tin (khoá `signal:{id}:{pushed_at}`), mới nhất trước: không bị ≥ 10 tín hiệu cũ chiếm chỗ (bỏ đói).
     rows = (await db.execute(text("""
-        SELECT a.id, a.title, a.summary, a.suggested_action, a.evidence, a.pushed_at, a.privacy FROM biz.alerts a
+        SELECT a.id, a.title, a.summary, a.suggested_action, a.evidence, a.pushed_at, a.privacy, a.reasons FROM biz.alerts a
         WHERE a.org_id = :o AND a.delivery = 'push_now' AND a.pushed_at IS NOT NULL
           AND a.status IN ('open', 'acknowledged') AND a.kind NOT IN ('system', 'legacy')
           AND NOT EXISTS (SELECT 1 FROM ops.owner_outbox x WHERE x.org_id = a.org_id AND x.channel_type = :c
@@ -307,7 +307,8 @@ async def push_alerts(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> int
         else:
             why = _one_line(r.summary or "Vụ này cần Sếp xem ngay.", 160)
             quote = digest_mod._quote(r.evidence)
-            lines = [f"🔴 {_one_line(r.title, 110)}" + (f" «{_one_line(quote, QUOTE_MAX)}»" if quote else "") + f" #{code}", f"Vì sao: {why}",
+            remind = "Nhắc lại — hôm nay là ngày hẹn chuyển tiền: " if "txn_day_reminder" in (r.reasons or []) else ""
+            lines = [f"🔴 {remind}{_one_line(r.title, 110)}" + (f" «{_one_line(quote, QUOTE_MAX)}»" if quote else "") + f" #{code}", f"Vì sao: {why}",
                      f"Đề xuất: {_one_line(r.suggested_action or 'Sếp xem chi tiết trên Console.', 160)}", "Trả lời: «1 ok» · «1 sai» · «1 không cần báo»"]
             body = display_mask("\n".join(lines))
             refs = [{"n": 1, "signal_id": str(r.id), "ask_id": None, "ask_code": None, "cluster_ids": None, "code": code}]

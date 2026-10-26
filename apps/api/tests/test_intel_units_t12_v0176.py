@@ -302,6 +302,7 @@ async def test_t12_promise_fact_path_and_unit_path_never_double(db: AsyncSession
 
 # ─── khiếu nại / câu hỏi ─────────────────────────────────────────────────────
 
+@pytest.mark.usefixtures("regular_push_on")
 async def test_t12_customer_public_complaint_threat_routes_to_conflicts_gate3(db: AsyncSession) -> None:
     w = await _world(db)
     cpid, ciid, _ = await _person(db, w, "Anh Bình", ptype="customer")

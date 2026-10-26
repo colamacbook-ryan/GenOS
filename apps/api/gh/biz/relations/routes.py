@@ -13,7 +13,7 @@ import re
 import urllib.parse
 import uuid
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 import orjson
@@ -594,6 +594,19 @@ async def patch_profile(person_id: uuid.UUID, body: ProfilePatch, user: service.
     await ensure_person(db, sc, person_id)
     fields = body.model_fields_set
     detail: dict[str, Any] = {}
+    cur = (await db.execute(text("SELECT person_type, relation_to_owner, attrs FROM core.persons WHERE id = :i"), {"i": person_id})).one()
+    staff_change = body.person_type is not None and (body.person_type == "staff") != (cur.person_type == "staff")
+    if staff_change:
+        # v0.1.76 (T14, review SECURITY): sang / khỏi `staff` = hạ phòng thủ lừa đảo (nhân viên không còn là "người lạ", tin "đã xử lý" của họ
+        # tính là phía Sếp) ⇒ chỉ Owner + phiên PIN, báo kênh phụ qua strong_confirm. Loại khác giữ quyền `profile.write` như cũ.
+        from gh.biz.intel import strong_confirm
+
+        if user.role_code != rbac.OWNER:
+            raise ApiError(403, "FORBIDDEN", "Chỉ Sếp được đánh dấu hoặc bỏ đánh dấu nhân viên",
+                           detail="đổi loại người sang/khỏi nhân viên cần Owner + mã PIN")
+        if not user.pin_active():
+            raise pin_required()
+        await strong_confirm.require(db, user.org_id, "staff_mark", via="console", pin_verified=True)
     if "owner_user_id" in fields:
         await ensure_active_user(db, user.org_id, body.owner_user_id)
         await db.execute(text("UPDATE core.persons SET owner_user_id = :u, updated_at = now() WHERE id = :i"),
@@ -604,10 +617,24 @@ async def patch_profile(person_id: uuid.UUID, body: ProfilePatch, user: service.
                                   autonomy_level=body.autonomy_level, set_autonomy=True)
         detail["autonomy_level"] = body.autonomy_level
     if body.person_type is not None:
-        # Khoá `person_type_locked`: loại do Sếp đặt thắng quy tắc sàng lọc (runner chỉ nâng từ 'unknown' chưa khoá).
-        await db.execute(text("""UPDATE core.persons SET person_type = :t, updated_at = now(),
-                                 attrs = COALESCE(attrs, '{}'::jsonb) || '{"person_type_locked": true}'::jsonb
-                                 WHERE id = :i"""), {"t": body.person_type, "i": person_id})
+        # Khoá `person_type_locked`: loại do Sếp đặt thắng quy tắc sàng lọc (runner chỉ nâng từ 'unknown' chưa khoá). Sang staff: nhớ loại,
+        # quan hệ, trạng thái khoá trước đó + lúc đánh dấu; khỏi staff về ĐÚNG loại cũ ⇒ khôi phục cả khoá và quan hệ cũ (T14 D3-a).
+        attrs = dict(cur.attrs or {})
+        was_locked = str(attrs.get("person_type_locked")).lower() == "true"
+        attrs["person_type_locked"] = True
+        if staff_change and body.person_type == "staff":
+            attrs["before_staff"] = {"type": cur.person_type or "unknown", "relation": cur.relation_to_owner, "locked": was_locked}
+            attrs["staff_marked_at"] = datetime.now(UTC).isoformat()
+        elif staff_change:
+            prev = attrs.pop("before_staff", None)
+            attrs.pop("staff_marked_at", None)
+            if isinstance(prev, dict) and prev.get("type") == body.person_type and not prev.get("locked"):
+                attrs.pop("person_type_locked")
+            if "relation_to_owner" not in fields or body.relation_to_owner is None:
+                rel = prev.get("relation") if isinstance(prev, dict) else None
+                await db.execute(text("UPDATE core.persons SET relation_to_owner = :r WHERE id = :i"), {"r": rel, "i": person_id})
+        await db.execute(text("""UPDATE core.persons SET person_type = :t, updated_at = now(), attrs = CAST(:a AS jsonb) WHERE id = :i"""),
+                         {"t": body.person_type, "a": orjson.dumps(attrs).decode(), "i": person_id})
         detail["person_type"] = body.person_type
     if body.relation_to_owner is not None:
         await db.execute(text("UPDATE core.persons SET relation_to_owner = :r, updated_at = now() WHERE id = :i"),

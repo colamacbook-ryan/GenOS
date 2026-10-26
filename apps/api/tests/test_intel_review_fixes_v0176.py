@@ -26,6 +26,7 @@ async def _rows(db: AsyncSession, org: uuid.UUID) -> list[Any]:
 
 # ─── F1: khoá trần trên dòng ĐÃ CÓ (gộp, không qua next_code) ────────────────
 
+@pytest.mark.usefixtures("regular_push_on")
 async def test_intel_cap_reservation_atomic_on_existing_rows_merge(db: AsyncSession) -> None:
     """Đã 2/3 🔴 hôm nay; hai vụ ĐANG MỞ (chưa 🔴) cùng được gộp tin mới SONG SONG làm cả hai thành 🔴 ⇒ đúng MỘT push_now. Gộp không gọi
     `core.next_code`, nên chỉ khoá tư vấn trần xếp hàng hai transaction."""
@@ -103,6 +104,7 @@ async def test_intel_upsert_merge_and_reeval_in_parallel_do_not_deadlock(db: Asy
 
 # ─── F5: job đồng hồ bền ─────────────────────────────────────────────────────
 
+@pytest.mark.usefixtures("regular_push_on")
 async def test_intel_reeval_one_bad_row_does_not_block_other_org(db: AsyncSession) -> None:
     a, b = await mk_org(db, "A"), await mk_org(db, "B")
     await _install(db, a)
@@ -175,6 +177,7 @@ async def test_intel_fast_path_then_model_upgrades_weak_key_one_red(db: AsyncSes
 
 # ─── F6: hai loại chung khoá cổng 3 ───────────────────────────────────────────
 
+@pytest.mark.usefixtures("regular_push_on")
 async def test_intel_case_prior_shared_across_kinds_same_case_key(db: AsyncSession) -> None:
     org = await mk_org(db)
     await _install(db, org)
@@ -212,6 +215,7 @@ async def test_intel_muted_signal_closes_on_verified_done_message(db: AsyncSessi
 
 # ─── F4: digest_at không giấu mục leo lên nhóm đầu bản tin ────────────────────
 
+@pytest.mark.usefixtures("regular_push_on")
 async def test_intel_digest_item_escalated_after_sent_shows_again(db: AsyncSession) -> None:
     org = await mk_org(db)
     await _install(db, org)
@@ -230,6 +234,7 @@ async def test_intel_digest_item_escalated_after_sent_shows_again(db: AsyncSessi
 
 # ─── M6: trần 0 ───────────────────────────────────────────────────────────────
 
+@pytest.mark.usefixtures("regular_push_on")
 async def test_intel_red_cap_zero_is_respected(db: AsyncSession) -> None:
     org = await mk_org(db)
     await _install(db, org, red_cap_per_day=0)

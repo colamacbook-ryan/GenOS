@@ -9,6 +9,7 @@ import uuid
 from datetime import timedelta
 from typing import Any
 
+import pytest
 from sqlalchemy import text
 
 from gh import health
@@ -158,6 +159,7 @@ async def test_locked_assistant_sends_nothing_and_keeps_items(db: Any) -> None:
     assert (await db.execute(text("SELECT count(*) FROM ops.job_watermarks WHERE job = :j"), {"j": delivery.JOB})).scalar_one() == 0
 
 
+@pytest.mark.usefixtures("regular_push_on")
 async def test_push_alerts_sends_push_now_chat_ok_only_and_dedupes(db: Any) -> None:
     org = await mk_org(db)
     await _install(db, org)

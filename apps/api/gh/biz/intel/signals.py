@@ -221,8 +221,9 @@ async def delivery_state(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, 
         intel_mode="shadow" if s.get("mode") == "shadow" else "live",
         red_cap_per_day=_int_setting(s, "red_cap_per_day", 3, org_id), reds_pushed_today=int(reds),
         days_since_install=max(0.0, (_aware(now) - _aware(installed)).total_seconds() / 86400.0),
-        ramp_early_enable=s.get("ramp_gates") == "push",
-        m1_passed_gates=gates("m1_passed_gates"), low_precision_gates=gates("low_precision_gates"), quiet_hours=quiet,
+        # v0.1.76: cổng thường chưa được đẩy ngay ở bản này ⇒ không ramp, không M1 ⇒ `compute` ra 🔴 bóng (digest_top + would_push)
+        ramp_early_enable=levels.REGULAR_PUSH_ENABLED and s.get("ramp_gates") == "push",
+        m1_passed_gates=gates("m1_passed_gates") if levels.REGULAR_PUSH_ENABLED else [], low_precision_gates=gates("low_precision_gates"), quiet_hours=quiet,
         money_small_vnd=int(s.get("money_small_vnd") or 5_000_000), money_big_vnd=int(s.get("money_big_vnd") or 50_000_000))
 
 
@@ -334,6 +335,7 @@ def merge_level_input(old: levels.SignalIn, new: levels.SignalIn) -> levels.Sign
         "owner_unanswered_h": max(old.owner_unanswered_h, new.owner_unanswered_h),
         "subject_entity_id": new.subject_entity_id or old.subject_entity_id,
         "goal_priority1_match_valid": old.goal_priority1_match_valid or new.goal_priority1_match_valid,
+        "goods_risk": old.goods_risk or new.goods_risk,
         "mute": None, "case_prior": None})
 
 
@@ -557,7 +559,8 @@ def _merge_case_prior(states: list[dict[str, Any]]) -> levels.CasePrior | None:
         branch_rank=max(int(x.get("branch_rank") or 0) for x in states),
         victim_refs=sorted({str(v) for x in states for v in x.get("victim_refs") or []}),
         payee_refs=sorted({str(v) for x in states for v in x.get("payee_refs") or []}),
-        emergency=any(bool(x.get("emergency")) for x in states), said_will_leave=any(bool(x.get("said_will_leave")) for x in states))
+        emergency=any(bool(x.get("emergency")) for x in states), said_will_leave=any(bool(x.get("said_will_leave")) for x in states),
+        txn_reminded=any(bool(x.get("txn_reminded")) for x in states))
 
 
 LEVEL_RANK = {"off": 0, "grey": 1, "amber": 2, "red": 3}
@@ -623,7 +626,7 @@ async def _relane(db: AsyncSession, org_id: uuid.UUID, signal_id: uuid.UUID, now
         lv0 = levels.compute(s.model_copy(update={"mute": None}), prof, pol, st, now)
         if lv0.delivery == "none" and "closed" in lv0.reasons:
             status = "resolved"
-    esc = "escalation" in lv.reasons
+    esc = "escalation" in lv.reasons or "txn_day_reminder" in lv.reasons    # nhắc lại sáng ngày hẹn chuyển = một lần đẩy mới (D1)
     pushed_at = now if lv.delivery == "push_now" and (r.pushed_at is None or esc) else r.pushed_at
     would_push_at = r.would_push_at or (now if lv.would_push else None)
     capped_at = r.capped_at or (now if lv.capped else None)
@@ -642,6 +645,11 @@ async def _relane(db: AsyncSession, org_id: uuid.UUID, signal_id: uuid.UUID, now
                            "branch_rank": max(int(case_state.get("branch_rank") or 0), lv.branch_rank),
                            "emergency": bool(case_state.get("emergency")) or f.emergency or "emergency_115_chay_cap_cuu" in levels.hard_rules(s),
                            "said_will_leave": bool(case_state.get("said_will_leave")) or f.said_will_leave}
+        rem = levels.txn_remind_at(s)
+        if (lv.gate == levels.G1 and lv.delivery == "push_now" and rem is not None
+                and _aware(now).astimezone(levels.VN).date() >= rem.astimezone(levels.VN).date()):
+            # Lần đẩy này đã rơi vào (hoặc chính là) sáng ngày hẹn chuyển ⇒ không nhắc thêm lần nữa trong vụ (D1).
+            case_state["txn_reminded"] = True
     next_eval = levels.next_change_at(s, now) if status in OPEN else None
     # Mục đã lên bản tin (digest_at) mà nay leo lên nhóm đầu bản tin hoặc tăng mức ⇒ lên lại bản tin kế (F4)
     redigest = ((lv.delivery in TOP_DELIVERY and r.delivery not in TOP_DELIVERY)

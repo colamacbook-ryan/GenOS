@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gh.auth import service
 from gh.auth.deps import require_owner, require_pin
-from gh.biz.intel import access, strong_confirm
+from gh.biz.intel import access, levels, strong_confirm
 from gh.biz.intel.detectors import fraud
 from gh.biz.mem import contexts
 from gh.chassis import actionlog
@@ -80,7 +80,8 @@ async def console_state(user: service.CurrentUser = Depends(require_owner), db: 
     return {
         "pin_active": user.pin_active(),
         "mode": mode,
-        "ramp_gates": "push" if s.get("ramp_gates") == "push" else "digest_top",
+        "ramp_gates": "push" if s.get("ramp_gates") == "push" and levels.REGULAR_PUSH_ENABLED else "digest_top",
+        "regular_push_enabled": levels.REGULAR_PUSH_ENABLED,
         "assistant": {"locked": await backup.is_locked(db, org), "locked_at": s.get("assistant_locked_at"),
                       "locked_via": s.get("assistant_locked_via")},
         "outbound": {"unlocked_today": await strong_confirm.unlocked_today(db, org, now),
@@ -150,6 +151,9 @@ async def put_settings(body: SettingsIn, user: service.CurrentUser = Depends(req
     nên đi qua `strong_confirm` (Nhật ký + báo kênh phụ). Chỉ khoá gửi lên mới đổi."""
     if body.mode is None and body.ramp_gates is None:
         raise ApiError(422, "VALIDATION", "Chưa chọn gì để đổi")
+    if body.ramp_gates == "push" and not levels.REGULAR_PUSH_ENABLED:
+        raise ApiError(422, "VALIDATION", "Bản này bốn cổng thường chỉ lên đầu bản tin — chưa bật được «Báo ngay»",
+                       detail="ramp_gates=push bị khoá trong v0.1.76 (levels.REGULAR_PUSH_ENABLED=False); lừa đảo và an toàn vẫn báo ngay")
     cur = await _intel(db, user.org_id)
     patch: dict[str, Any] = {}
     if body.mode is not None and body.mode != ("shadow" if cur.get("mode") == "shadow" else "live"):
@@ -229,3 +233,69 @@ async def bulk_group_contexts(body: BulkContextsIn, user: service.CurrentUser = 
                                target_type="group", target_id=str(g.id), target_label=g.name, detail={"labels": [x.context for x in body.labels], "bulk": True},
                                ip=user.ip)
     return {"ok": True, "updated": len(found)}
+
+
+# ─── Thiết lập Tình báo (Ryan chốt D3, 2026-10-25: "hỏi lúc cài") ──────────────
+
+MAX_SETUP_GROUPS = 300
+MAX_SETUP_PEOPLE = 200
+#: Loại cần biết khách / nhân sự của Sếp: chỉ chạy đầy đủ khi nhóm có nhãn bối cảnh và Sếp đã khai nhân viên. Lừa đảo, an toàn luôn chạy.
+SETUP_GATED_VI = ("lời hứa với khách", "câu hỏi chờ trả lời", "khách chê / doạ bỏ", "cơ hội", "thông tin thị trường", "quan hệ cần để ý")
+
+
+@router.get("/intel/setup")
+async def setup_state(user: service.CurrentUser = Depends(require_owner), db: AsyncSession = DB) -> dict[str, Any]:
+    """Hai bước "Thiết lập Tình báo": (1) nhóm còn chưa có nhãn bối cảnh do Sếp gán — nhãn mở các loại theo bối cảnh nhóm (khởi động lạnh
+    T12/T13 dùng nhãn kinh_doanh/nhan_vien); (2) khai nhân viên (`PATCH /profile/{id}` `person_type=staff`, Owner + PIN) rồi bấm "Đã khai xong"
+    (`POST /intel/setup/staff-confirmed`) — danh sách nhân viên giúp phân biệt khách/nhân viên chính xác hơn; cờ "đã khai xong" chỉ để nhắc,
+    không bật/tắt loại nào. Không chặn app; lừa đảo/an toàn luôn chạy. Chỉ đọc, không cần PIN."""
+    org = user.org_id
+    s = await _intel(db, org)
+    groups = (await db.execute(text("""
+        SELECT g.id, g.name, g.member_count
+        FROM core.groups g WHERE g.org_id = :o AND g.left_at IS NULL
+          AND NOT EXISTS (SELECT 1 FROM mem.group_contexts c WHERE c.org_id = g.org_id AND c.group_id = g.id AND c.source = 'owner')
+        ORDER BY g.name, g.id LIMIT :n"""), {"o": org, "n": MAX_SETUP_GROUPS})).all()
+    unlabeled = list(groups)                                  # tối đa MAX_SETUP_GROUPS dòng để gán nhanh
+    # Đếm KHÔNG qua LIMIT (review D3-b); nhóm Sếp đã rời (`left_at`) không tính.
+    cnt = (await db.execute(text("""
+        SELECT count(*) AS total, count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM mem.group_contexts c WHERE c.org_id = g.org_id
+                                                   AND c.group_id = g.id AND c.source = 'owner')) AS unlabeled
+        FROM core.groups g WHERE g.org_id = :o AND g.left_at IS NULL"""), {"o": org})).one()
+    people = (await db.execute(text("""
+        SELECT p.id, p.display_name, p.person_type, p.attrs -> 'before_staff' ->> 'type' AS prev_type FROM core.persons p
+        WHERE p.org_id = :o AND p.deleted_at IS NULL AND p.merged_into_id IS NULL
+          AND COALESCE(p.attrs ->> 'is_owner', '') <> 'true'
+          AND NOT EXISTS (SELECT 1 FROM core.users u WHERE u.org_id = p.org_id AND u.person_id = p.id)
+          AND (p.person_type = 'staff' OR EXISTS (SELECT 1 FROM core.group_members gm JOIN core.groups g ON g.id = gm.group_id
+                                                    WHERE gm.person_id = p.id AND gm.left_at IS NULL AND g.org_id = p.org_id))
+        ORDER BY p.display_name, p.id LIMIT :n"""), {"o": org, "n": MAX_SETUP_PEOPLE})).all()   # thứ tự ổn định: bật/tắt không làm dòng nhảy
+    staff_n = (await db.execute(text("""SELECT count(*) FROM core.persons WHERE org_id = :o AND person_type = 'staff'
+                                        AND deleted_at IS NULL AND merged_into_id IS NULL"""), {"o": org})).scalar_one()
+    confirmed_at = s.get("staff_confirmed_at") if isinstance(s.get("staff_confirmed_at"), str) else None
+    groups_done = int(cnt.unlabeled) == 0
+    staff_done = confirmed_at is not None
+    return {
+        "ready": groups_done and staff_done,
+        "groups": {"done": groups_done, "total": int(cnt.total), "unlabeled_count": int(cnt.unlabeled),
+                   "unlabeled": [{"id": str(g.id), "name": g.name, "member_count": g.member_count} for g in unlabeled]},
+        "staff": {"done": staff_done, "confirmed_at": confirmed_at, "staff_count": int(staff_n),
+                  "people": [{"id": str(p.id), "name": p.display_name, "person_type": p.person_type or "unknown",
+                              "prev_type": p.prev_type} for p in people]},
+        "contexts": list(contexts.CONTEXT_CODES),
+        "gated_kinds": list(SETUP_GATED_VI),
+    }
+
+
+@router.post("/intel/setup/staff-confirmed")
+async def setup_staff_confirmed(user: service.CurrentUser = Depends(require_owner), db: AsyncSession = DB) -> dict[str, Any]:
+    """Sếp xác nhận "đã khai xong nhân viên" (kể cả không có nhân viên nào). Ghi Nhật ký (số người đã đánh dấu, không tên). Không cần PIN —
+    việc này chỉ MỞ thêm suy luận thận trọng, không hạ phòng thủ."""
+    org = user.org_id
+    now = clock.now()
+    n = (await db.execute(text("""SELECT count(*) FROM core.persons WHERE org_id = :o AND person_type = 'staff'
+                                  AND deleted_at IS NULL AND merged_into_id IS NULL"""), {"o": org})).scalar_one()
+    await _set(db, org, {"staff_confirmed_at": now.isoformat()})
+    await actionlog.record(db, org_id=org, actor_type="user", actor_id=user.actor_id, action="intel.setup.staff_confirmed",
+                           target_type="org", target_id=str(org), result="ok", detail={"staff_count": int(n)}, ip=user.ip)
+    return {"ok": True, "confirmed_at": now.isoformat(), "staff_count": int(n)}

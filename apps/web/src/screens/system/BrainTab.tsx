@@ -14,6 +14,7 @@ import { GenMemoryCard } from './GenMemoryCard';
 import { GenCoachCard } from './GenCoachCard';
 import { AiBudgetCard } from './AiBudgetCard';
 import { IntelCard } from './IntelCard';
+import { IntelSetupCard } from './IntelSetupCard';
 import { useCan } from '../../lib/permissions';
 import { StandardModeStrip } from '../../defaults/StandardModeStrip';
 import { AI_SOURCE_PATH } from '../../setup/steps';
@@ -223,6 +224,9 @@ export function BrainTabBody() {
         <BackgroundSourcesCard />
         <AiBudgetCard />
       </div>
+
+      {/* v0.1.76 (T14, D3): hai bước để Tình báo đầy đủ chạy — chỉ Owner thấy; xong thì thu gọn thành một dòng. */}
+      <IntelSetupCard />
 
       <div className="sys-grid2">
         <TriageCard />

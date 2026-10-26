@@ -1,11 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { PersonType } from '@gen-harness/contracts';
 import { apiClient } from '../../lib/api';
-import type { IntelBudget, IntelConsole, IntelMode, IntelRamp } from './intelModel';
+import { api } from '../../lib/api';
+import type { IntelBudget, IntelConsole, IntelMode, IntelRamp, IntelSetup } from './intelModel';
 
 /** v0.1.76 (T11): thẻ "Tình báo". Thao tác cần PIN ⇒ máy chủ trả 423 ⇒ hộp PIN chung tự mở rồi gửi lại (lib/api.ts). */
 export const qkIntel = {
   console: ['intel', 'console'] as const,
   budget: ['intel', 'budget'] as const,
+  setup: ['intel', 'setup'] as const,
 };
 
 const req = <T>(path: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET', body?: unknown, signal?: AbortSignal) =>
@@ -37,6 +40,7 @@ function useIntelWrite<V, R = unknown>(fn: (v: V) => Promise<R>) {
     mutationFn: fn,
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: qkIntel.console });
+      void qc.invalidateQueries({ queryKey: qkIntel.setup });
       void qc.invalidateQueries({ queryKey: ['system', 'health'] });
     },
   });
@@ -53,6 +57,32 @@ export const useMuteKind = () =>
 export const useUnmute = () => useIntelWrite((id: string) => req(`/intel/mutes/${encodeURIComponent(id)}`, 'DELETE'));
 export const useBulkContexts = () =>
   useIntelWrite((b: { group_ids: string[]; labels: Array<{ context: string; is_primary: boolean }> }) => req('/intel/group-contexts/bulk', 'POST', b));
+
+function isSetup(v: unknown): v is IntelSetup {
+  const o = v as Partial<IntelSetup> | null;
+  return !!o && typeof o === 'object' && typeof o.ready === 'boolean' && !!o.groups && !!o.staff && Array.isArray(o.groups.unlabeled) &&
+    Array.isArray(o.staff.people) && Array.isArray(o.contexts) && Array.isArray(o.gated_kinds) &&
+    o.groups.unlabeled.every((g) => typeof g?.id === 'string' && typeof g?.name === 'string') &&
+    o.staff.people.every((p) => typeof p?.id === 'string' && typeof p?.name === 'string');
+}
+
+/** v0.1.76 (T14, D3): trạng thái "Thiết lập Tình báo" — chỉ Owner (máy chủ trả 403 với vai khác). */
+export const useIntelSetup = (enabled: boolean) =>
+  useQuery({
+    queryKey: qkIntel.setup,
+    queryFn: async ({ signal }) => {
+      const v = await req<unknown>('/intel/setup', 'GET', undefined, signal);
+      if (!isSetup(v)) throw new Error('Máy chủ trả dữ liệu Thiết lập Tình báo sai khuôn');
+      return v;
+    },
+    enabled,
+  });
+export const useConfirmStaff = () => useIntelWrite(() => req('/intel/setup/staff-confirmed', 'POST', {}));
+/** Đánh dấu / bỏ đánh dấu nhân viên — đúng đường "Đánh dấu là nhân viên" của hồ sơ (`PATCH /profile/{id}`, Owner + mã PIN: 423 ⇒ hộp PIN
+ * chung tự mở). Tắt ⇒ trả về loại trước đó (`prev_type`, vd khách); máy chủ tự khôi phục quan hệ cũ. */
+export const useSetStaff = () =>
+  useIntelWrite(({ id, staff, prevType }: { id: string; staff: boolean; prevType?: string | null }) =>
+    api.relations.profile.update(id, staff ? { person_type: 'staff', relation_to_owner: 'staff' } : { person_type: (prevType || 'unknown') as PersonType }));
 
 export const useIntelBudget = (enabled: boolean) =>
   useQuery({

@@ -8,6 +8,7 @@ from sqlalchemy import text
 from gh.db import sessionmaker
 from gh.refinery.runner import Refinery
 from gh.refinery.scheduler import Scheduler
+from tests.conftest import verify_pin
 from tests.phase2 import FakeRouter, install_presets, listen, msg, org_id, put, refs_in, states
 
 JOB = "Em có 3 năm kinh nghiệm bán hàng, đang tìm việc mới"
@@ -103,7 +104,9 @@ async def test_rule_never_overwrites_a_value_the_owner_set(app, db, redis, owner
     sm = sessionmaker()
     [raw_a, raw_b] = await put(sm, org, msg(JOB, sender="a1", name="Chị A"), msg(JOB, sender="b1", name="Anh B"))
     pa, pb = await person_of(db, raw_a), await person_of(db, raw_b)
-    # A: Sếp đặt 'staff'. B: Sếp chủ động đặt về 'unknown' (khoá, không để máy nâng lại).
+    # A: Sếp đặt 'staff' (v0.1.76 T14: sang/khỏi staff cần Owner + PIN).
+    # B: Sếp chủ động đặt về 'unknown' (khoá, không để máy nâng lại).
+    await verify_pin(owner_api)
     assert (await owner_api.send("PATCH", f"/profile/{pa}", {"person_type": "staff"})).status_code == 200
     assert (await owner_api.send("PATCH", f"/profile/{pb}", {"person_type": "unknown"})).status_code == 200
     await Refinery(sm, redis, job_router()).run(org, "manual")  # type: ignore[arg-type]
@@ -127,6 +130,9 @@ async def test_owner_sets_person_type_and_relation_from_profile(app, db, owner_a
     sm = sessionmaker()
     [raw] = await put(sm, org, msg(BUY, sender="d1", name="Anh D"))
     pid = await person_of(db, raw)
+    r = await owner_api.send("PATCH", f"/profile/{pid}", {"person_type": "staff"})
+    assert r.status_code == 423      # T14: cần PIN
+    await verify_pin(owner_api)
     r = await owner_api.send("PATCH", f"/profile/{pid}", {"person_type": "staff", "relation_to_owner": "staff"})
     assert r.status_code == 200, r.text
     body = r.json()

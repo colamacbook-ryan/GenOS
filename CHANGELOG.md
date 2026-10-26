@@ -7,6 +7,12 @@ Ngày = ngày Release trên GitHub theo giờ Việt Nam; tiêu đề trong `doc
 (v0.1.32–v0.1.34, v0.1.40, v0.1.46) hoặc vài ngày (v0.1.47, v0.1.48: làm 03/10, phát hành 09/10).
 Việc sửa nóng không đổi số bản (PR #46, #48, #53, #55, #58, #59) ghi ở [ROADMAP › Bản phản ứng](docs/ROADMAP.md).
 
+## v0.1.76 — (26/10/2026) Bước 1 Tình báo: trí nhớ 5 lớp, tín hiệu 🔴🟠🟡, lừa đảo/lời hứa/tranh chấp, khoá trợ lý
+- **Bản tính năng lớn trên v0.1.75, migration `0043` + `0044`.** Trí nhớ 5 lớp + Hồ sơ Sếp, trích xuất 4 tầng, đa phương tiện (voice/ảnh); tin thành **tín hiệu có mức** (một vụ một 🔴, tính lại theo đồng hồ), bản tin theo mức.
+- Lừa đảo/OTP, lời hứa, tranh chấp, câu hỏi chưa trả lời, giải thích + độ tin cậy; **khoá trợ lý** (khoá khẩn không cần mã PIN, mở khoá cần mã PIN), thẻ «Tình báo» trên Console, kênh phụ Telegram.
+- **Phát hành phần chắc**: chỉ lừa đảo đang diễn ra + an toàn nhắn 🔴 ngay; bốn cổng thường lên đầu bản tin sáng kèm «(đáng lẽ báo ngay)» (quy cách mới ở v0.1.77). Tình báo hỗ trợ Sếp thực thi, không tự bán hàng/nhắn khách. T14 đã gộp.
+- **Boss làm**: Thiết lập Tình báo (gán nhãn nhóm + khai nhân viên); có thể thấy đợt mục cũ 14 ngày trong bản tin (Nợ #93). Chi tiết: [docs/releases/v0.1.76.md](docs/releases/v0.1.76.md).
+
 ## v0.1.75 — GenOS bản đầu: tự đứng ở repo riêng, vá bảo mật đăng nhập/PIN, cách ly hộp AI (23/10/2026)
 - **GenOS bản đầu tiên** (trước đây là Gen-Harness): nguồn cập nhật + cài đặt (`install.sh`, `install.ps1`, `genh` tự cập nhật, `release_repo`) chuyển sang `colamacbook-ryan/GenOS`. Máy đang cài Gen-Harness cũ KHÔNG tự lên GenOS (xem `docs/releases/v0.1.75.md`).
 - **Vá bảo mật đăng nhập/PIN (auth-guard)**: khoá chống dò mật khẩu/PIN theo tài khoản + nguồn, nhãn Nhật ký kiểm toán mới; cookie thiết bị tin cậy gắn với mật khẩu (đổi mật khẩu ⇒ cookie cũ hết hiệu lực, vẫn chịu ngưỡng riêng) và đếm sai nguyên tử chống request song song vượt ngưỡng; test `test_auth_guard_v0175.py`.

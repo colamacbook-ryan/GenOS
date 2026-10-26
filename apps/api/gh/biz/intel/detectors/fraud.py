@@ -17,6 +17,10 @@ Luật tất định (0 token) trên chữ tin (`body`) **và** chữ OCR/transc
 - `nguoi_la_xin_tien` — người lạ (vào nhóm < 7 ngày / chưa có lịch sử) nhờ ứng / mượn / chuyển giúp tiền ⇒ `money_request` + luật cứng.
 - `don_lon_khong_coc` — người lạ đặt đơn lớn, không cọc, giục gửi ngay ⇒ Sếp (bên bán) là nạn nhân, `money_request` (giao hàng = giao giá trị
   chưa nhận tiền) + luật cứng.
+- `mao_danh_dat_hang` (Ryan chốt D2, 2026-10-25) — người MẠO DANH một khách/đối tác đã biết (trùng tên, ID mới) đặt hàng ghi nợ/công nợ hoặc
+  đổi địa chỉ giao/người nhận ⇒ `goods_risk` + luật cứng ⇒ nhánh "mạo danh đặt hàng" của cổng 1. KHÔNG cần "giục gấp"/"đơn lớn" (bản thân
+  mạo danh đã là dấu hiệu mạnh); người lạ (không mạo danh) vẫn theo luật `don_lon_khong_coc` đủ bốn vế. Khách quen thật đổi địa chỉ từ chính
+  định danh cũ ⇒ không mạo danh ⇒ không luật.
 - `credentials_entered` — luật (a) L2 + mẫu "đã điền form rồi, nó hỏi số thẻ/OTP" (kb1 S28) ⇒ luật cứng.
 - `unc` — ảnh/tin "chuyển khoản thành công" ⇒ `txn_state=just_done` (nhánh "vừa chuyển").
 - `phishing` — mồi link (`suspicious.phishing_bait`) chưa ai nhập ⇒ không cờ tiền/OTP ⇒ tối đa 🟠 (`levels`).
@@ -52,6 +56,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gh import suspicious
 from gh.biz.hooks import CronJob, Hook
 from gh.biz.intel import levels, signals
+from gh.biz.intel.detectors import generic
 from gh.textnorm import strip_accents
 
 log = logging.getLogger("gh.intel.fraud")
@@ -83,6 +88,7 @@ H_IMP = "mao_danh_xin_tien"
 H_STRANGER = "nguoi_la_xin_tien"
 H_GOODS = "don_lon_khong_coc"
 H_STK_CLAIM = "doi_stk_xin_tien"
+H_IMP_GOODS = "mao_danh_dat_hang"
 
 
 class FraudError(ValueError):
@@ -154,6 +160,25 @@ _NO_DEPOSIT = re.compile(r"\b(?:khong coc|chua coc|khoi coc|coc sau|khong dat co
 _RUSH = re.compile(r"\b(?:gui ngay|giao ngay|ship ngay|gui gap|giao gap|ship gap|xuat hang ngay|xuat ngay|gui lien|giao lien|ship lien|"
                    r"gui luon|giao luon|ship luon|can gap|gap lam|gap gap|ngay trong hom nay|trong hom nay|ngay hom nay|ngay bay gio|"
                    r"len xe ngay|chay ngay|gui di ngay|lam ngay)\b")
+#: Đổi địa chỉ giao / người nhận HÀNG (D2, siết theo review T14 D2-a). Mẫu MẠNH tự mang chữ "hàng"; mẫu YẾU (đổi địa chỉ/nơi giao, đổi
+#: người nhận, giao cho người khác, "địa chỉ mới" + động từ giao hàng) chỉ tính khi cùng tin có NGỮ CẢNH HÀNG HOÁ (`_GOODS_CTX`, `_QTY`).
+#: Không dùng danh từ "chỗ" (đổi chỗ gửi xe), không dùng "giao" đơn lẻ (giao việc, giao lưu, bàn giao ca).
+_DELIVERY_STRONG = re.compile(
+    r"\b(?:doi|thay|thay doi|cap nhat|chuyen|sua)\s+(?:lai\s+)?(?:dia chi|noi|diem)\s+(?:giao|nhan|ship)\s+hang\b"
+    r"|\b(?:dia chi|noi|diem)\s+(?:giao|nhan|ship)\s+hang\s+(?:moi|khac)\b"
+    r"|\b(?:giao|gui|ship|chuyen)\s+hang\s+(?:ve|toi|den|qua|sang|vao)\s+(?:dia chi|kho|nha)\s+(?:moi|khac)\b"
+    r"|\b(?:doi|thay|thay doi)\s+(?:lai\s+)?nguoi nhan hang\b|\bnguoi nhan hang\s+(?:moi|khac)\b")
+_DELIVERY_WEAK = re.compile(
+    r"\b(?:doi|thay|thay doi|cap nhat|chuyen|sua)\s+(?:lai\s+)?(?:dia chi|noi|diem)\s+(?:giao|nhan|ship)\b"
+    r"|\b(?:dia chi|noi|diem)\s+(?:giao|nhan|ship)\s+(?:moi|khac)\b"
+    r"|\b(?:giao|gui|ship)\s+(?:giup\s+|het\s+)?(?:ve|toi|den|qua|sang|vao)\s+(?:dia chi|kho|nha)\s+(?:moi|khac)\b"
+    r"|\b(?:doi|thay|thay doi)\s+(?:lai\s+)?nguoi nhan\b|\bnguoi nhan\s+(?:moi|khac)\b|\bgiao cho nguoi khac\b")
+_ADDR_NEW = re.compile(r"\bdia chi\s+(?:moi|khac)\b")
+_SHIP = re.compile(r"\b(?:giao hang|giao toi|giao den|giao ve|ship|gui hang)\b")
+_GOODS_CTX = re.compile(r"\b(?:hang hoa|don hang|ma don|chot don|len don|lo hang|kien hang|kien|san pham|thung|giao hang|gui hang|nhan hang|"
+                        r"lay hang|dat hang|ship|tivi|tu lanh|may lanh|dieu hoa|may giat)\b")
+#: Đặt hàng GHI NỢ (D2): "không cọc / thanh toán khi nhận" (COD) là cách mua hằng ngày — không đủ.
+_CREDIT = re.compile(r"\b(?:cong no|ghi no|thieu tra sau|giao truoc tra sau|gui hang truoc)\b")
 _BIG_WORDS = re.compile(r"\b(?:don lon|so luong lon|lay si|hang si|ca lo|nguyen lo|nguyen xe|ca container|full container)\b")
 _QTY = re.compile(r"\b(\d{2,6})\s*(?:thung|bao|tan|cai|chiec|may|kg|container|cont|lo|hop|cuon|tam|bo|kien|can|chai|goi|pallet|xe|bich|thanh|"
                   r"cay|met|m2|m3|tui|phan|suat|ly|coc)\b")
@@ -220,6 +245,7 @@ class Scan:
     addressed: tuple[str, ...] = ()
     pay_verb: tuple[int, int] | None = None       # có động từ trả/chuyển tiền (kể cả khi không đọc được STK)
     cred_soft: tuple[int, int] | None = None      # ứng viên MỀM "đòi mã sau khi đăng nhập" (không luật cứng; chỉ (d2) xác nhận) — T12
+    goods_imp: tuple[int, int] | None = None      # đặt hàng ghi nợ/không cọc, hoặc đổi địa chỉ giao/người nhận (chỉ dùng khi MẠO DANH — D2)
 
     @property
     def money_ask(self) -> bool:
@@ -228,7 +254,7 @@ class Scan:
     @property
     def any(self) -> bool:
         return bool(self.accounts or self.change or self.ask_money or self.goods or self.cred or self.takeover or self.phishing or self.unc
-                    or self.cred_soft)
+                    or self.cred_soft or self.goods_imp)
 
 
 def _digest(digits: str) -> str | None:
@@ -355,7 +381,8 @@ def scan(body: str | None, source_field: str = "body") -> Scan:
     return Scan(source_field, tuple(accts.values()), first("change"), first("pay_ask"), first("ask_money"), first("goods"), first("unc"),
                 first("cred"), cred_part[1].cred_first_person if cred_part else True, first("takeover"), first("phishing"),
                 next((sc.domain for _a, sc in parts if sc.domain), None), max(amounts) if amounts else None,
-                tuple(dict.fromkeys(x for _a, sc in parts for x in sc.addressed))[:3], pay_verb=first("pay_verb"), cred_soft=first("cred_soft"))
+                tuple(dict.fromkeys(x for _a, sc in parts for x in sc.addressed))[:3], pay_verb=first("pay_verb"), cred_soft=first("cred_soft"),
+                goods_imp=first("goods_imp"))
 
 
 def _clean(t: str) -> tuple[str, list[int]]:
@@ -390,7 +417,7 @@ def _remap(sc: Scan, cmap: list[int], n: int) -> Scan:
 
     return replace(sc, accounts=tuple(replace(x, span=m(x.span) or x.span) for x in sc.accounts), change=m(sc.change), pay_ask=m(sc.pay_ask),
                    pay_verb=m(sc.pay_verb), ask_money=m(sc.ask_money), goods=m(sc.goods), unc=m(sc.unc), cred=m(sc.cred), cred_soft=m(sc.cred_soft),
-                   takeover=m(sc.takeover), phishing=m(sc.phishing))
+                   takeover=m(sc.takeover), phishing=m(sc.phishing), goods_imp=m(sc.goods_imp))
 
 
 def _scan_one(t: str, source_field: str) -> Scan:
@@ -444,6 +471,7 @@ def _scan_core(t: str, source_field: str) -> Scan:
     qty = max((int(q.group(1)) for q in _QTY.finditer(fold)), default=0)
     big = (amount or 0) >= BIG_ORDER_VND or qty >= BIG_ORDER_QTY or _BIG_WORDS.search(fold) is not None
     goods = _span(order, idx, n) if (order and nodep and rush and big) else None
+    goods_imp = _goods_redirect_match(fold)
     unc = _UNC.search(fold)
     phish = suspicious.phishing_bait(t)
     pm = suspicious.PHISHING.search(fold)
@@ -451,7 +479,32 @@ def _scan_core(t: str, source_field: str) -> Scan:
     return Scan(source_field, tuple(accts), _span(change, idx, n), _span(pay, idx, n), _span(ask, idx, n), goods, _span(unc, idx, n), cred,
                 first_person, take_c.span if take_c else None,
                 (_span(pm, idx, n) or (0, min(n, 1))) if phish else None, suspicious.domain_of(t), amount, addressed,
-                pay_verb=_span(pay_any, idx, n), cred_soft=cred_soft)
+                pay_verb=_span(pay_any, idx, n), cred_soft=cred_soft, goods_imp=_span(goods_imp, idx, n))
+
+
+def _goods_redirect_match(fold: str) -> re.Match[str] | None:
+    """(D2) Đặt hàng ghi nợ/công nợ, hoặc đổi địa chỉ giao / người nhận HÀNG — trên chữ ĐÃ BỎ DẤU. Không đủ ⇒ None."""
+    m = _DELIVERY_STRONG.search(fold)
+    if m:
+        return m
+    goods = _GOODS_CTX.search(fold) is not None or _QTY.search(fold) is not None
+    credit = _CREDIT.search(fold)
+    if credit and (goods or _ORDER.search(fold)):
+        return credit
+    if not goods:
+        return None
+    m = _DELIVERY_WEAK.search(fold)
+    if m:
+        return m
+    a = _ADDR_NEW.search(fold)
+    return a if a and _SHIP.search(fold) else None
+
+
+def goods_redirect(text_: str | None) -> bool:
+    """Hàm thuần cho bộ chiếu đơn vị (`units`): chữ có "đặt hàng ghi nợ / đổi địa chỉ giao / đổi người nhận" (D2)."""
+    if not text_ or not text_.strip():
+        return False
+    return _goods_redirect_match(strip_accents(_clean(text_[:MAX_SCAN_CHARS])[0]).lower()) is not None
 
 
 # ─── tầng thuần: quyết định từ quét + ngữ cảnh người ─────────────────────────────────────────────────────────────────────
@@ -469,6 +522,8 @@ class Who:
     key_relation: bool = False
     business_contact: bool = False      # NCC / đối tác / khách / nhân viên (bên có giao dịch tiền với Sếp)
     present_in_thread: bool = False
+    staff_locked: bool = False          # `person_type=staff` do Sếp đặt (khoá loại) — không phải quy tắc/seed tự gán
+    staff_marked_at: datetime | None = None   # lúc Sếp đánh dấu nhân viên (Owner + PIN, T14); None = dữ liệu cũ
 
     def rel(self, *, thread_member: bool = True) -> levels.PersonRel:
         return levels.PersonRel(ref=self.ref, is_owner=self.is_owner, owner_key_relation=self.key_relation, customer=self.customer,
@@ -634,6 +689,14 @@ def decide(sc: Scan, ctx: Ctx) -> Decision | None:
         victims.extend(owner_rel)
         spans.append(sc.goods)
 
+    # 5b. (D2) MẠO DANH khách/đối tác đã biết + đặt hàng ghi nợ / đổi địa chỉ giao / đổi người nhận ⇒ nhánh "mạo danh đặt hàng" của cổng 1
+    # (không cần giục gấp, không cần đơn lớn). Bên chịu thiệt là Sếp (bên bán/giao hàng).
+    if sc.goods_imp and ctx.impersonated is not None and not ctx.impersonated.is_owner and "goods_no_deposit_rush" not in rules:
+        rules.append("impersonated_goods")
+        hard.append(H_IMP_GOODS)
+        victims.extend(owner_rel)
+        spans.append(sc.goods_imp)
+
     # 6. ảnh/tin chuyển khoản thành công — chỉ có nghĩa cùng một dấu hiệu lừa đảo
     if sc.unc and rules:
         txn = "just_done"
@@ -679,6 +742,10 @@ def wording(d: Decision, place: str, name: str | None) -> tuple[str, str, str]:
         return (f"Có người báo đã nhập OTP / mật khẩu / số thẻ trong {place}", "có thể bị rút tiền trong tài khoản/thẻ ngay", ACTION_CRED)
     if r == ("credentials_suspect",):
         return (f"Có người có thể đã bị đòi mã OTP / mật khẩu sau khi đăng nhập trong {place}", "có thể bị rút tiền nếu đã nhập mã", ACTION_CRED)
+    if "impersonated_goods" in r:
+        who = f" “{name}”" if name else ""
+        return (f"Có tài khoản khác ID trùng tên{who} đặt hàng ghi nợ / đổi địa chỉ giao trong {place}", "có thể giao hàng cho người mạo danh, mất hàng",
+                ACTION_GOODS)
     if "goods_no_deposit_rush" in r:
         return (f"Có đơn hàng lớn không cọc, giục gửi ngay trong {place}", "có thể mất hàng không thu được tiền", ACTION_GOODS)
     if "stk_change" in r or "stk_change_unverified" in r or "stk_unhashed" in r or "stk_change_claim" in r:
@@ -709,7 +776,7 @@ def signal_input(d: Decision, *, msg_at: datetime, thread: levels.Thread, delive
                            txn_at=msg_at if d.txn_state == "just_done" else None, source_class="rule", confidence_exist=1.0,
                            confidence_content=1.0, impact_base=imp, delivery_form=delivery_form,  # type: ignore[arg-type]
                            payee_refs=[f"stk:{d.payee.digest[:16]}"] if d.payee and d.payee.digest else [],
-                           money_vnd=d.amount_vnd, money_basis="quoted" if d.amount_vnd else None)
+                           money_vnd=d.amount_vnd, money_basis="quoted" if d.amount_vnd else None, goods_risk="impersonated_goods" in d.rules)
 
 
 # ─── tầng DB ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -837,7 +904,8 @@ async def _who(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID | None,
                                       {"e": entity_id, "o": org_id})).scalar_one_or_none()
     if person_id is None:
         return Who(ref=f"e_{entity_id}" if entity_id else "u_unknown", entity_id=entity_id)
-    p = (await db.execute(text("SELECT display_name, person_type FROM core.persons WHERE id = :p AND org_id = :o"),
+    p = (await db.execute(text("""SELECT display_name, person_type, COALESCE(attrs ->> 'person_type_locked', '') = 'true' AS locked,
+                                         attrs ->> 'staff_marked_at' AS marked FROM core.persons WHERE id = :p AND org_id = :o"""),
                           {"p": person_id, "o": org_id})).one_or_none()
     if p is None:
         return Who(ref=f"u_{person_id}")
@@ -854,7 +922,13 @@ async def _who(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID | None,
     return Who(ref=f"u_{person_id}", person_id=person_id, entity_id=ent, name=p.display_name, is_owner=is_owner,
                team=p.person_type == "staff", customer=customer, key_relation=ent in key_rel if ent else False,
                business_contact=is_owner or p.person_type in ("supplier", "partner", "customer", "staff") or customer,
-               present_in_thread=present or is_owner)
+               present_in_thread=present or is_owner, staff_locked=p.person_type == "staff" and bool(p.locked),
+               staff_marked_at=generic.parse_marked(p.marked))
+
+
+def _staff_trusted(w: Who, at: datetime) -> bool:
+    """Luật CHUNG `generic.staff_trusted`: vai nhân viên chỉ tin khi Sếp đặt (khoá) và đã đánh dấu ≥ 7 ngày (hoặc dữ liệu cũ, Nợ #97)."""
+    return generic.staff_trusted("staff" if w.team else None, locked=w.staff_locked, marked_at=w.staff_marked_at, at=at)
 
 
 async def _stranger(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID | None, group_id: uuid.UUID | None, at: datetime) -> tuple[bool, bool]:
@@ -1079,10 +1153,13 @@ async def prepare(db: AsyncSession, org_id: uuid.UUID, row: _Row, *, key_rel: fr
             pass
     sender = await _who(db, org_id, row.person_id, key_rel=key_rel, owner_people=owner_people, group_id=row.group_id)
     stranger, _known = await _stranger(db, org_id, row.person_id, row.group_id, row.occurred_at)
-    if sender.is_owner or sender.team:
+    # Vai nhân viên chỉ được dùng để HẠ phòng thủ (bỏ "người lạ", bỏ xét mạo danh) khi tin được; làm NẠN NHÂN (nâng bảo vệ) thì giữ nguyên.
+    trusted = _staff_trusted(sender, row.occurred_at)
+    if sender.is_owner or trusted:
         stranger = False
     imp = None
-    if not sender.is_owner and (stranger or not _known):
+    # Nhân viên Sếp tin được trùng tên người khác ⇒ không coi là mạo danh (review T14 D2-a).
+    if not sender.is_owner and not trusted and (stranger or not _known):
         imp = await _impersonated(db, org_id, sender, row.group_id, key_rel=key_rel, owner_people=owner_people)
     owner = None
     if owner_entity is not None and owner_people:
