@@ -159,14 +159,25 @@ _NO_DEPOSIT = re.compile(r"\b(?:khong coc|chua coc|khoi coc|coc sau|khong dat co
 _RUSH = re.compile(r"\b(?:gui ngay|giao ngay|ship ngay|gui gap|giao gap|ship gap|xuat hang ngay|xuat ngay|gui lien|giao lien|ship lien|"
                    r"gui luon|giao luon|ship luon|can gap|gap lam|gap gap|ngay trong hom nay|trong hom nay|ngay hom nay|ngay bay gio|"
                    r"len xe ngay|chay ngay|gui di ngay|lam ngay)\b")
-#: Đổi địa chỉ giao / người nhận hàng (D2). "Địa chỉ mới" một mình chỉ tính khi cùng tin có động từ giao/gửi/ship (`_SHIP`).
-_DELIVERY_CHANGE = re.compile(
-    r"\b(?:doi|thay|thay doi|cap nhat|chuyen|sua)\s+(?:lai\s+)?(?:dia chi|cho|noi|diem)\s+(?:giao|nhan|ship|gui)\b"
-    r"|\b(?:dia chi|cho|noi|diem)\s+(?:giao|nhan|ship|gui)(?:\s+hang)?\s+(?:moi|khac)\b"
-    r"|\b(?:giao|gui|ship|chuyen)\s+(?:hang\s+|het\s+|giup\s+)?(?:ve|toi|den|qua|sang|vao)\s+(?:dia chi|cho|kho|nha)\s+(?:moi|khac)\b"
+#: Đổi địa chỉ giao / người nhận HÀNG (D2, siết theo review T14 D2-a). Mẫu MẠNH tự mang chữ "hàng"; mẫu YẾU (đổi địa chỉ/nơi giao, đổi
+#: người nhận, giao cho người khác, "địa chỉ mới" + động từ giao hàng) chỉ tính khi cùng tin có NGỮ CẢNH HÀNG HOÁ (`_GOODS_CTX`, `_QTY`).
+#: Không dùng danh từ "chỗ" (đổi chỗ gửi xe), không dùng "giao" đơn lẻ (giao việc, giao lưu, bàn giao ca).
+_DELIVERY_STRONG = re.compile(
+    r"\b(?:doi|thay|thay doi|cap nhat|chuyen|sua)\s+(?:lai\s+)?(?:dia chi|noi|diem)\s+(?:giao|nhan|ship)\s+hang\b"
+    r"|\b(?:dia chi|noi|diem)\s+(?:giao|nhan|ship)\s+hang\s+(?:moi|khac)\b"
+    r"|\b(?:giao|gui|ship|chuyen)\s+hang\s+(?:ve|toi|den|qua|sang|vao)\s+(?:dia chi|kho|nha)\s+(?:moi|khac)\b"
+    r"|\b(?:doi|thay|thay doi)\s+(?:lai\s+)?nguoi nhan hang\b|\bnguoi nhan hang\s+(?:moi|khac)\b")
+_DELIVERY_WEAK = re.compile(
+    r"\b(?:doi|thay|thay doi|cap nhat|chuyen|sua)\s+(?:lai\s+)?(?:dia chi|noi|diem)\s+(?:giao|nhan|ship)\b"
+    r"|\b(?:dia chi|noi|diem)\s+(?:giao|nhan|ship)\s+(?:moi|khac)\b"
+    r"|\b(?:giao|gui|ship)\s+(?:giup\s+|het\s+)?(?:ve|toi|den|qua|sang|vao)\s+(?:dia chi|kho|nha)\s+(?:moi|khac)\b"
     r"|\b(?:doi|thay|thay doi)\s+(?:lai\s+)?nguoi nhan\b|\bnguoi nhan\s+(?:moi|khac)\b|\bgiao cho nguoi khac\b")
 _ADDR_NEW = re.compile(r"\bdia chi\s+(?:moi|khac)\b")
-_SHIP = re.compile(r"\b(?:giao|gui hang|ship|van chuyen|chuyen hang|nhan hang)\b")
+_SHIP = re.compile(r"\b(?:giao hang|giao toi|giao den|giao ve|ship|gui hang)\b")
+_GOODS_CTX = re.compile(r"\b(?:hang hoa|don hang|ma don|chot don|len don|lo hang|kien hang|kien|san pham|thung|giao hang|gui hang|nhan hang|"
+                        r"lay hang|dat hang|ship|tivi|tu lanh|may lanh|dieu hoa|may giat)\b")
+#: Đặt hàng GHI NỢ (D2): "không cọc / thanh toán khi nhận" (COD) là cách mua hằng ngày — không đủ.
+_CREDIT = re.compile(r"\b(?:cong no|ghi no|thieu tra sau|giao truoc tra sau|gui hang truoc)\b")
 _BIG_WORDS = re.compile(r"\b(?:don lon|so luong lon|lay si|hang si|ca lo|nguyen lo|nguyen xe|ca container|full container)\b")
 _QTY = re.compile(r"\b(\d{2,6})\s*(?:thung|bao|tan|cai|chiec|may|kg|container|cont|lo|hop|cuon|tam|bo|kien|can|chai|goi|pallet|xe|bich|thanh|"
                   r"cay|met|m2|m3|tui|phan|suat|ly|coc)\b")
@@ -471,11 +482,17 @@ def _scan_core(t: str, source_field: str) -> Scan:
 
 
 def _goods_redirect_match(fold: str) -> re.Match[str] | None:
-    """(D2) Đặt hàng ghi nợ/không cọc, hoặc đổi địa chỉ giao/người nhận — trên chữ ĐÃ BỎ DẤU. Không đủ ⇒ None."""
-    order, nodep = _ORDER.search(fold), _NO_DEPOSIT.search(fold)
-    if order and nodep:
-        return order
-    m = _DELIVERY_CHANGE.search(fold)
+    """(D2) Đặt hàng ghi nợ/công nợ, hoặc đổi địa chỉ giao / người nhận HÀNG — trên chữ ĐÃ BỎ DẤU. Không đủ ⇒ None."""
+    m = _DELIVERY_STRONG.search(fold)
+    if m:
+        return m
+    goods = _GOODS_CTX.search(fold) is not None or _QTY.search(fold) is not None
+    credit = _CREDIT.search(fold)
+    if credit and (goods or _ORDER.search(fold)):
+        return credit
+    if not goods:
+        return None
+    m = _DELIVERY_WEAK.search(fold)
     if m:
         return m
     a = _ADDR_NEW.search(fold)
@@ -504,6 +521,8 @@ class Who:
     key_relation: bool = False
     business_contact: bool = False      # NCC / đối tác / khách / nhân viên (bên có giao dịch tiền với Sếp)
     present_in_thread: bool = False
+    staff_by_owner: bool = False        # `person_type=staff` do Sếp đặt (khoá loại) — không phải quy tắc sàng lọc tự gán
+    staff_marked_at: datetime | None = None   # lúc Sếp đánh dấu nhân viên (Owner + PIN, T14); None = dữ liệu cũ
 
     def rel(self, *, thread_member: bool = True) -> levels.PersonRel:
         return levels.PersonRel(ref=self.ref, is_owner=self.is_owner, owner_key_relation=self.key_relation, customer=self.customer,
@@ -884,7 +903,8 @@ async def _who(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID | None,
                                       {"e": entity_id, "o": org_id})).scalar_one_or_none()
     if person_id is None:
         return Who(ref=f"e_{entity_id}" if entity_id else "u_unknown", entity_id=entity_id)
-    p = (await db.execute(text("SELECT display_name, person_type FROM core.persons WHERE id = :p AND org_id = :o"),
+    p = (await db.execute(text("""SELECT display_name, person_type, COALESCE(attrs ->> 'person_type_locked', '') = 'true' AS locked,
+                                         attrs ->> 'staff_marked_at' AS marked FROM core.persons WHERE id = :p AND org_id = :o"""),
                           {"p": person_id, "o": org_id})).one_or_none()
     if p is None:
         return Who(ref=f"u_{person_id}")
@@ -901,7 +921,24 @@ async def _who(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID | None,
     return Who(ref=f"u_{person_id}", person_id=person_id, entity_id=ent, name=p.display_name, is_owner=is_owner,
                team=p.person_type == "staff", customer=customer, key_relation=ent in key_rel if ent else False,
                business_contact=is_owner or p.person_type in ("supplier", "partner", "customer", "staff") or customer,
-               present_in_thread=present or is_owner)
+               present_in_thread=present or is_owner, staff_by_owner=p.person_type == "staff" and bool(p.locked),
+               staff_marked_at=_iso(p.marked))
+
+
+def _iso(v: Any) -> datetime | None:
+    try:
+        return datetime.fromisoformat(v) if isinstance(v, str) and v else None
+    except ValueError:
+        return None
+
+
+def _staff_fresh(w: Who, at: datetime) -> bool:
+    """Nhân viên vừa được đánh dấu < 7 ngày: luật cứng lừa đảo CHƯA tin vai nhân viên (kẻ chiếm phiên đánh dấu rồi lừa ngay — review T14)."""
+    m = w.staff_marked_at
+    if m is None:
+        return False
+    m = m if m.tzinfo is not None else m.replace(tzinfo=at.tzinfo)
+    return (at - m).total_seconds() < STRANGER_DAYS * 86400
 
 
 async def _stranger(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID | None, group_id: uuid.UUID | None, at: datetime) -> tuple[bool, bool]:
@@ -1126,10 +1163,13 @@ async def prepare(db: AsyncSession, org_id: uuid.UUID, row: _Row, *, key_rel: fr
             pass
     sender = await _who(db, org_id, row.person_id, key_rel=key_rel, owner_people=owner_people, group_id=row.group_id)
     stranger, _known = await _stranger(db, org_id, row.person_id, row.group_id, row.occurred_at)
+    if sender.team and _staff_fresh(sender, row.occurred_at):
+        sender = replace(sender, team=False, staff_by_owner=False)      # vai nhân viên mới đánh dấu < 7 ngày: chưa tin
     if sender.is_owner or sender.team:
         stranger = False
     imp = None
-    if not sender.is_owner and (stranger or not _known):
+    # Nhân viên do Sếp đánh dấu (khoá loại, ≥ 7 ngày) trùng tên người khác ⇒ không coi là mạo danh (review T14 D2-a).
+    if not sender.is_owner and not sender.staff_by_owner and (stranger or not _known):
         imp = await _impersonated(db, org_id, sender, row.group_id, key_rel=key_rel, owner_people=owner_people)
     owner = None
     if owner_entity is not None and owner_people:

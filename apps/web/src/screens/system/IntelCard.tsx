@@ -66,7 +66,8 @@ function SetupBanner() {
   return (
     <div className="intel-setup-banner" role="status" data-testid="intel-setup-banner">
       <span className="intel-setup-banner__text">
-        Tình báo đầy đủ chưa bật: {setupPendingText(q.data)}. Lừa đảo và an toàn vẫn báo bình thường.
+        Thiết lập Tình báo chưa xong: {setupPendingText(q.data)}. Nhóm chưa gán bối cảnh được xử lý thận trọng (ít báo); lừa đảo và an toàn vẫn
+        báo bình thường.
       </span>
       <Button
         variant="secondary"
@@ -177,15 +178,26 @@ function ModeRow({ s }: { s: IntelConsole }) {
         ]}
       />
       <p className="muted-note">Chạy thử: bốn cổng thường chỉ ghi “đáng lẽ báo”, không nhắn riêng; lừa đảo và an toàn vẫn báo thật. Đổi cách chạy cần mã PIN.</p>
-      <Segmented<IntelRamp>
-        label="Bốn cổng thường trong 14 ngày đầu"
-        value={s.ramp_gates}
-        onChange={setRamp}
-        options={[
-          { value: 'digest_top', label: 'Đầu bản tin (14 ngày đầu)' },
-          { value: 'push', label: 'Nhắn ngay từ sớm' },
-        ]}
-      />
+      {s.regular_push_enabled === false ? (
+        <div className="intel-ramp-locked">
+          <span className="intel-row__title">Bốn cổng thường</span>
+          <Badge kind="status" tone="neutral">Đầu bản tin (bản này)</Badge>
+          <p className="muted-note">
+            Bản này khách chê/doạ bỏ, lời hứa sắp vỡ, cơ hội sắp trôi và sự cố việc chỉ lên đầu bản tin (“đáng lẽ báo ngay”), chưa nhắn riêng.
+            Lừa đảo và an toàn vẫn báo ngay.
+          </p>
+        </div>
+      ) : (
+        <Segmented<IntelRamp>
+          label="Bốn cổng thường trong 14 ngày đầu"
+          value={s.ramp_gates}
+          onChange={setRamp}
+          options={[
+            { value: 'digest_top', label: 'Đầu bản tin (14 ngày đầu)' },
+            { value: 'push', label: 'Nhắn ngay từ sớm' },
+          ]}
+        />
+      )}
       <Err e={m.error} />
     </Row>
   );

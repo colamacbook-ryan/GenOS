@@ -221,8 +221,9 @@ async def delivery_state(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, 
         intel_mode="shadow" if s.get("mode") == "shadow" else "live",
         red_cap_per_day=_int_setting(s, "red_cap_per_day", 3, org_id), reds_pushed_today=int(reds),
         days_since_install=max(0.0, (_aware(now) - _aware(installed)).total_seconds() / 86400.0),
-        ramp_early_enable=s.get("ramp_gates") == "push",
-        m1_passed_gates=gates("m1_passed_gates"), low_precision_gates=gates("low_precision_gates"), quiet_hours=quiet,
+        # v0.1.76: cổng thường chưa được đẩy ngay ở bản này ⇒ không ramp, không M1 ⇒ `compute` ra 🔴 bóng (digest_top + would_push)
+        ramp_early_enable=levels.REGULAR_PUSH_ENABLED and s.get("ramp_gates") == "push",
+        m1_passed_gates=gates("m1_passed_gates") if levels.REGULAR_PUSH_ENABLED else [], low_precision_gates=gates("low_precision_gates"), quiet_hours=quiet,
         money_small_vnd=int(s.get("money_small_vnd") or 5_000_000), money_big_vnd=int(s.get("money_big_vnd") or 50_000_000))
 
 

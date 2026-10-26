@@ -66,7 +66,8 @@ async def test_setup_two_steps_then_ready_and_cold_start_sees_labels_and_staff(o
     s = (await owner_api.get("/intel/setup")).json()
     assert s["groups"]["done"] is True and s["groups"]["unlabeled"] == [] and s["ready"] is False
 
-    # Bước 2: đánh dấu nhân viên bằng đường "Đánh dấu" sẵn có, rồi xác nhận đã khai xong
+    # Bước 2: đánh dấu nhân viên bằng đường "Đánh dấu" sẵn có (Owner + PIN), rồi xác nhận đã khai xong
+    await verify_pin(owner_api)
     assert (await owner_api.send("PATCH", f"/profile/{ngoc}", {"person_type": "staff"})).status_code == 200
     s = (await owner_api.get("/intel/setup")).json()
     assert s["staff"]["staff_count"] == 1 and s["staff"]["done"] is False
@@ -94,3 +95,70 @@ async def test_setup_no_groups_staff_confirmed_without_staff_is_ready(owner_api:
     assert s["groups"]["total"] == n and s["groups"]["done"] is (n == 0)
     assert (await owner_api.send("POST", "/intel/setup/staff-confirmed", {})).json()["staff_count"] == 0
     assert (await owner_api.get("/intel/setup")).json()["staff"]["done"] is True
+
+
+# ─── review T14: SECURITY + D3-a + D3-b ───────────────────────────────────────
+
+async def _backup_security(db: AsyncSession, org: uuid.UUID) -> int:
+    return int((await db.execute(text("SELECT count(*) FROM ops.backup_outbox WHERE org_id = :o AND kind = 'security'"), {"o": org})).scalar_one())
+
+
+async def test_staff_mark_only_owner_with_pin_and_notifies_backup(owner_api: Api, client: httpx.AsyncClient, db: AsyncSession) -> None:
+    """Đổi loại người sang / khỏi `staff` (tắt "người lạ" của luật lừa đảo, tính tin của họ là phía Sếp) = hạ phòng thủ: chỉ Owner + PIN,
+    báo kênh phụ. Loại khác giữ quyền cũ (Vận hành vẫn sửa được)."""
+    org = await _org(db)
+    g1 = await _group(db, org, "Khách sỉ", 30)
+    cust = await _person(db, org, "Chú Bảy", g1, "customer")
+    await db.commit()
+    op = await login_as(client, db, "operator")
+    await verify_pin(op, "112233")
+    assert (await op.send("PATCH", f"/profile/{cust}", {"person_type": "staff"})).status_code == 403
+    assert (await op.send("PATCH", f"/profile/{cust}", {"person_type": "partner"})).status_code == 200      # loại khác: quyền cũ
+    assert (await owner_api.send("PATCH", f"/profile/{cust}", {"person_type": "staff"})).status_code == 423   # Owner chưa mở PIN
+    before = await _backup_security(db, org)
+    await verify_pin(owner_api)
+    r = await owner_api.send("PATCH", f"/profile/{cust}", {"person_type": "staff"})
+    assert r.status_code == 200, r.text
+    assert await _backup_security(db, org) == before + 1
+    assert (await db.execute(text("SELECT count(*) FROM ops.action_log WHERE action = 'strong_confirm.console'"))).scalar_one() >= 1
+    assert (await op.send("PATCH", f"/profile/{cust}", {"person_type": "customer"})).status_code == 403     # khỏi staff: cũng chỉ Owner
+
+
+async def test_unmark_staff_restores_previous_type_and_relation(owner_api: Api, db: AsyncSession) -> None:
+    """Review D3-a: bật nhân viên rồi tắt ⇒ về đúng loại cũ (khách) + quan hệ cũ; GET /intel/setup trả `prev_type` để thẻ gửi đúng."""
+    org = await _org(db)
+    g1 = await _group(db, org, "Khách sỉ", 30)
+    cust = await _person(db, org, "Chị Mai", g1, "customer")
+    await db.execute(text("UPDATE core.persons SET relation_to_owner = 'direct' WHERE id = :p"), {"p": cust})
+    await db.commit()
+    await verify_pin(owner_api)
+    assert (await owner_api.send("PATCH", f"/profile/{cust}", {"person_type": "staff", "relation_to_owner": "staff"})).status_code == 200
+    s = (await owner_api.get("/intel/setup")).json()
+    mai = next(p for p in s["staff"]["people"] if p["name"] == "Chị Mai")
+    assert mai["person_type"] == "staff" and mai["prev_type"] == "customer"
+    assert (await owner_api.send("PATCH", f"/profile/{cust}", {"person_type": "customer"})).status_code == 200
+    r = (await db.execute(text("SELECT person_type, relation_to_owner, attrs FROM core.persons WHERE id = :p"), {"p": cust})).one()
+    assert (r.person_type, r.relation_to_owner) == ("customer", "direct")
+    # bật rồi tắt một người CHƯA phân loại, chưa khoá ⇒ về đúng trạng thái cũ: không khoá (quy tắc sàng lọc vẫn phân loại được)
+    other = await _person(db, org, "Người thử", g1)
+    await db.commit()
+    await owner_api.send("PATCH", f"/profile/{other}", {"person_type": "staff"})
+    assert (await owner_api.send("PATCH", f"/profile/{other}", {"person_type": "unknown"})).status_code == 200
+    a = (await db.execute(text("SELECT person_type, relation_to_owner, attrs FROM core.persons WHERE id = :p"), {"p": other})).one()
+    assert a.person_type == "unknown" and a.attrs.get("person_type_locked") is not True and a.relation_to_owner is None
+
+
+async def test_setup_unlabeled_count_not_capped_and_left_groups_ignored(owner_api: Api, db: AsyncSession) -> None:
+    """Review D3-b: đếm nhóm chưa gán không bị trần 300 dòng; nhóm Sếp đã rời không tính."""
+    org = await _org(db)
+    ch = (await db.execute(text("INSERT INTO core.channels (org_id, type, name) VALUES (:o, 'zalo', 'nhieu') RETURNING id"), {"o": org})).scalar_one()
+    await db.execute(text("""INSERT INTO core.groups (org_id, channel_id, code, name, external_id)
+                             SELECT :o, :c, 'GX' || n, 'Nhóm ' || lpad(n::text, 3, '0'), 'x' || n FROM generate_series(1, 305) n"""), {"o": org, "c": ch})
+    left = await _group(db, org, "Nhóm đã rời", 9)
+    await db.execute(text("UPDATE core.groups SET left_at = now() WHERE id = :g"), {"g": left})
+    await db.commit()
+    n_active = (await db.execute(text("""SELECT count(*) FROM core.groups g WHERE g.org_id = :o AND g.left_at IS NULL AND NOT EXISTS
+                                         (SELECT 1 FROM mem.group_contexts c WHERE c.group_id = g.id AND c.source = 'owner')"""), {"o": org})).scalar_one()
+    s = (await owner_api.get("/intel/setup")).json()
+    assert n_active >= 305 and s["groups"]["unlabeled_count"] == n_active and s["groups"]["done"] is False
+    assert "Nhóm đã rời" not in {g["name"] for g in s["groups"]["unlabeled"]}

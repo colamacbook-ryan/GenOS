@@ -557,3 +557,5 @@
 .intel-setup-banner__text { flex: 1 1 220px; min-width: 0; font-size: 12.5px; line-height: 1.5; color: var(--color-text); }
 .intel-setup-banner + .intel-row { border-top: 0; }
 @media (prefers-reduced-motion: reduce) { .intel-setup__seg { transition: none; } }
+.intel-ramp-locked { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.intel-ramp-locked .muted-note { flex-basis: 100%; }

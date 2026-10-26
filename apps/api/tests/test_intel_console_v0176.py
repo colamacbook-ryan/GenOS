@@ -83,10 +83,11 @@ async def test_settings_mode_and_ramp(owner_api: Api, db: AsyncSession) -> None:
     await verify_pin(owner_api)
     st = (await owner_api.get("/intel/console")).json()
     assert (st["mode"], st["ramp_gates"]) == ("live", "digest_top")
-    r = await owner_api.send("PUT", "/intel/settings", {"mode": "shadow", "ramp_gates": "push"})
-    assert r.status_code == 200 and r.json()["changed"] == ["mode", "ramp_gates"]
+    r = await owner_api.send("PUT", "/intel/settings", {"mode": "shadow"})
+    assert r.status_code == 200 and r.json()["changed"] == ["mode"]
     st = (await owner_api.get("/intel/console")).json()
-    assert (st["mode"], st["ramp_gates"]) == ("shadow", "push")
+    assert (st["mode"], st["ramp_gates"]) == ("shadow", "digest_top")       # v0.1.76: «Báo ngay» cổng thường bị khoá (T14)
+    assert (await owner_api.send("PUT", "/intel/settings", {"ramp_gates": "push"})).status_code == 422
     assert (await owner_api.send("PUT", "/intel/settings", {"mode": "shadow"})).json()["changed"] == []
     assert (await owner_api.send("PUT", "/intel/settings", {})).status_code == 422
     assert (await owner_api.send("PUT", "/intel/settings", {"mode": "bad"})).status_code == 422

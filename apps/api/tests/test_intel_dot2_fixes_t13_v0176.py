@@ -223,10 +223,10 @@ def test_levels_unknown_group_size_is_not_near_unless_near_context_confirmed() -
                      thread={"type": "group", "owner_in_thread": True, "agent_in_thread": True, **th})
 
     assert levels.owner_side(fr(size=0), H.policy("kinh_doanh")).fraud           # cỡ 0 đã biết (giữ hành vi cũ)
-    unk = levels.owner_side(fr(size=0, size_known=False), H.policy("kinh_doanh"))
-    assert not unk.fraud and unk.fraud_wide                                     # không rõ cỡ ⇒ ≤ 200, không gần
-    assert levels.owner_side(fr(size=0, size_known=False), H.policy("gia_dinh")).fraud   # Sếp xác nhận bối cảnh gần ⇒ gần
-    assert H.compute(fr(size=0, size_known=False)).level != "red"
+    # Gen quyết D-T3 (T14, 26/10): lừa đảo/an toàn fail-high — nhóm không rõ cỡ coi như nhóm gần (thay P7 của T13)
+    assert levels.owner_side(fr(size=0, size_known=False), H.policy("kinh_doanh")).fraud
+    assert levels.owner_side(fr(size=0, size_known=False), H.policy("gia_dinh")).fraud
+    assert H.compute(fr(size=0, size_known=False)).level == "red"
     assert H.compute(fr(size=0)).level == "red"
 
 

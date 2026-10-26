@@ -38,16 +38,17 @@ from gh.telegram import backup
 
 #: Hành động cần xác nhận mạnh (§8.1): tin gửi khách + "hạ phòng thủ" + hai lệnh chỉ cần báo kênh phụ.
 ACTIONS = ("outbound", "mute_defensive", "report_pref_defensive", "intel_mode_shadow", "rebind_account", "rebind_backup_channel",
-           "payment_identifier_verify", "forget_person", "quiet_hours_change", "digest_off")
+           "payment_identifier_verify", "forget_person", "quiet_hours_change", "digest_off", "staff_mark")
 OUTBOUND = "outbound"
 DEFENSIVE = ("mute_defensive", "report_pref_defensive", "intel_mode_shadow", "rebind_account", "rebind_backup_channel",
-             "payment_identifier_verify", "forget_person")
+             "payment_identifier_verify", "forget_person", "staff_mark")
 NOTIFY_ONLY = ("quiet_hours_change", "digest_off")
 LABEL = {"outbound": "gửi tin cho khách", "mute_defensive": "tắt/bớt báo lừa đảo hoặc an toàn",
          "report_pref_defensive": "đổi cách báo / giờ yên lặng chạm lừa đảo hoặc an toàn", "intel_mode_shadow": "chuyển tình báo sang chạy bóng",
          "rebind_account": "đổi tài khoản ghép", "rebind_backup_channel": "đổi / ghép lại kênh phụ",
          "payment_identifier_verify": "thêm / xác minh số tài khoản", "forget_person": "quên một người",
-         "quiet_hours_change": "đổi giờ yên lặng", "digest_off": "tắt bản tin"}
+         "quiet_hours_change": "đổi giờ yên lặng", "digest_off": "tắt bản tin",
+         "staff_mark": "đánh dấu / bỏ đánh dấu một người là nhân viên"}
 
 LOCK_TTL = timedelta(hours=1)
 MAX_CODE_FAILS = 3

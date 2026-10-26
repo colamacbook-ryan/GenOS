@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { PersonType } from '@gen-harness/contracts';
 import { apiClient } from '../../lib/api';
 import { api } from '../../lib/api';
 import type { IntelBudget, IntelConsole, IntelMode, IntelRamp, IntelSetup } from './intelModel';
@@ -77,10 +78,11 @@ export const useIntelSetup = (enabled: boolean) =>
     enabled,
   });
 export const useConfirmStaff = () => useIntelWrite(() => req('/intel/setup/staff-confirmed', 'POST', {}));
-/** Đánh dấu / bỏ đánh dấu nhân viên — đúng đường "Đánh dấu là nhân viên" của hồ sơ (`PATCH /profile/{id}`). */
+/** Đánh dấu / bỏ đánh dấu nhân viên — đúng đường "Đánh dấu là nhân viên" của hồ sơ (`PATCH /profile/{id}`, Owner + mã PIN: 423 ⇒ hộp PIN
+ * chung tự mở). Tắt ⇒ trả về loại trước đó (`prev_type`, vd khách); máy chủ tự khôi phục quan hệ cũ. */
 export const useSetStaff = () =>
-  useIntelWrite(({ id, staff }: { id: string; staff: boolean }) =>
-    api.relations.profile.update(id, staff ? { person_type: 'staff', relation_to_owner: 'staff' } : { person_type: 'unknown' }));
+  useIntelWrite(({ id, staff, prevType }: { id: string; staff: boolean; prevType?: string | null }) =>
+    api.relations.profile.update(id, staff ? { person_type: 'staff', relation_to_owner: 'staff' } : { person_type: (prevType || 'unknown') as PersonType }));
 
 export const useIntelBudget = (enabled: boolean) =>
   useQuery({

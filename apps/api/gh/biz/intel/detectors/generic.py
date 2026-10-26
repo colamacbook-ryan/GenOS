@@ -168,6 +168,13 @@ def cold_customer(w: Who | None, sets: OrgSets, *, biz_group: bool) -> bool:
             and w.entity_id not in sets.key_relations)
 
 
+def who_rel(w: Who, sets: OrgSets, *, thread_member: bool = False) -> levels.PersonRel:
+    """MỘT hàm dựng vai người cho detector chiếu đơn vị (units, generic…): tra cứu `OrgSets` (fact) CỘNG loại người Sếp đã đánh dấu ở
+    `core.persons.person_type` (khách ⇒ customer, nhân viên ⇒ team). P-T1 (G-KB sau T14): generic bỏ qua person_type ⇒ khách mất cổng an toàn."""
+    r = person_rel(w.entity_id, sets, ref=w.ref, thread_member=thread_member)
+    return r.model_copy(update={"customer": r.customer or w.person_type == "customer", "team": r.team or w.person_type == "staff"})
+
+
 def person_rel(ent: uuid.UUID, sets: OrgSets, *, ref: str, thread_member: bool = False, kin_of_member: bool = False) -> levels.PersonRel:
     return levels.PersonRel(ref=ref, is_owner=sets.is_owner(ent), owner_key_relation=ent in sets.key_relations, customer=ent in sets.customers,
                             team=ent in sets.staff, thread_member=thread_member, kin_of_member=kin_of_member, present_in_thread=thread_member)
@@ -278,12 +285,15 @@ async def _unit_ctx(db: AsyncSession, org_id: uuid.UUID, u: Any, sets: OrgSets, 
         ent = await canonical(db, m.entity_id)
         if ent is not None and ent not in seen:
             seen.add(ent)
-            victims.append(person_rel(ent, sets, ref=await _ref(db, ent), thread_member=in_group(ent)))   # ref chung với fraud/raw_tail (T12)
+            w = await who(db, ent)
+            victims.append(who_rel(w, sets, thread_member=in_group(ent)) if w else
+                           person_rel(ent, sets, ref=f"e_{ent}", thread_member=in_group(ent)))   # ref chung với fraud/raw_tail (T12)
             victim_ents.append(ent)
         elif ent is None and sender is not None and KIN.search(fold(m.surface or "")):
             victims.append(levels.PersonRel(ref=f"kin_{len(victims)}", kin_of_member=True))
     if not victims and sender is not None:
-        victims.append(person_rel(sender, sets, ref=await _ref(db, sender), thread_member=True))
+        ws = await who(db, sender)
+        victims.append(who_rel(ws, sets, thread_member=True) if ws else person_rel(sender, sets, ref=await _ref(db, sender), thread_member=True))
         victim_ents.append(sender)
     insider = sender is not None and sender in victim_ents       # người gửi nói về chính mình ⇒ người trong cuộc
     harm = u.harm.get("what") if isinstance(u.harm, dict) and isinstance(u.harm.get("what"), str) else ""
