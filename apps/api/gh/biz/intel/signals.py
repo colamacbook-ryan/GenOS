@@ -209,8 +209,14 @@ async def cap_lock(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, wait: 
 
 def work_hours_of(s: dict[str, Any], org_id: uuid.UUID) -> levels.WorkHours:
     """Giờ làm việc từ settings `intel.work_start` / `intel.work_end` (mặc định 08:00–17:30; sai định dạng ⇒ mặc định + log).
-    Cùng cách đọc với `detectors/questions.work_hours_of` của P3b — P6 gộp về một hàm chung."""
+    Hàm DUY NHẤT đọc giờ làm: `delivery_state` và `detectors/questions` (qua `org_work_hours`) cùng dùng (CNS-190)."""
     return levels.WorkHours(start=_hhmm(s, "work_start", "08:00", org_id), end=_hhmm(s, "work_end", "17:30", org_id))
+
+
+async def org_work_hours(db: AsyncSession, org_id: uuid.UUID) -> levels.WorkHours:
+    """Giờ làm của tổ chức đọc từ settings (cùng `work_hours_of`); hồ sơ Sếp không được đọc ở đây."""
+    s, _ = await intel_settings(db, org_id)
+    return work_hours_of(s, org_id)
 
 
 def ramp_start(s: dict[str, Any], installed: datetime, org_id: uuid.UUID | None = None) -> datetime | None:

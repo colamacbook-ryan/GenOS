@@ -16,7 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gh.biz.hooks import HookCtx
-from gh.biz.intel import catalog, levels
+from gh.biz.intel import catalog, levels, signals
 from gh.biz.intel.detectors import catalog_match
 from gh.biz.market import service as msvc
 from gh.biz.market.jobs import market_signal_capture
@@ -233,7 +233,7 @@ async def test_opportunity_below_owner_value_limit_is_never_reported(db) -> None
     await _demand(db, w, product="xi măng PCB40", qty=50, unit="bao", budget=5_000_000, body="Cần gấp 50 bao xi măng PCB40")   # 5 triệu < 10 triệu
     r = await _one(db, w.org)
     assert r.level in ("grey", "off") and r.gate is None and r.delivery not in ("push_now", "digest_top", "digest", "digest_morning")
-    assert levels.SignalIn.model_validate(r.level_input).opportunity.touches_value_limit is True
+    assert signals.load_level_input(r.level_input).opportunity.touches_value_limit is True
 
 
 async def test_opportunity_at_or_above_value_limit_still_reported(db) -> None:  # type: ignore[no-untyped-def]
@@ -241,7 +241,7 @@ async def test_opportunity_at_or_above_value_limit_still_reported(db) -> None:  
     await _owner_fact(db, w, "owner_value_limit", "không nhận đơn dưới 10 triệu")
     await _demand(db, w, product="xi măng PCB40", qty=500, unit="bao", budget=45_000_000, body="Cần gấp 500 bao xi măng PCB40")
     r = await _one(db, w.org)
-    assert levels.SignalIn.model_validate(r.level_input).opportunity.touches_value_limit is False and r.level in ("amber", "red")
+    assert signals.load_level_input(r.level_input).opportunity.touches_value_limit is False and r.level in ("amber", "red")
 
 
 async def test_forbidden_goods_opportunity_is_not_created_at_all(db) -> None:  # type: ignore[no-untyped-def]
@@ -258,7 +258,7 @@ async def test_unconfirmed_value_limit_is_not_used(db) -> None:  # type: ignore[
     await db.commit()
     await _demand(db, w, product="xi măng PCB40", qty=50, unit="bao", budget=5_000_000, body="Cần gấp 50 bao xi măng PCB40")
     r = await _one(db, w.org)
-    assert levels.SignalIn.model_validate(r.level_input).opportunity.touches_value_limit is False
+    assert signals.load_level_input(r.level_input).opportunity.touches_value_limit is False
 
 
 # ─── không báo một cơ hội nhiều lần (gộp theo case_key) ──────────────────────

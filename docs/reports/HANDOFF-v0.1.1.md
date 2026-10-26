@@ -1,4 +1,4 @@
-# Bàn giao GenOS — hiện trạng + việc dở (cập nhật 26/10/2026, bản NHÁP v0.1.76 chưa phát hành; bản đã phát hành mới nhất v0.1.75 — GenOS bản đầu, rồi v0.1.74 — bản tính năng trên v0.1.73, rồi v0.1.73 — bản tính năng trên v0.1.72, rồi v0.1.72 trên v0.1.71 (bản vá trên v0.1.70), gộp v0.1.69 + v0.1.70, bản gộp v0.1.68, bản vá v0.1.66 và bản gộp v0.1.65)
+# Bàn giao GenOS — hiện trạng + việc dở (cập nhật 26/10/2026, bản NHÁP v0.1.77 chưa phát hành (trên v0.1.76 NHÁP); bản đã phát hành mới nhất v0.1.75 — GenOS bản đầu, rồi v0.1.74 — bản tính năng trên v0.1.73, rồi v0.1.73 — bản tính năng trên v0.1.72, rồi v0.1.72 trên v0.1.71 (bản vá trên v0.1.70), gộp v0.1.69 + v0.1.70, bản gộp v0.1.68, bản vá v0.1.66 và bản gộp v0.1.65)
 
 File này nay chỉ ghi **hiện trạng + việc dở** (tên cũ `HANDOFF-v0.1.1.md` giữ nguyên vì mã nguồn có chú thích trỏ tới).
 Lịch sử từng bản nằm ở [CHANGELOG.md](../../CHANGELOG.md) (3–5 dòng/bản) và `docs/releases/vX.Y.Z.md` (chi tiết, chuyển nguyên từ HANDOFF cũ):
@@ -6,6 +6,13 @@ mục "Lỗi cần sửa", "Chia việc", "Kiểm tra tích hợp" của v0.1.1/
 chú thích trong mã trỏ "HANDOFF mục vX.Y.Z" thì đọc tệp `docs/releases/vX.Y.Z.md` tương ứng.
 Tiến độ, bản phản ứng (hotfix) và **mục Nợ**: [ROADMAP](../ROADMAP.md). Vận hành hằng ngày: [runbook](../runbook.md).
 Ghi chú vận hành riêng của Sếp (máy, tài khoản, địa chỉ, việc riêng) nằm ở repo Brain › Project/gen-harness (riêng tư) — không ghi vào repo công khai này.
+
+## v0.1.77 — NHÁP, chờ phát hành (nhánh `claude/wip/v0177/p6` gộp P1–P4; `VERSION` = v0.1.77)
+
+- **Làm gì**: bảng ưu tiên mới cho bốn cổng thường + chạy thử 14 ngày (migration `0045`), lừa đảo/an toàn không đổi. Chi tiết: [v0.1.77.md](../releases/v0.1.77.md).
+- **Trạng thái**: P1 (#21), P4 (#23) chờ CI rồi merge, P6 (tích hợp + tài liệu) merge cuối; chưa tag. Chưa nghiệm thu bằng tài khoản thật, chưa chạy G-KB kb1–kb4 trên bản gộp.
+- **Còn dở**: Nợ mới **#98–#101** ở [ROADMAP](../ROADMAP.md); G-KB sau khi gộp; hiệu chỉnh ngưỡng sau 14 ngày chạy thử (M1, cần ≥ 10 lượt chấm).
+- **Boss cần làm**: xem «Việc Boss phải làm» ở [v0.1.77.md](../releases/v0.1.77.md#việc-boss-phải-làm) (cập nhật, khai khách chủ chốt bước 3 có PIN, 14 ngày chạy thử bấm Đúng/Sai, câu hỏi chờ có thể tụt 🟠→⚪ một lần, đổi giờ làm qua chat).
 
 ## v0.1.76 — NHÁP, chưa phát hành (nhánh `claude/wip/v0176/dot2`, main sau PR #12 + #13; `VERSION` vẫn v0.1.75)
 

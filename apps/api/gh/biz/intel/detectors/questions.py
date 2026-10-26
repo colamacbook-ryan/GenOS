@@ -59,14 +59,6 @@ class QuestionIn(BaseModel):
     summary: str | None = None
 
 
-async def work_hours_of(db: AsyncSession, org_id: uuid.UUID) -> levels.WorkHours:
-    """Giờ làm của tổ chức: settings `intel.work_start` / `intel.work_end` (migration 0045; mặc định 08:00–17:30, giờ VN). Một nguồn với
-    `DeliveryState.work_hours` (spec r7 (c′), CNS-190); sai định dạng ⇒ mặc định + log. Hồ sơ Sếp không được đọc ở đây."""
-    s, _ = await signals.intel_settings(db, org_id)
-    d = levels.WorkHours()
-    return levels.WorkHours(start=signals._hhmm(s, "work_start", d.start, org_id), end=signals._hhmm(s, "work_end", d.end, org_id))
-
-
 def _day_windows(day: datetime, work: levels.WorkHours) -> list[tuple[datetime, datetime]]:
     """Khung giờ làm của MỘT ngày lịch VN bắt đầu `day` (00:00). `end > start` ⇒ [start, end). `end <= start` ⇒ khung vắt nửa đêm
     [start, 24h) ∪ [0, end) (vd 18:00–02:00; `end == start` ⇒ cả ngày)."""
@@ -140,7 +132,7 @@ async def _sent_by(db: AsyncSession, org_id: uuid.UUID, raw_event_id: uuid.UUID,
 
 async def emit(db: AsyncSession, org_id: uuid.UUID, q: QuestionIn, now: datetime) -> signals.Signal:
     """Ghi (hoặc gộp) tín hiệu câu hỏi: một câu hỏi gốc = một tín hiệu (`case_key` theo tin gốc, spec §4.2 bảng case_key)."""
-    work = await work_hours_of(db, org_id)
+    work = await signals.org_work_hours(db, org_id)
     ent: uuid.UUID | None = None
     if q.asker_person_id is not None and not await _sent_by(db, org_id, q.raw_event_id, q.asker_person_id):
         # Tin gốc không do người này gửi ⇒ không gán câu hỏi cho họ (không để tin người khác mang nhãn khách/người thân).
@@ -173,7 +165,7 @@ async def refresh_waiting(db: AsyncSession, org_id: uuid.UUID, now: datetime, *,
     """Câu hỏi chặn việc còn mở, đã quá `WAIT_ESCALATE_H` giờ (đồng hồ tường — điều kiện cần; giờ chờ tính trong giờ làm ≤ giờ tường) mà `level_input` còn ghi ≤ 2 ⇒ làm mới `owner_unanswered_h`/`in_work_hours`
     rồi `relane`. Câu hỏi đã làm mới nhưng cờ `in_work_hours` đã lưu KHÁC giờ hiện tại (lần làm mới rơi vào giờ yên lặng) được chọn lại khi
     đổi giờ ⇒ không kẹt ở mức cũ. Chạy lại an toàn (cờ đã khớp giờ hiện tại thì không chọn lại). Trả các tín hiệu ĐỔI mức/phân phối. Bên gọi commit."""
-    work = await work_hours_of(db, org_id)
+    work = await signals.org_work_hours(db, org_id)
     rows = (await db.execute(text("""
         SELECT id, level, delivery, level_input FROM biz.alerts
         WHERE org_id = :o AND kind = :k AND status IN ('open', 'acknowledged') AND level_input IS NOT NULL
