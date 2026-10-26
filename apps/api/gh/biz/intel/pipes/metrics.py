@@ -2,7 +2,11 @@
 """Chỉ số Tình báo + báo cáo tuần (v0.1.76, gói T9 — spec r6 §2.2 M1/M1b/M2/M5/M11/M13, W9).
 
 `compute(db, org, days)` CHỈ ĐỌC, lọc `org_id`, trả số + mã (không bao giờ chữ tin / tiêu đề / ghi chú của Sếp):
-- `precision_ci`: theo cổng, bản Đúng/Sai mới nhất mỗi tín hiệu, Wilson 95% (`m1_ok` khi n ≥ 15, điểm ≥ 80%, cận dưới ≥ 60%); `amber` = M1b (không cổng).
+- `precision_ci`: theo cổng, bản Đúng/Sai mới nhất mỗi tín hiệu, Wilson 95% (`m1_ok` khi n ≥ 10, điểm ≥ 80%, cận dưới ≥ 60% — v0.1.77 sửa 15 → 10
+  theo spec r7 §2.2); `amber` = M1b (không cổng).
+- `m1` (v0.1.77, R4): M1 GỘP bốn cổng thường trên dòng bóng, chỉ `signal_feedback.rule_version = 'r7'` và `at ≥ intel.ramp_started_at`: `pooled`
+  {p, lo95, hi95, n, m1_ok}, `by_gate`, `wrong_by_reason` (đếm Sai theo lý do), `low_precision_gates` ("Sai nhiều" = ≥ 3 lần chấm và Đúng riêng < 80%),
+  `passed_gates`. Job đêm `intel_m1_nightly` ghi `settings.intel.m1_passed_gates` / `low_precision_gates` từ số này.
 - `false_alarms`: M2 — 🔴 bị Sếp chấm Sai / ngày (trung bình `days`) + số 🔴 bị hạ do chạm trần / ngày.
 - `recall`: M11 — recall = phát hiện / (phát hiện + sót ước tính); sót ước tính = Σ 1/p của «sót» trong mẫu giàu tín hiệu (p lấy từ ghi chú
   «mẫu tầng tX p=…» T3 ghi; «em sót» tự báo p=1); khoảng tin cậy bootstrap 1.000 lần trên các ngày (hạt giống cố định); `n_eff` Kish trên mẫu đã gửi.
@@ -23,6 +27,7 @@ import uuid
 from datetime import date, datetime, timedelta
 from typing import Any
 
+import orjson
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,6 +37,8 @@ from gh.auth.deps import require_owner
 from gh.biz.hooks import CronJob
 from gh.biz.intel import levels
 from gh.biz.intel.pipes import coverage, delivery
+from gh.biz.mem import profile_read
+from gh.chassis import actionlog
 from gh.db import DB
 from gh.owner_channel import reports
 from gh.refinery import budget, clock
@@ -100,6 +107,17 @@ def _weight(note: str | None) -> float:
     return 1.0 / p if 0 < p <= 1 else 1.0
 
 
+M1_MIN_N = 10                    # r7 (chốt bản 3): n ≥ 10 (code cũ ghi 15), gộp 4 loại thường
+LOW_PRECISION_MIN_N = 3          # "Sai nhiều" = ≥ 3 lần chấm và tỉ lệ Đúng riêng < 80% [Gen chọn]
+RAMP_RULE_VERSION = "r7"
+WRONG_REASONS = ("still_buying", "not_urgent", "staff_handled")
+
+
+def m1_ok(n: int, w: dict[str, Any]) -> bool:
+    """M1: n ≥ 10, điểm ≥ 80% và cận dưới Wilson 95% ≥ 60% (ở n = 10 cần 10/10)."""
+    return bool(n >= M1_MIN_N and w["p"] is not None and w["p"] >= 0.8 and w["lo95"] >= 0.6)
+
+
 # ─── đọc số liệu ─────────────────────────────────────────────────────────────
 
 #: `is_red`: 🔴 thật (đang 🔴, hoặc đã đẩy / sẽ đẩy ở chế độ bóng). 🟠 có `candidate` KHÔNG phải 🔴 (feedback.gate = gate or candidate).
@@ -119,11 +137,50 @@ async def _precision(db: AsyncSession, org_id: uuid.UUID, since: datetime) -> tu
     for g in levels.GATES:
         k, n = got.get(g, (0, 0))
         w = wilson(k, n)
-        out.append({"gate": g, "k": k, **w, "m1_ok": bool(n >= 15 and w["p"] >= 0.8 and w["lo95"] >= 0.6) if n else False})
+        out.append({"gate": g, "k": k, **w, "m1_ok": m1_ok(n, w) if n else False})
     k, n = got.get("", (0, 0))
     amber = {"k": k, **wilson(k, n)}
     amber["m1b_ok"] = bool(n and amber["p"] >= 0.7)
     return out, amber
+
+
+async def _ramp_started(db: AsyncSession, org_id: uuid.UUID) -> datetime | None:
+    v = (await db.execute(text("SELECT settings -> 'intel' ->> 'ramp_started_at' FROM core.organizations WHERE id = :o"), {"o": org_id})).scalar_one_or_none()
+    return profile_read.parse_when(v)
+
+
+async def m1_ramp(db: AsyncSession, org_id: uuid.UUID) -> dict[str, Any]:
+    """M1 R4 (v0.1.77): Đúng/Sai MỚI NHẤT của Sếp mỗi tín hiệu, chỉ dòng bóng (`shadow`) của bốn cổng thường, chỉ `rule_version = 'r7'` và
+    `at ≥ intel.ramp_started_at`. Lừa đảo/an toàn tính riêng (không chặn, không vào đây). Trả số + mã, không chữ tin."""
+    ramp = await _ramp_started(db, org_id)
+    since = ramp or datetime(2000, 1, 1, tzinfo=VN)
+    rows = (await db.execute(text("""
+        SELECT gate, verdict, reason FROM (
+          SELECT DISTINCT ON (f.signal_id) f.signal_id, f.gate, f.verdict, f.reason, f.shadow, f.rule_version, f.at
+          FROM biz.signal_feedback f JOIN biz.alerts a ON a.id = f.signal_id AND a.org_id = f.org_id
+          WHERE f.org_id = :o AND f.verdict_by = 'owner' AND f.verdict IN ('correct', 'wrong') AND a.kind NOT IN ('system', 'legacy')
+          ORDER BY f.signal_id, f.at DESC) t
+        WHERE shadow AND rule_version = :rv AND at >= :s AND gate = ANY(:g)"""),
+        {"o": org_id, "rv": RAMP_RULE_VERSION, "s": since, "g": list(levels.REGULAR_GATES)})).all()
+    by: dict[str, list[int]] = {g: [0, 0] for g in levels.REGULAR_GATES}
+    reasons = dict.fromkeys(WRONG_REASONS, 0)
+    reasons["none"] = 0
+    for r in rows:
+        by[r.gate][1] += 1
+        if r.verdict == "correct":
+            by[r.gate][0] += 1
+        elif r.reason in WRONG_REASONS:
+            reasons[r.reason] += 1
+        else:
+            reasons["none"] += 1
+    k, n = sum(v[0] for v in by.values()), sum(v[1] for v in by.values())
+    pooled = {"k": k, **wilson(k, n)}
+    pooled["m1_ok"] = m1_ok(n, pooled) if n else False
+    low = [g for g, (kk, nn) in by.items() if nn >= LOW_PRECISION_MIN_N and kk / nn < 0.8]
+    return {"rule_version": RAMP_RULE_VERSION, "ramp_started_at": ramp.isoformat() if ramp else None, "pooled": pooled,
+            "by_gate": [{"gate": g, "k": v[0], **wilson(v[0], v[1])} for g, v in by.items()],
+            "wrong_by_reason": reasons, "low_precision_gates": low,
+            "passed_gates": [g for g in levels.REGULAR_GATES if g not in low] if pooled["m1_ok"] else []}
 
 
 async def _false_alarms(db: AsyncSession, org_id: uuid.UUID, since: datetime, days: int) -> dict[str, Any]:
@@ -217,7 +274,7 @@ async def compute(db: AsyncSession, org_id: uuid.UUID, *, days: int = 14, now: d
                                   {"o": org_id, "s": since})).scalar_one())
     return {"days": days, "precision_ci": prec, "amber": amber, "false_alarms": await _false_alarms(db, org_id, since, days),
             "recall": await _recall(db, org_id, since, days, now), "cost": await _cost(db, org_id, days, now),
-            "acted": await _acted(db, org_id, since), "shadow": {"would_push_n": would},
+            "acted": await _acted(db, org_id, since), "shadow": {"would_push_n": would}, "m1": await m1_ramp(db, org_id),
             "coverage_line": await coverage.line(db, org_id, now)}
 
 
@@ -290,5 +347,40 @@ async def intel_weekly(ctx: dict[str, Any]) -> dict[str, int]:
     return out
 
 
-JOBS: list[CronJob] = [(intel_weekly, {"minute": {30, 35, 40}})]
-__all__ = ["JOBS", "compute", "deliver_weekly", "n_eff", "recall_ci", "weekly_text", "wilson"]
+async def run_m1_nightly(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> dict[str, Any]:
+    """`intel_m1_nightly` cho một tổ chức (spec r7.1 (e)2, CNS-181): đọc M1 R4 → ghi `settings.intel.m1_passed_gates` / `low_precision_gates` +
+    Nhật ký. Đạt ⇒ bốn mã thường TRỪ loại "Sai nhiều"; chưa đạt ⇒ rỗng. Cổng 1–2 không bao giờ nằm trong hai danh sách. Bên gọi commit."""
+    m = await m1_ramp(db, org_id)
+    patch = {"m1_passed_gates": m["passed_gates"], "low_precision_gates": m["low_precision_gates"], "m1_checked_at": now.isoformat()}
+    await db.execute(text("""UPDATE core.organizations SET settings = settings || jsonb_build_object('intel',
+                               COALESCE(settings->'intel', '{}'::jsonb) || CAST(:p AS jsonb)) WHERE id = :o"""),
+                     {"o": org_id, "p": orjson.dumps(patch).decode()})
+    await actionlog.record(db, org_id=org_id, actor_type="system", actor_id="system:intel", action="intel.m1.nightly", target_type="settings",
+                           target_id="intel", result="ok", detail={"n": m["pooled"]["n"], "m1_ok": m["pooled"]["m1_ok"],
+                                                                    "passed": m["passed_gates"], "low_precision": m["low_precision_gates"]})
+    return m
+
+
+async def intel_m1_nightly(ctx: dict[str, Any]) -> dict[str, int]:
+    from gh.db import sessionmaker
+
+    now = clock.now()
+    out = {"orgs": 0, "passed": 0, "errors": 0}
+    sm = sessionmaker()
+    async with sm() as db:
+        orgs = (await db.execute(text("SELECT id FROM core.organizations"))).scalars().all()
+    for org in orgs:
+        try:
+            async with sm() as db:
+                m = await run_m1_nightly(db, org, now)
+                await db.commit()
+            out["orgs"] += 1
+            out["passed"] += 1 if m["passed_gates"] else 0
+        except Exception:                                       # noqa: BLE001 — một tổ chức lỗi không dừng tổ chức khác
+            log.exception("intel_m1_nightly lỗi ở một tổ chức")
+            out["errors"] += 1
+    return out
+
+
+JOBS: list[CronJob] = [(intel_weekly, {"minute": {30, 35, 40}}), (intel_m1_nightly, {"hour": {2}, "minute": {20}})]
+__all__ = ["JOBS", "compute", "deliver_weekly", "m1_ramp", "n_eff", "recall_ci", "run_m1_nightly", "weekly_text", "wilson"]

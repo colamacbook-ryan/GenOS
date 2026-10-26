@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { PersonType } from '@gen-harness/contracts';
 import { apiClient } from '../../lib/api';
 import { api } from '../../lib/api';
-import type { IntelBudget, IntelConsole, IntelMode, IntelRamp, IntelSetup } from './intelModel';
+import type { IntelBudget, IntelConsole, IntelMode, IntelRamp, IntelSetup, WrongReason } from './intelModel';
 
 /** v0.1.76 (T11): thẻ "Tình báo". Thao tác cần PIN ⇒ máy chủ trả 423 ⇒ hộp PIN chung tự mở rồi gửi lại (lib/api.ts). */
 export const qkIntel = {
@@ -63,7 +63,9 @@ function isSetup(v: unknown): v is IntelSetup {
   return !!o && typeof o === 'object' && typeof o.ready === 'boolean' && !!o.groups && !!o.staff && Array.isArray(o.groups.unlabeled) &&
     Array.isArray(o.staff.people) && Array.isArray(o.contexts) && Array.isArray(o.gated_kinds) &&
     o.groups.unlabeled.every((g) => typeof g?.id === 'string' && typeof g?.name === 'string') &&
-    o.staff.people.every((p) => typeof p?.id === 'string' && typeof p?.name === 'string');
+    o.staff.people.every((p) => typeof p?.id === 'string' && typeof p?.name === 'string') &&
+    (o.key_customers === undefined ||
+      (Array.isArray(o.key_customers.customers) && o.key_customers.customers.every((c) => typeof c?.id === 'string' && typeof c?.entity_id === 'string' && typeof c?.name === 'string')));
 }
 
 /** v0.1.76 (T14, D3): trạng thái "Thiết lập Tình báo" — chỉ Owner (máy chủ trả 403 với vai khác). */
@@ -77,6 +79,16 @@ export const useIntelSetup = (enabled: boolean) =>
     },
     enabled,
   });
+export const useConfirmKeyCustomers = () => useIntelWrite(() => req('/intel/setup/key-customers-confirmed', 'POST', {}));
+/** v0.1.77 (R2): đánh dấu / bỏ đánh dấu khách chủ chốt — đúng đường Hồ sơ sẵn có (`POST /me/profile/items` mục `key_relations`, `DELETE
+ * /me/profile/items/{id}`; Owner + mã PIN: 423 ⇒ hộp PIN chung tự mở rồi gửi lại). Trợ lý chỉ gợi ý tên; chỉ Sếp tích mới thành `owner_confirmed`. */
+export const useSetKeyCustomer = () =>
+  useIntelWrite(({ entityId, factId }: { entityId: string; factId: string | null }) =>
+    factId ? req(`/me/profile/items/${encodeURIComponent(factId)}`, 'DELETE') : req('/me/profile/items', 'POST', { section: 'key_relations', object_entity_id: entityId }));
+/** Chấm dòng bóng: Đúng, hoặc Sai kèm 1 trong 3 lý do (`biz.signal_feedback.reason`). Chỉ Owner (máy chủ kiểm). */
+export const useSignalFeedback = () =>
+  useIntelWrite(({ id, verdict, reason }: { id: string; verdict: 'correct' | 'wrong'; reason?: WrongReason }) =>
+    req(`/signals/${encodeURIComponent(id)}/feedback`, 'POST', { verdict, ...(reason ? { reason } : {}) }));
 export const useConfirmStaff = () => useIntelWrite(() => req('/intel/setup/staff-confirmed', 'POST', {}));
 /** Đánh dấu / bỏ đánh dấu nhân viên — đúng đường "Đánh dấu là nhân viên" của hồ sơ (`PATCH /profile/{id}`, Owner + mã PIN: 423 ⇒ hộp PIN
  * chung tự mở). Tắt ⇒ trả về loại trước đó (`prev_type`, vd khách); máy chủ tự khôi phục quan hệ cũ. */

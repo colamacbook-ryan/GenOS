@@ -75,7 +75,10 @@ async def test_setup_two_steps_then_ready_and_cold_start_sees_labels_and_staff(o
     r = await owner_api.send("POST", "/intel/setup/staff-confirmed", {})
     assert r.status_code == 200 and r.json()["staff_count"] == 1
     s = (await owner_api.get("/intel/setup")).json()
-    assert s["ready"] is True and s["staff"]["done"] is True and s["staff"]["confirmed_at"]
+    assert s["ready"] is False and s["staff"]["done"] is True and s["staff"]["confirmed_at"]       # v0.1.77: còn bước 3 "Khách chủ chốt"
+    assert (await owner_api.send("POST", "/intel/setup/key-customers-confirmed", {})).status_code == 200
+    s = (await owner_api.get("/intel/setup")).json()
+    assert s["ready"] is True and s["key_customers"]["done"] is True
 
     log = (await db.execute(text("SELECT detail, target_label FROM ops.action_log WHERE org_id = :o AND action = 'intel.setup.staff_confirmed'"), {"o": org})).one()
     assert log.detail == {"staff_count": 1} and "Ngọc" not in str(log.detail) and log.target_label is None

@@ -306,8 +306,8 @@ def test_b4_shadow_mode_and_fraud_bypass() -> None:
     assert f.delivery == "push_now" and not f.would_push
 
 
-def test_b4_regular_push_flag_stays_off_until_p4() -> None:
-    assert L.REGULAR_PUSH_ENABLED is False                  # P4 bật cùng ramp R4
+def test_b4_regular_push_flag_is_on_with_p4_ramp() -> None:
+    assert L.REGULAR_PUSH_ENABLED is True                   # P4 đã bật cùng ramp R4
 
 
 # ─── B5: Q15 ───────────────────────────────────────────────────────────────────

@@ -10,7 +10,9 @@ Tái dùng, không nhân đôi: mute (`POST/DELETE /intel/mutes`, T1), trần `i
 
 from __future__ import annotations
 
+import math
 import uuid
+from datetime import timedelta
 from typing import Any, Literal
 
 import orjson
@@ -23,7 +25,8 @@ from gh.auth import service
 from gh.auth.deps import require_owner, require_pin
 from gh.biz.intel import access, levels, strong_confirm
 from gh.biz.intel.detectors import fraud
-from gh.biz.mem import contexts
+from gh.biz.intel.pipes import metrics
+from gh.biz.mem import contexts, profile_read
 from gh.chassis import actionlog
 from gh.db import DB
 from gh.errors import ApiError, not_found
@@ -77,6 +80,8 @@ async def console_state(user: service.CurrentUser = Depends(require_owner), db: 
     for lb in labels:
         by_group.setdefault(lb.group_id, []).append({"context": lb.context, "is_primary": lb.is_primary})
     mode = "shadow" if s.get("mode") == "shadow" else "live"
+    ramp = await ramp_state(db, org, s, now)
+    shadow_items = await shadow_state(db, user)
     return {
         "pin_active": user.pin_active(),
         "mode": mode,
@@ -92,7 +97,46 @@ async def console_state(user: service.CurrentUser = Depends(require_owner), db: 
         "payees": [{"signal_id": str(p.id), "title": p.title, "last3": p.last3, "bank": p.bank} for p in payees],
         "groups": [{"id": str(g.id), "name": g.name, "labels": by_group.get(g.id, [])} for g in groups],
         "contexts": list(contexts.CONTEXT_CODES),
+        "ramp": ramp,
+        "shadow_items": shadow_items,
     }
+
+
+# ─── chạy thử 14 ngày (R4) + dòng bóng chờ Sếp chấm Đúng/Sai ──────────────────
+
+RAMP_DAYS = 14
+SHADOW_LIST_MAX = 12
+
+
+async def ramp_state(db: AsyncSession, org_id: uuid.UUID, s: dict[str, Any], now: Any) -> dict[str, Any]:
+    """Banner "chạy thử lại 14 ngày (từ dd/mm)" (R4): bốn cổng thường chạy bóng 14 ngày kể từ `intel.ramp_started_at`; M1 gộp n ≥ 10.
+    Chỉ số + mã, không chữ tin. `in_trial` = còn trong 14 ngày HOẶC bốn cổng chưa qua M1 (đến lúc đó cổng thường chưa nhắn riêng)."""
+    ramp = profile_read.parse_when(s.get("ramp_started_at"))
+    m = await metrics.m1_ramp(db, org_id)
+    passed = [g for g in s.get("m1_passed_gates") or [] if g in levels.REGULAR_GATES] if isinstance(s.get("m1_passed_gates"), list) else []
+    days = max(0.0, (now - ramp).total_seconds() / 86400.0) if ramp else None
+    in_window = days is None or days < RAMP_DAYS
+    return {"started_at": ramp.isoformat() if ramp else None, "days": RAMP_DAYS,
+            "ends_at": (ramp + timedelta(days=RAMP_DAYS)).isoformat() if ramp else None,
+            "days_left": None if days is None else max(0, math.ceil(RAMP_DAYS - days)),
+            "in_trial": in_window or not passed, "passed_gates": passed,
+            "m1": {"n": m["pooled"]["n"], "k": m["pooled"]["k"], "p": m["pooled"]["p"], "lo95": m["pooled"]["lo95"], "ok": m["pooled"]["m1_ok"],
+                   "min_n": metrics.M1_MIN_N, "wrong_by_reason": m["wrong_by_reason"], "low_precision_gates": m["low_precision_gates"]}}
+
+
+async def shadow_state(db: AsyncSession, user: service.CurrentUser) -> list[dict[str, Any]]:
+    """Dòng bóng ("đáng lẽ báo ngay") của bốn cổng thường đang mở — Sếp chấm Đúng/Sai (Sai kèm 1 trong 3 lý do). Cùng cổng đọc với `/signals`
+    (`access.alert_visible_sql`: `console_pin`/nhóm ẩn không lộ) và lọc `org_id` của người gọi."""
+    rows = (await db.execute(text(f"""SELECT a.id, a.kind, a.gate, a.title, a.reasons, a.would_push_at, a.feedback_verdict,
+                                             a.level_input ->> 'staff_ref' AS staff_ref
+                                      FROM biz.alerts a
+                                      WHERE a.org_id = :o AND a.status IN ('open', 'acknowledged') AND a.would_push_at IS NOT NULL
+                                        AND a.level = 'red' AND a.gate = ANY(:g) AND a.kind NOT IN ('system', 'legacy')
+                                        AND {access.alert_visible_sql(user, 'a')}
+                                      ORDER BY a.would_push_at DESC LIMIT :n"""), {"o": user.org_id, "g": list(levels.REGULAR_GATES),  # noqa: S608
+                                                                                   "n": SHADOW_LIST_MAX})).all()
+    return [{"id": str(r.id), "kind": r.kind, "gate": r.gate, "title": r.title, "reasons": list(r.reasons or []),
+             "would_push_at": r.would_push_at.isoformat() if r.would_push_at else None, "verdict": r.feedback_verdict} for r in rows]
 
 
 # ─── khoá / mở khoá trợ lý ───────────────────────────────────────────────────
@@ -152,8 +196,8 @@ async def put_settings(body: SettingsIn, user: service.CurrentUser = Depends(req
     if body.mode is None and body.ramp_gates is None:
         raise ApiError(422, "VALIDATION", "Chưa chọn gì để đổi")
     if body.ramp_gates == "push" and not levels.REGULAR_PUSH_ENABLED:
-        raise ApiError(422, "VALIDATION", "Bản này bốn cổng thường chỉ lên đầu bản tin — chưa bật được «Báo ngay»",
-                       detail="ramp_gates=push bị khoá trong v0.1.76 (levels.REGULAR_PUSH_ENABLED=False); lừa đảo và an toàn vẫn báo ngay")
+        raise ApiError(422, "VALIDATION", "Bốn cổng thường đang chỉ lên đầu bản tin — chưa bật được «Báo ngay»",
+                       detail="ramp_gates=push đang bị khoá (levels.REGULAR_PUSH_ENABLED=False); lừa đảo và an toàn vẫn báo ngay")
     cur = await _intel(db, user.org_id)
     patch: dict[str, Any] = {}
     if body.mode is not None and body.mode != ("shadow" if cur.get("mode") == "shadow" else "live"):
@@ -245,7 +289,7 @@ SETUP_GATED_VI = ("lời hứa với khách", "câu hỏi chờ trả lời", "k
 
 @router.get("/intel/setup")
 async def setup_state(user: service.CurrentUser = Depends(require_owner), db: AsyncSession = DB) -> dict[str, Any]:
-    """Hai bước "Thiết lập Tình báo": (1) nhóm còn chưa có nhãn bối cảnh do Sếp gán — nhãn mở các loại theo bối cảnh nhóm (khởi động lạnh
+    """Ba bước "Thiết lập Tình báo": (3, v0.1.77 R2) khách chủ chốt do Sếp khai (`key_customers`; trợ lý chỉ gợi ý tên); (1) nhóm còn chưa có nhãn bối cảnh do Sếp gán — nhãn mở các loại theo bối cảnh nhóm (khởi động lạnh
     T12/T13 dùng nhãn kinh_doanh/nhan_vien); (2) khai nhân viên (`PATCH /profile/{id}` `person_type=staff`, Owner + PIN) rồi bấm "Đã khai xong"
     (`POST /intel/setup/staff-confirmed`) — danh sách nhân viên giúp phân biệt khách/nhân viên chính xác hơn; cờ "đã khai xong" chỉ để nhắc,
     không bật/tắt loại nào. Không chặn app; lừa đảo/an toàn luôn chạy. Chỉ đọc, không cần PIN."""
@@ -276,16 +320,43 @@ async def setup_state(user: service.CurrentUser = Depends(require_owner), db: As
     confirmed_at = s.get("staff_confirmed_at") if isinstance(s.get("staff_confirmed_at"), str) else None
     groups_done = int(cnt.unlabeled) == 0
     staff_done = confirmed_at is not None
+    key = await key_customers_state(db, org, s)
     return {
-        "ready": groups_done and staff_done,
+        "ready": groups_done and staff_done and key["done"],
         "groups": {"done": groups_done, "total": int(cnt.total), "unlabeled_count": int(cnt.unlabeled),
                    "unlabeled": [{"id": str(g.id), "name": g.name, "member_count": g.member_count} for g in unlabeled]},
         "staff": {"done": staff_done, "confirmed_at": confirmed_at, "staff_count": int(staff_n),
                   "people": [{"id": str(p.id), "name": p.display_name, "person_type": p.person_type or "unknown",
                               "prev_type": p.prev_type, "needs_reconfirm": bool(p.needs_reconfirm)} for p in people]},
+        "key_customers": key,
         "contexts": list(contexts.CONTEXT_CODES),
         "gated_kinds": list(SETUP_GATED_VI),
     }
+
+
+MAX_SETUP_CUSTOMERS = 200
+
+
+async def key_customers_state(db: AsyncSession, org_id: uuid.UUID, s: dict[str, Any]) -> dict[str, Any]:
+    """Bước 3 "Khách chủ chốt" (R2): Sếp KHAI, trợ lý chỉ GỢI Ý tên (`owner_key_relation` `proposed` ⇒ `suggested`, KHÔNG dùng chấm mức). Danh
+    sách = khách (`person_type = customer`) của tổ chức, kèm `entity_id` để ghi qua API Hồ sơ hiện có (`POST /me/profile/items`, Owner + mã PIN) và
+    `fact_id` của mục đã xác nhận để bỏ đánh dấu (`DELETE /me/profile/items/{id}`). Chỉ đọc."""
+    rows = (await db.execute(text("""
+        SELECT p.id, p.display_name, e.id AS entity_id,
+               (SELECT v.fact_id FROM mem.v_owner_profile v WHERE v.org_id = p.org_id AND v.predicate = 'owner_key_relation'
+                  AND v.object_entity_id = e.id AND v.status = 'owner_confirmed' ORDER BY v.valid_from DESC LIMIT 1) AS key_fact_id,
+               EXISTS (SELECT 1 FROM mem.v_owner_profile v WHERE v.org_id = p.org_id AND v.predicate = 'owner_key_relation'
+                  AND v.object_entity_id = e.id AND v.status = 'proposed') AS suggested
+        FROM core.persons p JOIN mem.entities e ON e.person_id = p.id AND e.org_id = p.org_id AND e.merged_into IS NULL AND e.forgotten_at IS NULL
+        WHERE p.org_id = :o AND p.person_type = 'customer' AND p.deleted_at IS NULL AND p.merged_into_id IS NULL
+        ORDER BY (SELECT count(*) FROM mem.v_owner_profile v WHERE v.org_id = p.org_id AND v.predicate = 'owner_key_relation'
+                    AND v.object_entity_id = e.id AND v.status = 'owner_confirmed') DESC, suggested DESC, p.display_name, p.id LIMIT :n"""),
+                              {"o": org_id, "n": MAX_SETUP_CUSTOMERS})).all()
+    confirmed_at = s.get("key_customers_confirmed_at") if isinstance(s.get("key_customers_confirmed_at"), str) else None
+    key_n = sum(1 for r in rows if r.key_fact_id is not None)
+    return {"done": confirmed_at is not None, "confirmed_at": confirmed_at, "key_count": key_n,
+            "customers": [{"id": str(r.id), "entity_id": str(r.entity_id), "name": r.display_name, "key_fact_id": str(r.key_fact_id) if r.key_fact_id else None,
+                           "suggested": bool(r.suggested)} for r in rows]}
 
 
 @router.post("/intel/setup/staff-confirmed")
@@ -300,3 +371,16 @@ async def setup_staff_confirmed(user: service.CurrentUser = Depends(require_owne
     await actionlog.record(db, org_id=org, actor_type="user", actor_id=user.actor_id, action="intel.setup.staff_confirmed",
                            target_type="org", target_id=str(org), result="ok", detail={"staff_count": int(n)}, ip=user.ip)
     return {"ok": True, "confirmed_at": now.isoformat(), "staff_count": int(n)}
+
+
+@router.post("/intel/setup/key-customers-confirmed")
+async def setup_key_customers_confirmed(user: service.CurrentUser = Depends(require_owner), db: AsyncSession = DB) -> dict[str, Any]:
+    """Sếp xác nhận "đã khai xong khách chủ chốt" (kể cả không có ai). Việc ĐÁNH DẤU từng khách đi qua API Hồ sơ (Owner + PIN); nút này chỉ ghi cờ
+    "đã khai" để nhắc, không bật/tắt loại nào. Nhật ký chỉ ghi số lượng, không ghi tên."""
+    org = user.org_id
+    now = clock.now()
+    n = (await key_customers_state(db, org, await _intel(db, org)))["key_count"]
+    await _set(db, org, {"key_customers_confirmed_at": now.isoformat()})
+    await actionlog.record(db, org_id=org, actor_type="user", actor_id=user.actor_id, action="intel.setup.key_customers_confirmed",
+                           target_type="org", target_id=str(org), result="ok", detail={"key_count": n}, ip=user.ip)
+    return {"ok": True, "confirmed_at": now.isoformat(), "key_count": n}

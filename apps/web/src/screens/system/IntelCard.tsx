@@ -12,13 +12,28 @@ import {
   useIntelSettings,
   useLockAssistant,
   useMuteKind,
+  useSignalFeedback,
   useUnlockAssistant,
   useUnlockToday,
   useUnmute,
   useVerifyPayee,
 } from './intelQueries';
-import { DEFENSIVE_KINDS, contextLabel, setupPendingText, vnTime, type IntelConsole, type IntelMode, type IntelRamp } from './intelModel';
+import {
+  DEFENSIVE_KINDS,
+  WRONG_REASONS,
+  contextLabel,
+  kindLabel,
+  rampBannerText,
+  reasonText,
+  setupPendingText,
+  vnTime,
+  type IntelConsole,
+  type IntelMode,
+  type IntelRamp,
+  type WrongReason,
+} from './intelModel';
 import { INTEL_SETUP_ANCHOR } from './IntelSetupCard';
+import './intelP4.css';
 
 /**
  * v0.1.76 (T11, CNS-077): thẻ "Tình báo" tối thiểu — nơi DUY NHẤT trên Console làm các thao tác cần mã PIN của Tình báo: khoá / mở khoá
@@ -80,10 +95,88 @@ function SetupBanner() {
   );
 }
 
+/** v0.1.77 (R4): bốn cổng thường chạy thử lại 14 ngày — nói rõ từ ngày nào, còn mấy ngày, đã chấm mấy lượt. Hết thử/đạt M1 thì biến mất. */
+function RampBanner({ s }: { s: IntelConsole }) {
+  const text = rampBannerText(s.ramp);
+  if (!text) return null;
+  return (
+    <div className="intel-ramp-banner" role="status" data-testid="intel-ramp-banner">
+      <span className="intel-ramp-banner__text">{text}</span>
+    </div>
+  );
+}
+
+/**
+ * v0.1.77: dòng bóng "đáng lẽ báo ngay" của bốn cổng thường. Sếp chấm Đúng, hoặc Sai kèm một trong ba lý do (khách vẫn mua · không gấp · NV lo rồi) —
+ * chính các lượt chấm này tính M1. Chỉ Owner (máy chủ kiểm); mục riêng tư cần PIN không nằm trong danh sách khi chưa mở PIN.
+ */
+function ShadowRow({ s }: { s: IntelConsole }) {
+  const fb = useSignalFeedback();
+  const [asking, setAsking] = useState<string | null>(null);
+  const items = s.shadow_items ?? [];
+  if (!s.shadow_items) return null;
+  const send = (id: string, verdict: 'correct' | 'wrong', reason?: WrongReason) =>
+    fb.mutate({ id, verdict, ...(reason ? { reason } : {}) }, { onSuccess: () => { setAsking(null); toast(verdict === 'correct' ? 'Đã ghi: báo đúng' : 'Đã ghi: báo sai'); } });
+  return (
+    <Row title="Chạy thử: đáng lẽ báo ngay" testId="intel-shadow" state={<Badge kind="count" count={items.length} />}>
+      {items.length === 0 ? (
+        <p className="muted-note">Chưa có mục nào đang chờ Sếp chấm. Mỗi lần Gen đáng lẽ báo ngay, mục đó hiện ở đây để Sếp chấm Đúng hoặc Sai.</p>
+      ) : (
+        <>
+          <p className="muted-note">Gen chưa nhắn riêng các mục này. Sếp chấm Đúng hoặc Sai để Gen biết khi nào đủ chính xác để nhắn ngay.</p>
+          <ul className="intel-list">
+            {items.map((it) => {
+              const why = reasonText(it.reasons);
+              return (
+                <li key={it.id} className="intel-list__item intel-shadow__item">
+                  <span className="intel-list__text">
+                    <span className="intel-shadow__kind">{kindLabel(it.kind)}</span> {it.title}
+                    <span className="muted-note intel-shadow__why">
+                      {it.would_push_at ? `Đáng lẽ báo ngay lúc ${vnTime(it.would_push_at)}` : 'Đáng lẽ báo ngay'}
+                      {why.length ? ` · ${why.join(' · ')}` : ''}
+                    </span>
+                  </span>
+                  {it.verdict === 'correct' || it.verdict === 'wrong' ? (
+                    <Badge kind="status" tone={it.verdict === 'correct' ? 'ok' : 'warn'}>{it.verdict === 'correct' ? 'Đã chấm Đúng' : 'Đã chấm Sai'}</Badge>
+                  ) : asking === it.id ? (
+                    <span className="intel-shadow__why-pick" role="group" aria-label="Vì sao báo sai?">
+                      <span className="muted-note">Vì sao sai?</span>
+                      {WRONG_REASONS.map((r) => (
+                        <Button key={r.value} variant="secondary" size="sm" aria-label={`Sai: ${r.label}`} disabled={fb.isPending} onClick={() => send(it.id, 'wrong', r.value)}>
+                          {r.label}
+                        </Button>
+                      ))}
+                      <Button variant="ghost" size="sm" onClick={() => setAsking(null)}>
+                        Huỷ
+                      </Button>
+                    </span>
+                  ) : (
+                    <span className="intel-shadow__verdict">
+                      <Button variant="secondary" size="sm" aria-label={`Báo đúng: ${it.title}`} disabled={fb.isPending} onClick={() => send(it.id, 'correct')}>
+                        Đúng
+                      </Button>
+                      <Button variant="secondary" size="sm" aria-label={`Báo sai: ${it.title}`} disabled={fb.isPending} onClick={() => setAsking(it.id)}>
+                        Sai
+                      </Button>
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </>
+      )}
+      <Err e={fb.error} />
+    </Row>
+  );
+}
+
 function IntelBody({ s }: { s: IntelConsole }) {
   return (
     <>
       <SetupBanner />
+      <RampBanner s={s} />
+      <ShadowRow s={s} />
       <AssistantRow s={s} />
       <UnlockTodayRow s={s} />
       <ModeRow s={s} />
