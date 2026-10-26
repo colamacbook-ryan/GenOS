@@ -22,7 +22,8 @@ import socket
 import subprocess
 import sys
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Iterator
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -131,12 +132,43 @@ def _use_db(name: str) -> None:
     get_settings.cache_clear()
 
 
+def _copy_template(template: str) -> str:
+    name = f"{TEMPLATE}_{uuid.uuid4().hex[:10]}"
+    _admin(f"CREATE DATABASE {name} TEMPLATE {template}")
+    return name
+
+
+@pytest.fixture(scope="session")
+def _db_prefetch(template_db: str) -> Iterator[Callable[[], str]]:
+    """v0.1.77: `CREATE DATABASE … TEMPLATE` (≈ 0,4 s CPU Postgres, CSDL mẫu ≈ 1.500 quan hệ) chiếm ≈ 1/3 thời gian
+    mỗi lượt pytest (py-spy) mà tiến trình test chỉ ngồi chờ ⇒ luôn tạo SẴN bản sao kế tiếp ở một luồng nền trong lúc
+    test hiện tại chạy. Mỗi test vẫn nhận một CSDL mới tinh chưa ai dùng; lỗi tạo ⇒ test lấy bản đó lỗi như trước.
+    Không test nào kết nối vào CSDL mẫu nên việc sao chép song song không vướng "source database is being accessed"."""
+    pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gh-test-db-prefetch")
+    pending: list[Future[str]] = [pool.submit(_copy_template, template_db)]
+
+    def take() -> str:
+        fut = pending.pop()
+        pending.append(pool.submit(_copy_template, template_db))
+        return fut.result()
+
+    try:
+        yield take
+    finally:
+        for fut in pending:
+            try:
+                name = fut.result()
+            except Exception:  # noqa: BLE001 — bản dự phòng tạo hỏng thì không có gì để xoá
+                continue
+            _admin(f"DROP DATABASE IF EXISTS {name} WITH (FORCE)")
+        pool.shutdown(wait=True)
+
+
 @pytest.fixture
-async def fresh_db(template_db: str) -> AsyncIterator[str]:
+async def fresh_db(_db_prefetch: Callable[[], str]) -> AsyncIterator[str]:
     from gh import db as dbmod
 
-    name = f"{TEMPLATE}_{uuid.uuid4().hex[:10]}"
-    await asyncio.to_thread(_admin, f"CREATE DATABASE {name} TEMPLATE {template_db}")
+    name = await asyncio.to_thread(_db_prefetch)
     _use_db(name)
     await dbmod.dispose_engine()
     try:
