@@ -321,10 +321,9 @@ def _credential_spans(text_: str, secrets: Sequence[str] = ()) -> list[tuple[int
             fspan(m, "v", "[mật khẩu]", trim=".,;!?)")
     for m in _PW_BARE_RE.finditer(folded):
         fspan(m, "v", "[mật khẩu]", trim=".,;!?)")
-    uuids = [(u.start(), u.end()) for u in _UUID_RE.finditer(text_)]
-    for m in _CARD_RE.finditer(text_):
-        if any(a < m.end() and m.start() < b for a, b in uuids):
-            continue
+    # UUID thay bằng ký tự không phải số (cùng độ dài, giữ offset) trước khi quét thẻ: không che nhầm UUID mà thẻ thật đứng sát vẫn bị che
+    card_scan = _UUID_RE.sub(lambda u: "x" * len(u.group(0)), text_)
+    for m in _CARD_RE.finditer(card_scan):
         digits = re.sub(r"\D", "", m.group(0))
         if 13 <= len(digits) <= 19 and _luhn_ok(digits) and not _is_stk_context(text_, m.start()):
             spans.append((m.start(), m.end(), f"[thẻ …{digits[-4:]}]"))

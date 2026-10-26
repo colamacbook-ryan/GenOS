@@ -31,6 +31,17 @@ def test_mask_credentials_keeps_uuid_but_still_masks_real_card() -> None:
         assert mask_credentials(u) == u
 
 
+def test_card_adjacent_to_uuid_is_still_masked() -> None:
+    """Security review: không được bỏ qua cả cụm khớp `_CARD_RE` chỉ vì chồng lên UUID — thẻ thật đứng sát UUID vẫn phải bị che."""
+    for s in (f"{CARD} {CI_GID}", f"{CI_GID} {CARD}"):
+        out = mask_credentials(s)
+        assert out is not None and "4111" not in out.replace(CI_GID, "") and CI_GID in out, (s, out)
+    # dính liền bằng gạch nối: chuỗi không còn là UUID chuẩn ⇒ che (có thể che cả cụm) — chỉ cần số thẻ không lộ
+    for s in (f"4111111111111111-{CI_GID}", f"{CI_GID}-4111111111111111"):
+        out = mask_credentials(s)
+        assert out is not None and "4111111111111111" not in out, (s, out)
+
+
 def test_owner_tool_scrub_keeps_group_id() -> None:
     data = {"items": [{"id": CI_GID, "name": "Nhóm g1", "channel": "zalo"}], "total": 1}
     assert tools.scrub_credentials(data)["items"][0]["id"] == CI_GID
