@@ -24,7 +24,8 @@ function setup(over: Partial<IntelSetup> = {}): IntelSetup {
   return {
     ready: false,
     groups: { done: false, total: 3, unlabeled_count: 2, unlabeled: [{ id: 'g1', name: 'Khách sỉ Nhà Xinh', member_count: 40 }, { id: 'g2', name: 'Nhân viên cửa hàng', member_count: 6 }] },
-    staff: { done: false, confirmed_at: null, staff_count: 0, people: [{ id: 'p1', name: 'Ngọc bán hàng', person_type: 'unknown' }, { id: 'p2', name: 'Chú Bảy', person_type: 'customer' }] },
+    staff: { done: false, confirmed_at: null, staff_count: 0, people: [{ id: 'p1', name: 'Ngọc bán hàng', person_type: 'unknown', prev_type: null }, { id: 'p2', name: 'Chú Bảy', person_type: 'customer', prev_type: null },
+      { id: 'p3', name: 'Chị Mai', person_type: 'staff', prev_type: 'customer' }] },
     contexts: ['kinh_doanh', 'nhan_vien', 'gia_dinh', 'khac'],
     gated_kinds: ['lời hứa với khách', 'câu hỏi chờ trả lời'],
     ...over,
@@ -34,6 +35,7 @@ function setup(over: Partial<IntelSetup> = {}): IntelSetup {
 const consoleState: IntelConsole = {
   pin_active: false, mode: 'live', ramp_gates: 'digest_top', assistant: { locked: false, locked_at: null, locked_via: null },
   outbound: { unlocked_today: false, locked_until: null }, backup_channel: { paired: true, kind: 'telegram' }, mutes: [], payees: [], groups: [], contexts: ['khac'],
+  regular_push_enabled: false,
 };
 
 interface Call { url: string; method: string; body: unknown }
@@ -74,11 +76,14 @@ describe('<IntelSetupCard> Thiết lập Tình báo', () => {
     expect(calls.length).toBe(0);
   });
 
-  it('chưa xong: hai bước, tiến độ 0/2, nêu rõ Tình báo đầy đủ bật khi xong 2 bước và lừa đảo/an toàn vẫn chạy', async () => {
+  it('chưa xong: hai bước, tiến độ 0/2, chữ đúng việc backend làm (không hứa "bật khi xong 2 bước"), lừa đảo/an toàn vẫn chạy', async () => {
     mockApi(setup());
     renderCard(<IntelSetupCard />);
     const card = await screen.findByRole('region', { name: 'Thiết lập Tình báo' });
-    expect(await within(card).findByText('Tình báo đầy đủ bật khi xong 2 bước')).toBeInTheDocument();
+    expect(await within(card).findByText('Hai bước để Gen hiểu đúng nhóm và người của Sếp')).toBeInTheDocument();
+    expect(card).not.toHaveTextContent('bật khi xong 2 bước');
+    expect(card).toHaveTextContent('chỉ chạy ở nhóm đã gán bối cảnh');
+    expect(card).toHaveTextContent('phân biệt khách và nhân viên');
     expect(within(card).getByRole('img', { name: 'Đã xong 0 trên 2 bước' })).toBeInTheDocument();
     expect(within(card).getByText('Còn 2 nhóm')).toBeInTheDocument();
     expect(card).toHaveTextContent('Lừa đảo và an toàn luôn báo');
@@ -111,9 +116,17 @@ describe('<IntelSetupCard> Thiết lập Tình báo', () => {
     await waitFor(() => expect(calls.some((c) => c.url === '/intel/setup/staff-confirmed' && c.method === 'POST')).toBe(true));
   });
 
+  it('tắt nhân viên ⇒ trả về đúng loại cũ (khách), không về "chưa phân loại"', async () => {
+    const calls = mockApi(setup());
+    renderCard(<IntelSetupCard />);
+    const step = await screen.findByTestId('intel-setup-staff');
+    await userEvent.click(within(step).getByRole('switch', { name: 'Chị Mai là nhân viên' }));
+    await waitFor(() => expect(calls.find((c) => c.url === '/profile/p3')).toMatchObject({ method: 'PATCH', body: { person_type: 'customer' } }));
+  });
+
   it('đã xong: một dòng tóm tắt, tiến độ 2/2, không còn danh sách nhóm', async () => {
     mockApi(setup({ ready: true, groups: { done: true, total: 3, unlabeled_count: 0, unlabeled: [] },
-      staff: { done: true, confirmed_at: '2026-10-25T02:00:00Z', staff_count: 1, people: [{ id: 'p1', name: 'Ngọc bán hàng', person_type: 'staff' }] } }));
+      staff: { done: true, confirmed_at: '2026-10-25T02:00:00Z', staff_count: 1, people: [{ id: 'p1', name: 'Ngọc bán hàng', person_type: 'staff', prev_type: 'unknown' }] } }));
     renderCard(<IntelSetupCard />);
     expect(await screen.findByTestId('intel-setup-ready')).toHaveTextContent('khai 1 nhân viên');
     expect(screen.getByRole('img', { name: 'Đã xong 2 trên 2 bước' })).toBeInTheDocument();
@@ -146,6 +159,8 @@ describe('<IntelCard> banner nhắc Thiết lập Tình báo', () => {
     const { unmount } = renderCard(<IntelCard />);
     const banner = await screen.findByTestId('intel-setup-banner');
     expect(banner).toHaveTextContent('còn 2 nhóm chưa gán bối cảnh, chưa khai nhân viên');
+    expect(banner).toHaveTextContent('Thiết lập Tình báo chưa xong');
+    expect(banner).not.toHaveTextContent('Tình báo đầy đủ chưa bật');
     expect(within(banner).getByRole('button', { name: 'Thiết lập ngay' })).toBeInTheDocument();
     unmount();
     queryClient.clear();
@@ -158,5 +173,17 @@ describe('<IntelCard> banner nhắc Thiết lập Tình báo', () => {
   it('setupPendingText chỉ nêu phần thiếu', () => {
     expect(setupPendingText(setup({ staff: { ...setup().staff, done: true } }))).toBe('còn 2 nhóm chưa gán bối cảnh');
     expect(setupPendingText(setup({ groups: { ...setup().groups, done: true } }))).toBe('chưa khai nhân viên');
+  });
+});
+
+describe('<IntelCard> bốn cổng thường trong v0.1.76', () => {
+  it('chỉ lên đầu bản tin: hiện "Đầu bản tin (bản này)", không có lựa chọn Báo ngay', async () => {
+    const calls = mockApi(setup());
+    renderCard(<IntelCard />);
+    const row = await screen.findByTestId('intel-mode');
+    expect(within(row).getByText('Đầu bản tin (bản này)')).toBeInTheDocument();
+    expect(within(row).queryByRole('radio', { name: 'Nhắn ngay từ sớm' })).toBeNull();
+    expect(row).toHaveTextContent('Lừa đảo và an toàn vẫn báo ngay');
+    expect(calls.some((c) => c.url === '/intel/settings')).toBe(false);
   });
 });

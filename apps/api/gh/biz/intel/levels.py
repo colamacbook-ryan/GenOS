@@ -32,6 +32,10 @@ G1, G2, G3, G4, G5, G6 = ("lua_dao_dang_dien_ra", "an_toan", "khach_che_cong_kha
 GATES = (G1, G2, G3, G4, G5, G6)
 BYPASS_GATES = (G1, G2)                      # `bypass_all`: không trần, không precision, bỏ giờ yên lặng, đẩy thật từ ngày cài
 REGULAR_GATES = (G3, G4, G5, G6)
+#: Cờ PHIÊN BẢN (Ryan quyết 2026-10-26, v0.1.76 "phát hành phần chắc"): False ⇒ bốn cổng thường KHÔNG bao giờ đẩy 🔴 ngay — chỉ lên đầu bản
+#: tin như chạy bóng ("đáng lẽ báo ngay …"), kể cả qua 14 ngày / đạt M1 / Sếp chọn `ramp_gates=push`. Áp ở tầng `DeliveryState`
+#: (`signals.delivery_state`), KHÔNG trong `compute` — hàm thuần và bộ vector giữ nguyên. Công thức ưu tiên chung thay ở v0.1.77.
+REGULAR_PUSH_ENABLED = False
 FR, SK = "rui_ro_lua_dao", "suc_khoe_an_toan"
 KINDS = ("nghia_vu_loi_hua", "viec_han", "cau_hoi_cho_xu_ly", "su_kien_dip", SK, "xung_dot_khieu_nai", "quan_he_nong_nguoi",
          "co_hoi_ket_noi", FR, "thi_truong_thong_tin")
@@ -104,8 +108,8 @@ class D2(_M):
 class Thread(_M):
     type: Literal["group", "dm_owner", "dm_agent"] = "group"
     size: int = 0
-    #: False ⇒ cầu nối không báo cỡ nhóm (`core.groups.member_count` NULL): `size` là 0 giả, KHÔNG được coi là "nhóm nhỏ ⇒ gần"
-    #: (fail-open cho 🔴 — G-KB Đợt 2 P7); nhóm vẫn tính ≤ 200 và vẫn gần nếu Sếp đã xác nhận bối cảnh gần (gia_dinh/ban_be/nhan_vien).
+    #: False ⇒ cầu nối không báo cỡ nhóm (`core.groups.member_count` NULL): `size` là 0 giả. Gen quyết D-T3 (2026-10-26, fail-high cho lừa
+    #: đảo/an toàn — thay P7 của T13): `owner_side` coi nhóm không rõ cỡ là nhóm gần và ≤ 50 khách lõi.
     size_known: bool = True
     owner_in_thread: bool = False
     agent_in_thread: bool = False
@@ -366,7 +370,9 @@ def owner_side(s: SignalIn, policy: Policy) -> OwnerSide:
     in_thread = th.owner_in_thread or th.agent_in_thread
     grp = th.type == "group" and in_thread
     small200 = grp and th.size <= N_WIDE_MAX
-    near = (th.type == "dm_owner" or (grp and th.size_known and th.size <= N_NEAR_SMALL)
+    # Gen quyết D-T3 (2026-10-26, fail-high): `owner_side` chỉ phục vụ cổng lừa đảo/an toàn ⇒ nhóm KHÔNG RÕ CỠ coi như nhóm gần / ≤ 50 khách
+    # (thay P7 của T13). Cỡ đã biết vẫn theo ngưỡng.
+    near = (th.type == "dm_owner" or (grp and (not th.size_known or th.size <= N_NEAR_SMALL))
             or (grp and th.size <= N_NEAR_CTX and any(c in NEAR_CTX for c in contexts)))
     victim_core = any(_is_core(p) for p in s.victims)
     member_victim = any(p.thread_member and not p.is_agent for p in s.victims)
@@ -382,9 +388,8 @@ def owner_side(s: SignalIn, policy: Policy) -> OwnerSide:
     imp_unverified = others and bool(imp_owner) and not imp_present
     agent_only = (bool(s.victims) and all(p.is_agent for p in s.victims)) or th.type == "dm_agent"
     kin_ok = s.source_class not in ("outsider", "forwarded")      # vai thân tộc không áp cho người lạ/chuyển tiếp (L-87)
-    # Nhóm không rõ cỡ KHÔNG được coi là "≤ 50 khách" (fail-safe, cùng luật P7 — quyết định Gen T14).
     customer_core = (th.type == "dm_owner"
-                     or (grp and "kinh_doanh" in contexts and th.size_known and th.size <= N_KD_CUSTOMER)
+                     or (grp and "kinh_doanh" in contexts and (not th.size_known or th.size <= N_KD_CUSTOMER))
                      or (grp and "nhan_vien" in contexts and th.size <= N_WIDE_MAX))     # r6.6.1
     core_s = (any(p.is_owner or p.owner_key_relation or p.team for p in s.victims)
               or (customer_core and any(p.customer for p in s.victims)))
