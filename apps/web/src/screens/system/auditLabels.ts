@@ -226,6 +226,7 @@ export const ACTION_LABEL: Record<string, string> = {
   'intel.units.fail': 'Một đơn vị trích từ tin chưa dựng được tín hiệu (sẽ thử lại, quá 3 lần thì bỏ)',
   'intel.settings.changed': 'Đổi cách chạy tình báo (chạy thật / chạy thử, nhịp báo)',
   'intel.setup.staff_confirmed': 'Sếp xác nhận đã khai xong nhân viên (Thiết lập Tình báo)',
+  'intel.setup.key_customers_confirmed': 'Sếp xác nhận đã khai xong khách chủ chốt (Thiết lập Tình báo)',
   'backup.rebind_notice_failed': 'Không báo được tới kênh phụ cũ khi đổi kênh phụ',
   'assistant.lock': 'Khoá trợ lý',
   'assistant.unlock': 'Mở khoá trợ lý',
