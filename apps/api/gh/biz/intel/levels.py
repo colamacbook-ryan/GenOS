@@ -113,6 +113,7 @@ class Thread(_M):
     size_known: bool = True
     owner_in_thread: bool = False
     agent_in_thread: bool = False
+    customer_audience_n: int | None = Field(default=None, ge=0)  # r7 (c′): None = không đếm được
 
 
 class PersonRel(_M):
@@ -152,12 +153,15 @@ class Promise(_M):
     completed: bool = False
     obstacle_reported: bool = False
     condition_met: Literal["yes", "no", "none"] = "none"
+    nudged_by_customer: bool = False                 # r7 (c′)
+    fixed_occasion: bool = False                     # r7 (c′)
 
 
 class Opportunity(_M):
     catalog_score: float | None = None
     resource_owner_confirmed: bool = False
     touches_value_limit: bool = False
+    need_fields_n: int | None = Field(default=None, ge=0, le=4)  # r7 (c′): None = không có nguồn ⇒ không trần
 
 
 class Work(_M):
@@ -215,11 +219,26 @@ class SignalIn(_M):
     #: Đặt hàng ghi nợ/công nợ hoặc đổi địa chỉ giao/người nhận hàng — CODE kiểm trên chữ đã kiểm (`fraud.goods_redirect`), không phải lời
     #: model. Cùng người bị mạo danh đã biết ⇒ nhánh "mạo danh đặt hàng / đổi địa chỉ giao" của cổng 1 (Ryan chốt D2, 2026-10-25).
     goods_risk: bool = False
+    # ─── r7 (c′): chỉ thêm, mọi trường có mặc định; KHÔNG BAO GIỜ đọc ở Bước 0 (B2) ───
+    complaint_stage: Literal["vent", "voice", "ultimatum", "exit_pending", "exit_done", "third_party"] | None = None
+    asks_for_owner: bool = False
+    public_venue: Literal["group", "social", "authority"] | None = None
+    prior_threat_no_exit_n: int = Field(default=0, ge=0)
+    staff_owned: bool = False
+    staff_ref: str | None = None                     # chỉ để hiển thị "NV X đang lo"
+    deadline_granularity: Literal["minute", "hour", "part_of_day", "day", "week"] | None = None
+    same_customer_day_red: bool = False              # r7.1: chỉ đọc ở N10 D-T5 (G4)
 
 
 class QuietHours(_M):
     start: str = "22:00"
     end: str = "07:00"
+
+
+class WorkHours(_M):
+    """r7 (c′): settings intel.work_start / intel.work_end."""
+    start: str = "08:00"
+    end: str = "17:30"
 
 
 class DeliveryState(_M):
@@ -234,6 +253,7 @@ class DeliveryState(_M):
     quiet_hours: QuietHours = Field(default_factory=QuietHours)
     money_small_vnd: int = 5_000_000                 # settings intel.money_small_vnd (bảng trục §4.2)
     money_big_vnd: int = 50_000_000                  # settings intel.money_big_vnd
+    work_hours: WorkHours = Field(default_factory=WorkHours)  # r7 (c′)
 
 
 class Level(_M):
