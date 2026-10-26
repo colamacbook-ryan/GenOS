@@ -335,9 +335,12 @@ async def test_question_refreshed_in_quiet_hours_still_escalates_when_work_hours
     sig = await questions.emit(db, w.org, q, asked + timedelta(minutes=1))
     await questions.refresh_waiting(db, w.org, datetime(2026, 10, 23, 22, 40, tzinfo=levels.VN))      # giờ yên lặng: chưa leo
     assert (await _row(db, sig.id)).level == "grey"
-    changed = await questions.refresh_waiting(db, w.org, datetime(2026, 10, 24, 8, 0, tzinfo=levels.VN))   # vào giờ làm việc ⇒ leo
+    # v0.1.77 (P3b): giờ chờ chỉ tính TRONG giờ làm (08:00–17:30) ⇒ hỏi 20:30 tới 08:00 sáng hôm sau mới chờ 0 giờ làm: chưa leo
+    assert await questions.refresh_waiting(db, w.org, datetime(2026, 10, 24, 8, 0, tzinfo=levels.VN)) == []
+    assert (await _row(db, sig.id)).level == "grey"
+    changed = await questions.refresh_waiting(db, w.org, datetime(2026, 10, 24, 10, 5, tzinfo=levels.VN))   # đủ > 2 giờ chờ trong giờ làm ⇒ leo
     assert [c.id for c in changed] == [sig.id] and (await _row(db, sig.id)).level == "amber"
-    assert await questions.refresh_waiting(db, w.org, datetime(2026, 10, 24, 8, 5, tzinfo=levels.VN)) == []
+    assert await questions.refresh_waiting(db, w.org, datetime(2026, 10, 24, 10, 10, tzinfo=levels.VN)) == []
 
 
 async def test_scan_units_feeds_questions_from_real_meaning_units_and_dedupes_with_legacy(db) -> None:  # type: ignore[no-untyped-def]

@@ -99,6 +99,18 @@ def g3_fields(v: dict[str, Any]) -> dict[str, Any]:
             "public_venue": venue if venue in VENUES else None}
 
 
+def public_flag(kind: str | None, v: dict[str, Any], fl: dict[str, Any], gate: str | None = None) -> bool:
+    """`flags.public` khi dựng `SignalIn` / `ComplaintIn` cho đường bảng (spec r7 (c′), P3a: "đường bảng đọc `public_eff`"). `xung_dot_khieu_nai` /
+    `quan_he_nong_nguoi` + `brain-out/2` ⇒ `entities.v.public_eff` (`flags.public` chỉ tính khi có `public_venue`); `/1` hoặc loại khác ⇒ cờ thô như
+    r6.6.1. Bước 0 KHÔNG đi qua hàm này: kind lừa đảo/an toàn, và (r7.3) mọi đơn vị có `gate_candidate ∈ levels.BYPASS_GATES` (G1/G2 luôn đi Bước 0)
+    ⇒ vẫn đọc `flags.public` thô (B2)."""
+    if gate in levels.BYPASS_GATES:
+        return fl.get("public") is True
+    if kind in ("xung_dot_khieu_nai", "quan_he_nong_nguoi") and v.get("contract_version") == "brain-out/2":
+        return v.get("public_eff") is True
+    return fl.get("public") is True
+
+
 # ─── người: vai của model + tra cứu của code ─────────────────────────────────
 
 @dataclass
@@ -201,6 +213,8 @@ def signal_input(kind: str, u: Any, p: People, sets: g.OrgSets, *, customer_of_o
     v = verified(u)
     fl = dict(u.flags or {})
     f = g.flags_of(fl)
+    if kind in ("xung_dot_khieu_nai", "quan_he_nong_nguoi"):
+        f = f.model_copy(update={"public": public_flag(kind, v, fl, u.gate_candidate)})
     observed = u.observed_at
     msg_at = _when(v.get("msg_at")) or observed
     event_at = _when(v.get("event_at")) or msg_at
@@ -385,7 +399,9 @@ async def _route_conflict(db: AsyncSession, org_id: uuid.UUID, u: Any, p: People
     from gh.biz.intel.detectors import conflicts
 
     fl = dict(u.flags or {})
-    if u.kind_hint == "quan_he_nong_nguoi" and not (fl.get("said_will_leave") is True or fl.get("public") is True):
+    v = verified(u)
+    raw_public = public_flag(u.kind_hint, v, fl, u.gate_candidate)
+    if u.kind_hint == "quan_he_nong_nguoi" and not (fl.get("said_will_leave") is True or raw_public):
         return None                                         # nguội đi / im lặng: không phải lời chê ⇒ chiếu thường
     s = p.sender
     if s is None or s.person_id is None or hard_side(s, sets):
@@ -400,11 +416,10 @@ async def _route_conflict(db: AsyncSession, org_id: uuid.UUID, u: Any, p: People
         return None
     mine, trigger_at = mine_row.id, mine_row.occurred_at
     e0 = next(e for e in ev if e.raw_event_id == mine)
-    v = verified(u)
     status = str(v.get("status_hint") or "dang_mo")
     li_at = _when(v.get("msg_at")) or u.observed_at
     g3 = g3_fields(v)
-    public = fl.get("public") is True and await public_place(db, org_id, p, s, sets, [mine])
+    public = raw_public and await public_place(db, org_id, p, s, sets, [mine])
     by = _uuid(v.get("status_by_person_id"))
     staff_ref = await person_role.staff_owner_ref(
         db, org_id, status_hint=status, status_by_person_id=by, customer_person_id=s.person_id, group_id=p.group_id, trigger_at=trigger_at,
