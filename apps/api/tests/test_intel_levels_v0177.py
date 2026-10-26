@@ -762,23 +762,33 @@ def test_r73_gate_candidate_g1_g2_routes_to_step0() -> None:
     assert not L.is_step0(sig("nghia_vu_loi_hua", gate_candidate=G4))
 
 
-def test_b1_step0_function_source_is_frozen() -> None:
-    """Rào B1: băm AST của `_compute_step0` — sửa thân hàm Bước 0 ⇒ đỏ; chủ ý sửa thì cập nhật hằng sau khi so với v0.1.76."""
+def _body_token_digest(fn_obj: object) -> str:
+    """Băm chuỗi token của thân hàm (bỏ docstring, chú thích, khoảng trắng) — ổn định giữa các bản Python (ast.dump thì không)."""
     import ast
     import hashlib
     import inspect
+    import io
     import textwrap
+    import tokenize
 
-    src = textwrap.dedent(inspect.getsource(L._compute_step0))
+    src = textwrap.dedent(inspect.getsource(fn_obj))  # type: ignore[arg-type]
     fn = ast.parse(src).body[0]
     assert isinstance(fn, ast.FunctionDef)
-    body = fn.body[1:]                                                              # bỏ docstring
-    digest = hashlib.sha256("\n".join(ast.dump(n) for n in body).encode()).hexdigest()
-    assert digest == STEP0_AST_SHA256, digest
+    first = fn.body[1] if isinstance(fn.body[0], ast.Expr) and isinstance(getattr(fn.body[0], "value", None), ast.Constant) else fn.body[0]
+    lines = src.splitlines(keepends=True)[first.lineno - 1 : fn.end_lineno]
+    skip = {tokenize.COMMENT, tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT, tokenize.ENDMARKER}
+    toks = [t.string for t in tokenize.generate_tokens(io.StringIO(textwrap.dedent("".join(lines))).readline) if t.type not in skip]
+    return hashlib.sha256("\x1f".join(toks).encode()).hexdigest()
 
 
-# Băm thân hàm `compute` của v0.1.76 (commit 03866287, trước khi tách Bước 0) — thân `_compute_step0` phải trùng từng nút AST.
-STEP0_AST_SHA256 = "6acaf522869284ce118754afa0257fa67ed2dfcff9e5936e85d9248847dc9e27"
+def test_b1_step0_function_source_is_frozen() -> None:
+    """Rào B1: băm token thân `_compute_step0` — sửa thân hàm Bước 0 ⇒ đỏ; chủ ý sửa thì cập nhật hằng sau khi so với v0.1.76."""
+    digest = _body_token_digest(L._compute_step0)
+    assert digest == STEP0_BODY_SHA256, digest
+
+
+# Băm token thân hàm `compute` của v0.1.76 (commit 03866287, trước khi tách Bước 0) — thân `_compute_step0` phải trùng từng token.
+STEP0_BODY_SHA256 = "140dc5d433f304bce9e07eba2ae6fe738bd29084b4a6505ebc8bab460b569c59"
 
 
 def test_levels_next_change_d5_has_deadline_plus_1s() -> None:
