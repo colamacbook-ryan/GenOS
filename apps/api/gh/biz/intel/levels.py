@@ -794,7 +794,7 @@ def is_step0(s: SignalIn, f: Flags | None = None) -> bool:
     `hard_rule_hit` có `stk_khac_lich_su+money_request`. Còn lại đi đường bảng. Chỉ đọc cờ/kind/luật cứng — không trường r7."""
     f = f or _flags(s)
     return (s.kind in (FR, SK, None) or f.credentials_entered or f.account_takeover or f.emergency
-            or _STEP0_HARD in hard_rules(s))
+            or _STEP0_HARD in hard_rules(s) or s.gate_candidate in BYPASS_GATES)   # r7.3: đề cử cổng 1/2 ⇒ fail-high, không sót xuống đường bảng
 
 
 _PRIO = {(3, 3): 1, (3, 2): 2, (3, 1): 3, (2, 3): 2, (2, 2): 3, (2, 1): 4, (1, 3): 4, (1, 2): 4, (1, 1): 5}
@@ -1267,7 +1267,8 @@ def _next_change_table(s: SignalIn, state: DeliveryState, now: datetime) -> date
         start = deff.astimezone(VN).replace(hour=0, minute=0, second=0, microsecond=0)
         cands.extend([start, start + timedelta(days=1)])
     if s.kind == "co_hoi_ket_noi" and s.deadline_at:
-        cands.append(_aware(s.deadline_at) - timedelta(hours=48))
+        dl = _aware(s.deadline_at)
+        cands.extend([dl - timedelta(hours=48), dl + timedelta(seconds=1)])        # D5: vào cửa sổ 48 giờ / hết hạn
     fut = [c for c in cands if c > now]
     return min(fut) if fut else None
 

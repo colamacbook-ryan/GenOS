@@ -219,7 +219,7 @@ def test_b1_step0_compute_is_exactly_step0_function() -> None:
 
 def test_b1_locked_vectors_pass_via_compute() -> None:
     locked = [v for v in VECTORS if (v["gate_under_test"] in {G1, G2} and "locked_since" not in v) or "locked_since" in v]
-    assert len(locked) == 147
+    assert len(locked) == 150
     for v in locked:
         i = v["input"]
         p = i["profile"]
@@ -258,7 +258,7 @@ def test_b2_changing_every_r7_field_does_not_change_step0_results() -> None:
             assert (a.level, a.gate, a.candidate, a.delivery) == (b.level, b.gate, b.candidate, b.delivery), v["id"]
             off_step0.append(v["id"])
         n += 1
-    assert n == 147 and off_step0 == ["LV-R64-09"]
+    assert n == 150 and off_step0 == ["LV-R64-09"]
 
 
 def test_b2_dang_xu_ly_staff_does_not_remediate_step0() -> None:
@@ -750,3 +750,37 @@ def test_every_emitted_reason_of_all_vectors_is_documented() -> None:
         p = i["profile"]
         out = L.compute(_vec_signal(i["signal"], p), _vec_profile(p), _vec_policy(i["ctx"]), _vec_state(i["state"], p), datetime.fromisoformat(i["now"]))
         assert set(out.reasons) <= set(L.REASONS), (v["id"], out.reasons)
+
+
+def test_r73_gate_candidate_g1_g2_routes_to_step0() -> None:
+    """Đề cử cổng 1/2 mà không cờ nào ⇒ Bước 0 (fail-high), không rơi xuống đường bảng bị trần Thẩm quyền / milestone / bối cảnh."""
+    for g in (G1, G2):
+        s = sig("nghia_vu_loi_hua", gate_candidate=g, staff_owned=True, impact_base=2)
+        assert L.is_step0(s)
+        lv = compute(s)
+        assert (lv.level, lv.candidate, lv.delivery) == ("amber", g, "digest") and "gate_not_met" in lv.reasons
+    assert not L.is_step0(sig("nghia_vu_loi_hua", gate_candidate=G4))
+
+
+def test_b1_step0_function_source_is_frozen() -> None:
+    """Rào B1: băm AST của `_compute_step0` — sửa thân hàm Bước 0 ⇒ đỏ; chủ ý sửa thì cập nhật hằng sau khi so với v0.1.76."""
+    import ast
+    import hashlib
+    import inspect
+    import textwrap
+
+    src = textwrap.dedent(inspect.getsource(L._compute_step0))
+    fn = ast.parse(src).body[0]
+    assert isinstance(fn, ast.FunctionDef)
+    body = fn.body[1:]                                                              # bỏ docstring
+    digest = hashlib.sha256("\n".join(ast.dump(n) for n in body).encode()).hexdigest()
+    assert digest == STEP0_AST_SHA256, digest
+
+
+# Băm thân hàm `compute` của v0.1.76 (commit 03866287, trước khi tách Bước 0) — thân `_compute_step0` phải trùng từng nút AST.
+STEP0_AST_SHA256 = "6acaf522869284ce118754afa0257fa67ed2dfcff9e5936e85d9248847dc9e27"
+
+
+def test_levels_next_change_d5_has_deadline_plus_1s() -> None:
+    s = sig("co_hoi_ket_noi", deadline_at=NOW + 3 * H, impact_base=1)
+    assert NOW + 3 * H + timedelta(seconds=1) in _marks(s, NOW)

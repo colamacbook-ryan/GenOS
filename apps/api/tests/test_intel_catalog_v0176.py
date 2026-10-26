@@ -147,7 +147,19 @@ async def _s22_body(db: AsyncSession) -> None:
     assert m[0].meaning_unit_id == (await db.execute(text("SELECT id FROM biz.catalog_items WHERE org_id = :o"), {"o": w.org})).scalar_one()
 
 
-async def test_gate_needs_both_big_and_about_to_slip(db) -> None:  # type: ignore[no-untyped-def]
+async def test_gate_needs_both_big_and_about_to_slip(db, monkeypatch: pytest.MonkeyPatch) -> None:  # type: ignore[no-untyped-def]
+    # cố định đồng hồ 10:00 giờ VN: kết quả không phụ thuộc giờ chạy test
+    monkeypatch.setenv("GH_ENV", "eval")
+    real = datetime.now(levels.VN)
+    day = real.replace(hour=10, minute=0, second=0, microsecond=0)
+    clock.freeze(day if day <= real else day - timedelta(days=1))
+    try:
+        await _gate_needs_both_body(db)
+    finally:
+        clock.reset()
+
+
+async def _gate_needs_both_body(db) -> None:  # type: ignore[no-untyped-def]
     w = await _setup(db)
     await _demand(db, w, body="Cần 50 tấn thép phi 16 giao Cần Thơ", name="A")             # lớn, không gấp, không hạn ⇒ không cổng
     r = await _one(db, w.org)
@@ -155,8 +167,8 @@ async def test_gate_needs_both_big_and_about_to_slip(db) -> None:  # type: ignor
     w2 = await _setup(db)
     await _demand(db, w2, body="Cần 50 tấn thép phi 16 giao Cần Thơ", needed_in_days=1)    # hạn ngày mai (< 48 giờ) ⇒ cổng
     r2 = await _one(db, w2.org)
-    # r7: hạn ngày mai ⇒ qua cửa G5; < 24 giờ (U3) ⇒ 🔴, 24–72 giờ (U2) ⇒ P2 🟠 đầu bản tin (candidate G5) — tuỳ giờ chạy test
-    assert (r2.level, r2.gate) == ("red", levels.G5) or (r2.level, r2.gate, r2.candidate) == ("amber", None, levels.G5)
+    # r7: hạn ngày mai (24–72 giờ, U2) ⇒ qua cửa G5 nhưng chỉ P2 🟠 đầu bản tin; 🔴 cần < 24 giờ (U3)
+    assert (r2.level, r2.gate, r2.candidate, r2.delivery) == ("amber", None, levels.G5, "digest_top")
     w3 = await _setup(db)
     await _demand(db, w3, body="Cần 50 tấn thép phi 16 giao Cần Thơ", needed_in_days=4)    # còn xa ⇒ chưa sắp trôi
     r3 = await _one(db, w3.org)

@@ -50447,6 +50447,437 @@
     }
    },
    "spec_ref": "r7.2 §4.2.1 (c) case_anchor_at thắng case_history (AMB-14, = v0.1.76)"
+  },
+  {
+   "changed_in": "r7.3",
+   "desc": "Nhân viên nhận xử lý một việc; mô hình đề cử cổng lừa đảo nhưng không có cờ nào",
+   "expected": {
+    "candidate": "lua_dao_dang_dien_ra",
+    "delivery": "digest",
+    "gate": null,
+    "level": "amber",
+    "reasons_include": [
+     "gate_not_met"
+    ]
+   },
+   "gate_under_test": "lua_dao_dang_dien_ra",
+   "id": "LV-R7-100",
+   "input": {
+    "ctx": {
+     "context_code": "kinh_doanh",
+     "context_confirmed": true
+    },
+    "now": "2026-10-23T14:00:00+07:00",
+    "profile": {
+     "goal_priority1_match_valid": false,
+     "money_big_vnd": 50000000,
+     "money_small_vnd": 5000000,
+     "owner_key_relation_entity_ids": [],
+     "target_entity_id": "e_target"
+    },
+    "signal": {
+     "case_anchor_at": null,
+     "case_history": null,
+     "case_prior": null,
+     "closure": "none",
+     "complaint_stage": null,
+     "confidence_content": 0.765,
+     "confidence_exist": 1.0,
+     "customer_of_owner": false,
+     "d2": {
+      "error": false,
+      "flags_confirmed": [],
+      "harm_what": null,
+      "verdict": null
+     },
+     "deadline_at": null,
+     "delivery_form": "direct",
+     "event_at": "2026-10-23T09:00:00+07:00",
+     "event_time_unparsed": false,
+     "flags": {
+      "account_takeover": false,
+      "blocks_work": false,
+      "conditional": false,
+      "credentials_entered": false,
+      "emergency": false,
+      "explicit_urgent": false,
+      "is_template": false,
+      "money_request": false,
+      "needs_owner": false,
+      "nudged": false,
+      "public": false,
+      "repeat_n": null,
+      "said_will_leave": false
+     },
+     "gate_candidate": "lua_dao_dang_dien_ra",
+     "hard_rule_hit": [],
+     "harm_what": "có thiệt hại cụ thể (mất gì, bao nhiêu, trong bao lâu)",
+     "impact_base": 2,
+     "impersonated": [],
+     "in_work_hours": true,
+     "irreversible": false,
+     "kind": "nghia_vu_loi_hua",
+     "money_basis": null,
+     "money_vnd": null,
+     "msg_at": "2026-10-23T09:00:00+07:00",
+     "mute": null,
+     "non_forwarded_sources_n": 1,
+     "ongoing": false,
+     "opportunity": {
+      "catalog_score": null,
+      "resource_owner_confirmed": false,
+      "touches_value_limit": false
+     },
+     "owner_resolved": false,
+     "owner_unanswered_h": 0,
+     "payee_refs": [],
+     "privacy": "chat_ok",
+     "promise": {
+      "completed": false,
+      "condition_met": "none",
+      "obstacle_reported": false,
+      "to_customer": false
+     },
+     "remediation": "none",
+     "source_class": "insider",
+     "staff_owned": true,
+     "staff_ref": "nv",
+     "status": "dang_mo",
+     "thread": {
+      "agent_in_thread": true,
+      "owner_in_thread": true,
+      "size": 20,
+      "type": "group"
+     },
+     "txn_at": null,
+     "txn_state": "none",
+     "victims": [
+      {
+       "customer": false,
+       "is_agent": false,
+       "is_owner": false,
+       "kin_of_member": false,
+       "owner_key_relation": false,
+       "present_in_thread": false,
+       "ref": "v1",
+       "team": true,
+       "thread_member": false
+      }
+     ],
+     "work": {
+      "done": false,
+      "late_signs": false,
+      "owner_work": false,
+      "type": "none"
+     }
+    },
+    "state": {
+     "days_since_install": 40,
+     "intel_mode": "live",
+     "low_precision_gates": [],
+     "m1_passed_gates": [
+      "khach_che_cong_khai_doa_bo",
+      "loi_hua_khach_sap_vo",
+      "co_hoi_lon_sap_troi",
+      "su_co_cong_viec_gap"
+     ],
+     "quiet_hours": {
+      "end": "07:00",
+      "start": "22:00"
+     },
+     "ramp_early_enable": false,
+     "red_cap_per_day": 3,
+     "reds_pushed_today": 0
+    }
+   },
+   "locked_since": "r7.3",
+   "spec_ref": "r7.3 §4.2.1 (b): đề cử cổng 1/2 mở Bước 0 (fail-high)"
+  },
+  {
+   "changed_in": "r7.3",
+   "desc": "Lời hứa giao hàng còn vài giờ; mô hình đề cử cổng an toàn nhưng không có cờ nào",
+   "expected": {
+    "candidate": "an_toan",
+    "delivery": "digest",
+    "gate": null,
+    "level": "amber",
+    "reasons_include": [
+     "gate_not_met"
+    ]
+   },
+   "gate_under_test": "an_toan",
+   "id": "LV-R7-101",
+   "input": {
+    "ctx": {
+     "context_code": "kinh_doanh",
+     "context_confirmed": true
+    },
+    "now": "2026-10-23T14:00:00+07:00",
+    "profile": {
+     "goal_priority1_match_valid": false,
+     "money_big_vnd": 50000000,
+     "money_small_vnd": 5000000,
+     "owner_key_relation_entity_ids": [],
+     "target_entity_id": "e_target"
+    },
+    "signal": {
+     "case_anchor_at": null,
+     "case_history": null,
+     "case_prior": null,
+     "closure": "none",
+     "complaint_stage": null,
+     "confidence_content": 0.765,
+     "confidence_exist": 1.0,
+     "customer_of_owner": false,
+     "d2": {
+      "error": false,
+      "flags_confirmed": [],
+      "harm_what": null,
+      "verdict": null
+     },
+     "deadline_at": "2026-10-23T22:00:00+07:00",
+     "delivery_form": "direct",
+     "event_at": "2026-10-23T09:00:00+07:00",
+     "event_time_unparsed": false,
+     "flags": {
+      "account_takeover": false,
+      "blocks_work": false,
+      "conditional": false,
+      "credentials_entered": false,
+      "emergency": false,
+      "explicit_urgent": false,
+      "is_template": false,
+      "money_request": false,
+      "needs_owner": false,
+      "nudged": false,
+      "public": false,
+      "repeat_n": null,
+      "said_will_leave": false
+     },
+     "gate_candidate": "an_toan",
+     "hard_rule_hit": [],
+     "harm_what": "có thiệt hại cụ thể (mất gì, bao nhiêu, trong bao lâu)",
+     "impact_base": 2,
+     "impersonated": [],
+     "in_work_hours": true,
+     "irreversible": false,
+     "kind": "nghia_vu_loi_hua",
+     "money_basis": null,
+     "money_vnd": null,
+     "msg_at": "2026-10-23T09:00:00+07:00",
+     "mute": null,
+     "non_forwarded_sources_n": 1,
+     "ongoing": false,
+     "opportunity": {
+      "catalog_score": null,
+      "resource_owner_confirmed": false,
+      "touches_value_limit": false
+     },
+     "owner_resolved": false,
+     "owner_unanswered_h": 0,
+     "payee_refs": [],
+     "privacy": "chat_ok",
+     "promise": {
+      "completed": false,
+      "condition_met": "none",
+      "obstacle_reported": false,
+      "to_customer": true
+     },
+     "remediation": "none",
+     "source_class": "insider",
+     "status": "dang_mo",
+     "thread": {
+      "agent_in_thread": true,
+      "owner_in_thread": true,
+      "size": 20,
+      "type": "group"
+     },
+     "txn_at": null,
+     "txn_state": "none",
+     "victims": [
+      {
+       "customer": false,
+       "is_agent": false,
+       "is_owner": false,
+       "kin_of_member": false,
+       "owner_key_relation": false,
+       "present_in_thread": false,
+       "ref": "v1",
+       "team": true,
+       "thread_member": false
+      }
+     ],
+     "work": {
+      "done": false,
+      "late_signs": false,
+      "owner_work": false,
+      "type": "none"
+     }
+    },
+    "state": {
+     "days_since_install": 40,
+     "intel_mode": "live",
+     "low_precision_gates": [],
+     "m1_passed_gates": [
+      "khach_che_cong_khai_doa_bo",
+      "loi_hua_khach_sap_vo",
+      "co_hoi_lon_sap_troi",
+      "su_co_cong_viec_gap"
+     ],
+     "quiet_hours": {
+      "end": "07:00",
+      "start": "22:00"
+     },
+     "ramp_early_enable": false,
+     "red_cap_per_day": 3,
+     "reds_pushed_today": 0
+    }
+   },
+   "locked_since": "r7.3",
+   "spec_ref": "r7.3 §4.2.1 (b): đề cử cổng 1/2 mở Bước 0 (fail-high)"
+  },
+  {
+   "changed_in": "r7.3",
+   "desc": "Tin thị trường trong nhóm học tập; mô hình đề cử cổng lừa đảo nhưng không có cờ nào",
+   "expected": {
+    "candidate": "lua_dao_dang_dien_ra",
+    "delivery": "digest",
+    "gate": null,
+    "level": "amber",
+    "reasons_include": [
+     "gate_not_met"
+    ]
+   },
+   "gate_under_test": "lua_dao_dang_dien_ra",
+   "id": "LV-R7-102",
+   "input": {
+    "ctx": {
+     "context_code": "hoc_tap",
+     "context_confirmed": true
+    },
+    "now": "2026-10-23T14:00:00+07:00",
+    "profile": {
+     "goal_priority1_match_valid": false,
+     "money_big_vnd": 50000000,
+     "money_small_vnd": 5000000,
+     "owner_key_relation_entity_ids": [],
+     "target_entity_id": "e_target"
+    },
+    "signal": {
+     "case_anchor_at": null,
+     "case_history": null,
+     "case_prior": null,
+     "closure": "none",
+     "complaint_stage": null,
+     "confidence_content": 0.765,
+     "confidence_exist": 1.0,
+     "customer_of_owner": false,
+     "d2": {
+      "error": false,
+      "flags_confirmed": [],
+      "harm_what": null,
+      "verdict": null
+     },
+     "deadline_at": null,
+     "delivery_form": "direct",
+     "event_at": "2026-10-23T09:00:00+07:00",
+     "event_time_unparsed": false,
+     "flags": {
+      "account_takeover": false,
+      "blocks_work": false,
+      "conditional": false,
+      "credentials_entered": false,
+      "emergency": false,
+      "explicit_urgent": false,
+      "is_template": false,
+      "money_request": false,
+      "needs_owner": false,
+      "nudged": false,
+      "public": false,
+      "repeat_n": null,
+      "said_will_leave": false
+     },
+     "gate_candidate": "lua_dao_dang_dien_ra",
+     "hard_rule_hit": [],
+     "harm_what": "có thiệt hại cụ thể (mất gì, bao nhiêu, trong bao lâu)",
+     "impact_base": 2,
+     "impersonated": [],
+     "in_work_hours": true,
+     "irreversible": false,
+     "kind": "thi_truong_thong_tin",
+     "money_basis": null,
+     "money_vnd": null,
+     "msg_at": "2026-10-23T09:00:00+07:00",
+     "mute": null,
+     "non_forwarded_sources_n": 1,
+     "ongoing": false,
+     "opportunity": {
+      "catalog_score": null,
+      "resource_owner_confirmed": false,
+      "touches_value_limit": false
+     },
+     "owner_resolved": false,
+     "owner_unanswered_h": 0,
+     "payee_refs": [],
+     "privacy": "chat_ok",
+     "promise": {
+      "completed": false,
+      "condition_met": "none",
+      "obstacle_reported": false,
+      "to_customer": false
+     },
+     "remediation": "none",
+     "source_class": "insider",
+     "status": "dang_mo",
+     "thread": {
+      "agent_in_thread": true,
+      "owner_in_thread": true,
+      "size": 20,
+      "type": "group"
+     },
+     "txn_at": null,
+     "txn_state": "none",
+     "victims": [
+      {
+       "customer": false,
+       "is_agent": false,
+       "is_owner": false,
+       "kin_of_member": false,
+       "owner_key_relation": false,
+       "present_in_thread": false,
+       "ref": "v1",
+       "team": true,
+       "thread_member": false
+      }
+     ],
+     "work": {
+      "done": false,
+      "late_signs": false,
+      "owner_work": false,
+      "type": "none"
+     }
+    },
+    "state": {
+     "days_since_install": 40,
+     "intel_mode": "live",
+     "low_precision_gates": [],
+     "m1_passed_gates": [
+      "khach_che_cong_khai_doa_bo",
+      "loi_hua_khach_sap_vo",
+      "co_hoi_lon_sap_troi",
+      "su_co_cong_viec_gap"
+     ],
+     "quiet_hours": {
+      "end": "07:00",
+      "start": "22:00"
+     },
+     "ramp_early_enable": false,
+     "red_cap_per_day": 3,
+     "reds_pushed_today": 0
+    }
+   },
+   "locked_since": "r7.3",
+   "spec_ref": "r7.3 §4.2.1 (b): đề cử cổng 1/2 mở Bước 0 (fail-high)"
   }
  ]
 }

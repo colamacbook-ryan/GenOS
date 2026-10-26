@@ -3,7 +3,8 @@
 
 Chính sách bối cảnh dựng từ seed 0043 (cùng `intel_helpers`). Hai tập khoá bằng băm SHA-256 trên JSON chuẩn hoá (sort_keys, tách theo id):
   1. 125 vector cổng 1/2 gốc (`gate_under_test` ∈ {lua_dao_dang_dien_ra, an_toan}, không có `locked_since`) — `LOCKED_SHA256`;
-  2. 22 vector khoá mới có `locked_since` (r7 / r7.1 / r7.2: LV-R7-49…62 và 89…96, Bước 0, kỳ vọng = v0.1.76) — `LOCKED2_SHA256`.
+  2. 22 vector khoá mới có `locked_since` (r7 / r7.1 / r7.2: LV-R7-49…62 và 89…96, Bước 0, kỳ vọng = v0.1.76) — `LOCKED2_SHA256`;
+  3. 3 vector khoá r7.3 (LV-R7-100…102: đề cử cổng 1/2 không cờ ⇒ Bước 0) — `LOCKED3_SHA256`. Mỗi đợt khoá mới thêm một băm riêng.
 Sửa nhãn hoặc input của vector đã khoá ⇒ `test_fail_high_vectors_locked` đỏ. Chỉ được THÊM vector khoá mới: đặt `locked_since`, KHÔNG đụng
 hai băm cũ, và thêm một băm thứ ba cho tập mới (đừng đổi `LOCKED2_SHA256`: băm đó chính là cái khoá 22 vector này).
 124 vector còn lại của G0 chỉ được gán thêm trường r7; vector đổi nhãn theo luật r7 ghi `changed_in: "r7"`. Kỳ vọng cuối do oracle độc lập tính.
@@ -31,6 +32,10 @@ LOCKED_GATES = {"lua_dao_dang_dien_ra", "an_toan"}  # "cổng 1/2" (an toàn / l
 LOCKED_COUNT = 125
 LOCKED_SHA256 = "59e8f829ee62510e2c9a67882c14aa25adedbc0ff69dc6713e1dfc4906eb01af"
 LOCKED2_COUNT = 22
+LOCKED2_SINCE = {"r7", "r7.1", "r7.2"}
+LOCKED3_COUNT = 3
+LOCKED3_SINCE = {"r7.3"}
+LOCKED3_SHA256 = "560a3c00d18f9bccb0845b4fbdd27b06a6dc660471e689cedd1912f69f582198"
 LOCKED2_SHA256 = "a2d1e3e49b277d51a0912a979124f41ad95c7928c59e71d3e66f3b3de6535177"
 
 
@@ -67,8 +72,8 @@ def _state(st: dict[str, Any], p: dict[str, Any]) -> L.DeliveryState:
 
 
 def test_vector_count() -> None:
-    assert len(VECTORS) == 348
-    assert len({v["id"] for v in VECTORS}) == 348
+    assert len(VECTORS) == 351
+    assert len({v["id"] for v in VECTORS}) == 351
 
 
 @pytest.mark.parametrize("vec", VECTORS, ids=[v["id"] for v in VECTORS])
@@ -97,8 +102,16 @@ def test_fail_high_vectors_locked() -> None:
 
 
 def test_locked_new_vectors_hash() -> None:
-    locked = sorted((v for v in VECTORS if "locked_since" in v), key=lambda v: v["id"])
+    locked = sorted((v for v in VECTORS if v.get("locked_since") in LOCKED2_SINCE), key=lambda v: v["id"])
     assert len(locked) == LOCKED2_COUNT
-    assert {v["locked_since"] for v in locked} == {"r7", "r7.1", "r7.2"}
+    assert {v["locked_since"] for v in locked} == LOCKED2_SINCE
     blob = json.dumps(locked, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     assert hashlib.sha256(blob.encode("utf-8")).hexdigest() == LOCKED2_SHA256
+
+
+def test_locked_r73_vectors_hash() -> None:
+    """Băm 3 — vector khoá r7.3 (đề cử cổng 1/2 mở Bước 0, kỳ vọng = kết quả `_compute_step0` v0.1.76)."""
+    locked = sorted((v for v in VECTORS if v.get("locked_since") in LOCKED3_SINCE), key=lambda v: v["id"])
+    assert len(locked) == LOCKED3_COUNT
+    blob = json.dumps(locked, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    assert hashlib.sha256(blob.encode("utf-8")).hexdigest() == LOCKED3_SHA256
