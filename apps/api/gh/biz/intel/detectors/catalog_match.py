@@ -134,6 +134,26 @@ async def _merge_key(db: AsyncSession, org_id: uuid.UUID, person_id: uuid.UUID, 
                              {"o": org_id, "k": KIND, "t": now - timedelta(days=MERGE_DAYS), "mk": key, "p": str(person_id)})).scalar_one_or_none()
 
 
+def need_fields_of(entities_json: Any) -> int | None:
+    """`Opportunity.need_fields_n` (spec r7 (c′)) từ `entities.v.need_fields_n` do verify P3a đếm (số ô `need` có trích dẫn verified, 0–4).
+    Không có nguồn (`brain-out/1`, cầu không qua đơn vị, model bỏ ô `need`, giá trị sai kiểu/ngoài 0–4) ⇒ None ⇒ cửa G5 không trần (CNS-172)."""
+    v = entities_json.get("v") if isinstance(entities_json, dict) else None
+    n = v.get("need_fields_n") if isinstance(v, dict) else None
+    return n if isinstance(n, int) and not isinstance(n, bool) and 0 <= n <= 4 else None
+
+
+_NEGATED_URGENT = re.compile(r"(?<!\w)(?:không|chưa|chẳng|khỏi|đâu)\s+(?:cần\s+|phải\s+|có\s+|còn\s+)?(?:quá\s+|lắm\s+)?(?:gấp|khẩn(?:\s+cấp|\s+trương)?|ngay|asap)(?!\w)", re.I)
+
+
+def urgent_in_verified(ev: Any, customer_person_id: uuid.UUID | None = None) -> bool:
+    """`explicit_urgent` (spec r7 §4.2 cổng 5, A2): CHỈ khi trích dẫn `verified` CỦA KHÁCH (người gửi = `customer_person_id`; câu NV/Sếp hỏi lại
+    "có gấp không" không tính) có từ trong `vi_time.URGENT_LEXICON` (gấp, khẩn, cần ngay…) và từ đó không bị phủ định ("không gấp", "chưa cần gấp").
+    Trích dẫn chưa kiểm không được tính, nhưng không làm mất từ khoá ở trích dẫn đã kiểm. "Đã có bên khác xem" một mình không phải."""
+    parts = [str(e.quote) for e in ev if e.quote_status == "verified" and e.quote
+             and (customer_person_id is None or getattr(e, "sender_pid", None) == customer_person_id)]
+    return vi_time.has_urgent(_NEGATED_URGENT.sub(" ", " ".join(parts)))
+
+
 def _deadline(needed_by: Any) -> datetime | None:
     """`needed_by` là ngày ⇒ hạn hết ngày đó theo giờ VN."""
     if needed_by is None:
@@ -146,7 +166,7 @@ async def process_demand(db: AsyncSession, org_id: uuid.UUID, demand_id: uuid.UU
     `ctx` (từ `load_ctx`) do bên chạy hàng loạt truyền vào để không đồng bộ/đọc Hồ sơ lại cho từng cầu."""
     d = (await db.execute(text("""
         SELECT s.id, s.item, s.category, s.quantity, s.unit, s.value_vnd, s.location, s.needed_by, s.meaning_unit_id, s.created_at,
-               mu.person_id, mu.group_id, mu.observed_at, mu.confidence
+               mu.person_id, mu.group_id, mu.observed_at, mu.confidence, mu.entities
         FROM biz.market_signals s LEFT JOIN clean.meaning_units mu ON mu.id = s.meaning_unit_id
         WHERE s.id = :i AND s.org_id = :o AND s.side = 'demand' AND s.status = 'open'"""), {"i": demand_id, "o": org_id})).one_or_none()
     if d is None:
@@ -176,12 +196,14 @@ async def process_demand(db: AsyncSession, org_id: uuid.UUID, demand_id: uuid.UU
     if (not scored and not res_items) or d.person_id is None or d.meaning_unit_id is None:
         return []
     best = max(scored, key=lambda x: x[0]) if scored else None
-    ev = (await db.execute(text("""SELECT raw_event_id, raw_received_at, quote, quote_status FROM clean.evidence WHERE meaning_unit_id = :u
-                                   ORDER BY raw_received_at"""), {"u": d.meaning_unit_id})).all()
+    ev = (await db.execute(text("""SELECT ce.raw_event_id, ce.raw_received_at, ce.quote, ce.quote_status, pi.person_id AS sender_pid
+                                   FROM clean.evidence ce LEFT JOIN raw.events re ON re.id = ce.raw_event_id AND re.received_at = ce.raw_received_at
+                                   LEFT JOIN core.person_identities pi ON pi.id = re.sender_identity_id
+                                   WHERE ce.meaning_unit_id = :u ORDER BY ce.raw_received_at"""), {"u": d.meaning_unit_id})).all()
     if not ev:
         return []
     verified = all(e.quote_status == "verified" for e in ev)
-    quote = " ".join(e.quote or "" for e in ev) if verified else ""
+    urgent = urgent_in_verified(ev, d.person_id)
     value = demand["value_vnd"]
     below = below_min(lim, value)
     key = str(best[2].id) if best else "resource:" + ",".join(sorted(dwords))
@@ -194,10 +216,11 @@ async def process_demand(db: AsyncSession, org_id: uuid.UUID, demand_id: uuid.UU
     resource_ok = bool(res_items)
     li = levels.SignalIn(
         kind=KIND, msg_at=msg_at, event_at=msg_at, deadline_at=_deadline(d.needed_by),
-        flags=levels.Flags(explicit_urgent=bool(quote) and vi_time.has_urgent(quote)),
+        flags=levels.Flags(explicit_urgent=urgent),
         gate_candidate=levels.G5 if (resource_ok or (best and best[0] >= 75)) and not below else None,   # chạm giới hạn ⇒ không đề cử cổng (7d sẽ đẩy lên 🟠)
         harm_what=f"có thể mất cơ hội bán {d.item}", thread=thread, source_class="insider", confidence_exist=0.8, confidence_content=0.765,
-        opportunity=levels.Opportunity(catalog_score=best[0] if best else None, resource_owner_confirmed=resource_ok, touches_value_limit=below),
+        opportunity=levels.Opportunity(catalog_score=best[0] if best else None, resource_owner_confirmed=resource_ok, touches_value_limit=below,
+                                       need_fields_n=need_fields_of(d.entities)),
         money_vnd=int(value) if value else None, money_basis="estimated" if value else None,
         impact_base=levels.impact_base(KIND, important=True), subject_entity_id=ent)
     # thẻ đã kết thúc: cùng case_key, HOẶC cùng khoá gộp (khách + nhu cầu, như `_merge_key`) trong cửa sổ cầu gần đây — cầu đã gộp vào thẻ
