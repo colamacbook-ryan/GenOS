@@ -48,6 +48,11 @@ BUDGET = {"profile": 800, "facts": 2000, "related": 800, "history": 2400}
 CHARS_PER_TOKEN = 3
 HISTORY_DAYS = 90
 HISTORY_TOP = 10
+PROMISE_KINDS = ("nghia_vu_loi_hua", "viec_han")  # kênh "việc còn mở của luồng" (P-T4): lời hứa/việc có hạn chưa đóng
+PROMISE_DAYS = 30                                 # cửa sổ của kênh lời hứa (ngắn hơn HISTORY_DAYS: lời hứa quá cũ đã tự hết hạn)
+PROMISE_WEIGHT = 2.0                              # > kênh người (1,5) để lời hứa mở không bị đơn vị của người gửi lấn hết
+PROMISE_SLOTS = 3                                 # trần chỗ riêng trong HISTORY_TOP: ≤ 3/10 để không lấn hết Lịch sử
+PROMISE_CLOSED = ("kept", "broken", "expired", "cancelled")
 RELATED_MAX_NODES = 20
 RELATED_WALK_CAP = 500                            # trần dòng đi bộ 1–2 bước trước khi lọc phạm vi (Sếp là nút trung tâm)
 RRF_K = 60
@@ -346,7 +351,9 @@ async def _history(db: AsyncSession, org_id: uuid.UUID, thread_key: str, query_t
                    persons: list[uuid.UUID] | None = None, anchors: list[uuid.UUID] | None = None) -> list[PackItem]:
     """Top `HISTORY_TOP` đơn vị cùng luồng (cùng nhóm / cùng 1-1) trong 90 ngày (hoặc khoảng `time_hint`), gộp RRF từ các kênh:
     (1) liên quan người/thực thể của cửa sổ (người gửi + mention đã nối) — mang việc đang dở của chính chủ thể (lời hứa, đơn, tiền);
-    (2) mới nhất của luồng; (3) chữ bỏ dấu (trigram, xếp theo độ giống — KHÔNG lọc bằng ngưỡng `%` 0.3: câu hỏi ghép nhiều tin dài
+    (2) mới nhất của luồng; (2b) lời hứa/việc có hạn CÒN MỞ của luồng (`PROMISE_KINDS`, chưa có `biz.promises` đóng, ≤ `PROMISE_DAYS`
+    ngày) trọng số `PROMISE_WEIGHT`, giữ chỗ riêng ≤ `PROMISE_SLOTS` — để lượt sau khách báo "xong rồi" model vẫn thấy lời hứa + tin bằng
+    chứng mà đóng được; cùng `where` luồng nên không rò sang nhóm/bối cảnh khác; (3) chữ bỏ dấu (trigram, xếp theo độ giống — KHÔNG lọc bằng ngưỡng `%` 0.3: câu hỏi ghép nhiều tin dài
     gần như không bao giờ đạt ngưỡng với một kết luận ngắn); (4) cosine pgvector nếu bên gọi đưa `query_embedding`.
     Mỗi mục mang `meaning_unit_id` + id tin bằng chứng (`evidence_raw_ids`, `meta.evidence` = [(raw_event_id, raw_received_at)])."""
     gid = contexts.group_of(thread_key)
@@ -387,6 +394,18 @@ async def _history(db: AsyncSession, org_id: uuid.UUID, thread_key: str, query_t
             {**params, "pp": list(persons or []), "an": members})).all(), 1.5)
     add((await db.execute(text(f"SELECT {cols} FROM clean.meaning_units m WHERE {where} ORDER BY m.observed_at DESC LIMIT :n"),  # noqa: S608
                           params)).all())
+    promise_ids: set[uuid.UUID] = set()
+    prom_rows = (await db.execute(text(f"""
+        SELECT {cols} FROM clean.meaning_units m
+        WHERE {where} AND m.kind_hint = ANY(CAST(:pk AS text[]))
+          AND NOT EXISTS (SELECT 1 FROM biz.promises p WHERE p.meaning_unit_id = m.id AND p.org_id = m.org_id
+                          AND (p.state = ANY(CAST(:pc AS text[])) OR p.kept_at IS NOT NULL))
+        ORDER BY m.observed_at DESC LIMIT :np"""),  # noqa: S608
+        {**params, "since": max(since, now - timedelta(days=PROMISE_DAYS)), "pk": list(PROMISE_KINDS),
+         "pc": list(PROMISE_CLOSED), "np": PROMISE_SLOTS})).all()
+    if prom_rows:
+        add(prom_rows, PROMISE_WEIGHT)
+        promise_ids = {r.id for r in prom_rows}
     q = " ".join(query_text.split())[:500]
     if q:
         add((await db.execute(text(f"""
@@ -400,7 +419,9 @@ async def _history(db: AsyncSession, org_id: uuid.UUID, thread_key: str, query_t
             SELECT {cols} FROM clean.meaning_units m
             WHERE {where} AND m.embedding IS NOT NULL
             ORDER BY m.embedding <=> CAST(:v AS vector) LIMIT :n"""), {**params, "v": vec})).all())  # noqa: S608
-    top = sorted(ranks, key=lambda k: (-ranks[k], -info[k].observed_at.timestamp(), str(k)))[:HISTORY_TOP]
+    order = sorted(ranks, key=lambda k: (-ranks[k], -info[k].observed_at.timestamp(), str(k)))
+    keep = [k for k in order if k in promise_ids][:PROMISE_SLOTS]            # chỗ riêng của lời hứa mở
+    top = keep + [k for k in order if k not in keep][:HISTORY_TOP - len(keep)]
     ev: dict[uuid.UUID, list[tuple[uuid.UUID, datetime]]] = {}
     if top:
         for r in (await db.execute(text("""
