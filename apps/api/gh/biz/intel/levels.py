@@ -38,9 +38,10 @@ GATES = (G1, G2, G3, G4, G5, G6)
 BYPASS_GATES = (G1, G2)                      # `bypass_all`: không trần, không precision, bỏ giờ yên lặng, đẩy thật từ ngày cài
 REGULAR_GATES = (G3, G4, G5, G6)
 #: Cờ PHIÊN BẢN (Ryan quyết 2026-10-26, v0.1.76 "phát hành phần chắc"): False ⇒ bốn cổng thường KHÔNG bao giờ đẩy 🔴 ngay — chỉ lên đầu bản
+#: v0.1.77: GIỮ False trong gói P1 — gói P4 bật cùng ramp R4 (chạy thử 14 ngày, M1 n ≥ 10) khi detector đã điền complaint_stage/nudged_by_customer.
 #: tin như chạy bóng ("đáng lẽ báo ngay …"), kể cả qua 14 ngày / đạt M1 / Sếp chọn `ramp_gates=push`. Áp ở tầng `DeliveryState`
 #: (`signals.delivery_state`), KHÔNG trong `compute` — hàm thuần và bộ vector giữ nguyên. Công thức ưu tiên chung thay ở v0.1.77.
-REGULAR_PUSH_ENABLED = True
+REGULAR_PUSH_ENABLED = False
 FR, SK = "rui_ro_lua_dao", "suc_khoe_an_toan"
 KINDS = ("nghia_vu_loi_hua", "viec_han", "cau_hoi_cho_xu_ly", "su_kien_dip", SK, "xung_dot_khieu_nai", "quan_he_nong_nguoi",
          "co_hoi_ket_noi", FR, "thi_truong_thong_tin")
