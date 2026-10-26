@@ -125,8 +125,12 @@ def mask_reply(s: str, trusted_frames: Iterable[str] = ()) -> str:
 
 
 def new_code() -> str:
-    """Mã bản tin ngắn (4 ký tự, không I/O/0/1) — «sai 2 #K7F2» gắn đúng bản tin được tham chiếu."""
-    return "".join(secrets.choice(CODE_ALPHABET) for _ in range(4))
+    """Mã bản tin ngắn (4 ký tự, không I/O/0/1) — «sai 2 #K7F2» gắn đúng bản tin được tham chiếu.
+
+    Ký tự đầu luôn là chữ: mã toàn số (vd "3229") đứng cạnh ngày ("23/10") thành chuỗi ≥ 8 chữ số và bị bộ che
+    STK/SĐT che mất ("2310…229") — Sếp không trả lời được «sai 2 #…»."""
+    letters = "".join(c for c in CODE_ALPHABET if c.isalpha())
+    return secrets.choice(letters) + "".join(secrets.choice(CODE_ALPHABET) for _ in range(3))
 
 
 def _one_line(s: str, limit: int) -> str:
