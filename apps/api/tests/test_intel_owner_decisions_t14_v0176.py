@@ -201,7 +201,7 @@ def test_d2a_impersonator_small_talk_is_not_goods_rule_nor_red() -> None:
 
 
 async def test_d2a_trusted_staff_sender_is_not_impersonation(db: AsyncSession) -> None:
-    """Người gửi đã được Sếp đánh dấu nhân viên (khoá loại, đánh dấu ≥ 7 ngày) trùng tên khách ⇒ không coi là mạo danh."""
+    """Người gửi đã được Sếp đánh dấu nhân viên (khoá loại + staff_marked_at) trùng tên khách ⇒ không coi là mạo danh."""
     w = await world(db)
     await w.group("kh", "Đại lý điện máy", 120)
     await w.person("Tuấn Điện Máy Q7", ptype="customer", group="kh", history_days_ago=60)
@@ -210,18 +210,6 @@ async def test_d2a_trusted_staff_sender_is_not_impersonation(db: AsyncSession) -
                              WHERE id = :p"""), {"p": staff, "t": (w.now - timedelta(days=30)).isoformat()})
     await w.raw("Anh ơi đổi địa chỉ giao hàng 10 cái tivi sang kho mới giúp em nhé", sender=iid, group="kh")
     assert await fraud.run(db, w.org, w.now) == []
-
-
-async def test_d2a_staff_marked_recently_not_trusted_by_hard_rules(db: AsyncSession) -> None:
-    """Nhân viên mới được đánh dấu < 7 ngày: luật cứng lừa đảo không tin vai nhân viên (vẫn là người lạ nhờ ứng tiền ⇒ 🔴)."""
-    w = await world(db)
-    await w.group("gd", "Nhân viên cửa hàng", 25)
-    p, iid = await w.person("Minh Mới", ptype="staff", group="gd", joined_days_ago=1)
-    await db.execute(text("""UPDATE core.persons SET attrs = attrs || jsonb_build_object('person_type_locked', true, 'staff_marked_at', CAST(:t AS text))
-                             WHERE id = :p"""), {"p": p, "t": (w.now - timedelta(days=1)).isoformat()})
-    await w.raw("Mọi người ơi ứng giúp em 3 triệu, chiều em trả liền", sender=iid, group="gd")
-    out = await fraud.run(db, w.org, w.now)
-    assert len(out) == 1 and out[0].level == "red"
 
 
 async def test_d2c_units_scans_only_sender_quotes(db: AsyncSession) -> None:
@@ -416,8 +404,19 @@ def test_staff_trust_rule_shared() -> None:
     from gh.biz.intel.detectors import generic
 
     at = H.NOW
-    assert not generic.staff_trusted("staff", locked=False, marked_at=None, at=at)                       # quy tắc / seed tự gán
-    assert generic.staff_trusted("staff", locked=True, marked_at=None, at=at)                            # Sếp đặt trước v0.1.76 (Nợ #97)
-    assert generic.staff_trusted("staff", locked=True, marked_at=at - timedelta(days=8), at=at)
-    assert not generic.staff_trusted("staff", locked=True, marked_at=at - timedelta(days=1), at=at)      # mới đánh dấu < 7 ngày
-    assert not generic.staff_trusted("customer", locked=True, marked_at=None, at=at)
+    assert not generic.staff_trusted("staff", locked=False, marked_at=None)                       # quy tắc / seed tự gán
+    assert not generic.staff_trusted("staff", locked=False, marked_at=at)                         # chưa khoá loại
+    assert not generic.staff_trusted("staff", locked=True, marked_at=None)    # khoá nhưng chưa có staff_marked_at ⇒ Sếp xác nhận lại (Nợ #97)
+    assert generic.staff_trusted("staff", locked=True, marked_at=at)          # Sếp vừa xác nhận (Owner + PIN) ⇒ tin ngay, không chờ 7 ngày
+    assert not generic.staff_trusted("customer", locked=True, marked_at=at)
+
+
+async def test_locked_staff_without_marked_at_is_still_stranger(db: AsyncSession) -> None:
+    """Security review f5374432: khoá loại staff nhưng KHÔNG có staff_marked_at (đặt bằng đường cũ / không qua PIN) ⇒ không tin."""
+    w = await world(db)
+    await w.group("gd", "Nhân viên cửa hàng", 25)
+    p, iid = await w.person("Minh Cũ", ptype="staff", group="gd", joined_days_ago=1)
+    await db.execute(text("UPDATE core.persons SET attrs = attrs || '{\"person_type_locked\": true}'::jsonb WHERE id = :p"), {"p": p})
+    await w.raw("Mọi người ơi ứng giúp em 3 triệu, chiều em trả liền", sender=iid, group="gd")
+    out = await fraud.run(db, w.org, w.now)
+    assert len(out) == 1 and out[0].level == "red"

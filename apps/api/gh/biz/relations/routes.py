@@ -596,7 +596,11 @@ async def patch_profile(person_id: uuid.UUID, body: ProfilePatch, user: service.
     detail: dict[str, Any] = {}
     cur = (await db.execute(text("SELECT person_type, relation_to_owner, attrs FROM core.persons WHERE id = :i"), {"i": person_id})).one()
     staff_change = body.person_type is not None and (body.person_type == "staff") != (cur.person_type == "staff")
-    if staff_change:
+    cur_attrs = cur.attrs if isinstance(cur.attrs, dict) else {}
+    # Mọi PATCH có KẾT QUẢ person_type='staff' mà người đó chưa có staff_marked_at (kể cả staff→staff: đặt trước v0.1.76 / quy tắc / demo)
+    # cũng là "đánh dấu" ⇒ cùng cổng Owner + PIN + strong_confirm, và luôn ghi staff_marked_at (security review f5374432).
+    staff_confirm = body.person_type == "staff" and not cur_attrs.get("staff_marked_at")
+    if staff_change or staff_confirm:
         # v0.1.76 (T14, review SECURITY): sang / khỏi `staff` = hạ phòng thủ lừa đảo (nhân viên không còn là "người lạ", tin "đã xử lý" của họ
         # tính là phía Sếp) ⇒ chỉ Owner + phiên PIN, báo kênh phụ qua strong_confirm. Loại khác giữ quyền `profile.write` như cũ.
         from gh.biz.intel import strong_confirm
@@ -625,6 +629,8 @@ async def patch_profile(person_id: uuid.UUID, body: ProfilePatch, user: service.
         if staff_change and body.person_type == "staff":
             attrs["before_staff"] = {"type": cur.person_type or "unknown", "relation": cur.relation_to_owner, "locked": was_locked}
             attrs["staff_marked_at"] = datetime.now(UTC).isoformat()
+        elif staff_confirm:
+            attrs["staff_marked_at"] = datetime.now(UTC).isoformat()       # xác nhận lại nhân viên cũ (Owner + PIN đã qua ở trên)
         elif staff_change:
             prev = attrs.pop("before_staff", None)
             attrs.pop("staff_marked_at", None)

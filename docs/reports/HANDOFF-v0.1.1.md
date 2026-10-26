@@ -135,7 +135,6 @@ Nhánh local (CHƯA push): **`rel/v0165`** = bản gộp v0.1.65; **`rel/v0166`*
 
 ### Claude / điều phối viên còn dở
 
-- **Phát hành v0.1.75** (GenOS bản đầu, 23/10/2026): nguồn phát hành chuyển sang `colamacbook-ryan/GenOS`; nhánh `claude/wip/v0175/release-prep`. Cổng E2E bản đầu: không có bản chính thức trước ⇒ `e2e-upgrade`/`e2e-selfupdate` skip; chế độ `pr` đỏ tới khi có latest; promote bằng dispatch `tag=v0.1.75 promote=true` (xem [v0.1.75.md](../releases/v0.1.75.md)). Máy cài Gen-Harness cũ không tự lên GenOS. Nợ: đổi Go module path.
 - **Chưa làm (mang từ v0.1.58)**: bước rẻ ở `e2e-install` (`agy --help | grep -- --effort`, `missing_reason` trong container); ô chọn model vẫn ẩn khi Kiểm tra đỏ (`offeredGroups`). **Nợ #44–#47, #49–#55, #56–#63** (allowlist egress hộp, core vào hộp, định dạng/xoay vòng token agy, quét danh bạ theo phần thay đổi, tin 1-1 còn hở); đệm ở bridge cho loạt tin dồn < 1 giây trước khi tập nghe đồng bộ · **Nợ #35** kiểm WhatsApp QR với máy chủ thật.
 - **Bản kế tiếp (đã hẹn)**: nhận kết quả "Thử 12 câu mẫu" của Jev từ Boss rồi quyết ngưỡng lọc trước; Boss dùng thử Mặt tiền v2 rồi góp ý; chuông Gen dẫn về Mặt tiền; xoá hội thoại Gen thì xoá luôn lựa chọn model đã nhớ (Nợ #29); dọn mã chết trình thiết lập cũ (Nợ #36).
 - **H-b còn mở**: timer đêm mất lịch khi `daemon-reload`/`enable` chạy từ bên trong service đêm — không tái hiện được bằng mã lẫn `e2e-nightly-real` (systemd thật: sau lần chạy timer vẫn có lần kế tiếp); tự lành bao ca này. Máy thật còn tái diễn thì ghi vào v0.1.53.md.

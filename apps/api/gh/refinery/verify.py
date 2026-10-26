@@ -208,6 +208,9 @@ def parse_money_vnd(text: str | None) -> int | None:
 # MỘT hàm che duy nhất, `mask_credentials(text, secrets)`, chạy trên bản đã CHUẨN HOÁ (`norm`: NFC + gộp khoảng trắng) — prompt (`extract`) và
 # bước kiểm trích dẫn (`_quote_status`) gọi đúng hàm này nên model trích đúng chữ nó thấy thì verify luôn tìm lại được và ánh xạ span về chữ gốc.
 _CARD_RE = re.compile(r"(?<![\d-])\d(?:[\s.\-]?\d){12,18}(?!\d)")
+#: UUID (id đối tượng trong kết quả tool): đoạn giữa toàn chữ số của UUIDv7 (vd `01a17668-4746-7979-…`) trông như số thẻ qua
+#: Luhn — không bao giờ che bên trong UUID, nếu không model mất id thật và đề xuất bị chặn «id không có trong kết quả tool».
+_UUID_RE = re.compile(r"(?<![0-9A-Fa-f-])[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}(?![0-9A-Fa-f-])")
 _STK_KW_RE = re.compile(r"(?<![a-z0-9])(?:stk|so tk|tk|tai khoan|so tai khoan|chuyen khoan|ck|ngan hang|nhan tien|ben thu huong)(?![a-z0-9])")
 _CARD_KW_RE = re.compile(r"(?<![a-z0-9])(?:the|card|visa|master|mastercard|jcb|atm|cvv|cvc|credit|debit)(?![a-z0-9])")
 STK_WINDOW = 40          # số ký tự trước chuỗi số được tìm từ khoá STK/thẻ
@@ -318,7 +321,9 @@ def _credential_spans(text_: str, secrets: Sequence[str] = ()) -> list[tuple[int
             fspan(m, "v", "[mật khẩu]", trim=".,;!?)")
     for m in _PW_BARE_RE.finditer(folded):
         fspan(m, "v", "[mật khẩu]", trim=".,;!?)")
-    for m in _CARD_RE.finditer(text_):
+    # UUID thay bằng ký tự không phải số (cùng độ dài, giữ offset) trước khi quét thẻ: không che nhầm UUID mà thẻ thật đứng sát vẫn bị che
+    card_scan = _UUID_RE.sub(lambda u: "x" * len(u.group(0)), text_)
+    for m in _CARD_RE.finditer(card_scan):
         digits = re.sub(r"\D", "", m.group(0))
         if 13 <= len(digits) <= 19 and _luhn_ok(digits) and not _is_stk_context(text_, m.start()):
             spans.append((m.start(), m.end(), f"[thẻ …{digits[-4:]}]"))

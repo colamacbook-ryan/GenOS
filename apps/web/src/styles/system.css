@@ -559,3 +559,4 @@
 @media (prefers-reduced-motion: reduce) { .intel-setup__seg { transition: none; } }
 .intel-ramp-locked { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .intel-ramp-locked .muted-note { flex-basis: 100%; }
+.intel-setup__reconfirm { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; flex-wrap: wrap; }

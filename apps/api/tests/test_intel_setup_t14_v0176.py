@@ -184,3 +184,48 @@ async def test_create_or_update_rule_setting_staff_is_rejected(owner_api: Api) -
     assert ok.status_code == 201, ok.text
     r = await owner_api.send("PUT", f"/rules/{ok.json()['id']}", body)
     assert r.status_code == 422
+
+
+async def test_patch_staff_on_unlocked_staff_needs_owner_pin_and_writes_marked_at(owner_api: Api, client: httpx.AsyncClient, db: AsyncSession) -> None:
+    """Security review f5374432: người ĐÃ là staff (luật cũ/demo, chưa khoá, chưa staff_marked_at) — PATCH person_type=staff (staff→staff,
+    không đổi loại) vẫn phải Owner + PIN + strong_confirm (báo kênh phụ); kết quả luôn có staff_marked_at."""
+    org = await _org(db)
+    g1 = await _group(db, org, "Nhân viên", 8)
+    old = await _person(db, org, "Hùng cũ", g1, "staff")
+    await db.commit()
+    mgr = await login_as(client, db, "manager")
+    await verify_pin(mgr, "112233")
+    mid = (await db.execute(text("SELECT id FROM core.users WHERE email = 'manager@example.vn'"))).scalar_one()
+    await db.execute(text("UPDATE core.persons SET owner_user_id = :u WHERE id = :p"), {"u": mid, "p": old})    # trong phạm vi Quản lý
+    await db.commit()
+    assert (await mgr.send("PATCH", f"/profile/{old}", {"person_type": "staff"})).status_code == 403
+    op = await login_as(client, db, "operator")
+    await verify_pin(op, "112233")
+    assert (await op.send("PATCH", f"/profile/{old}", {"person_type": "staff"})).status_code == 403
+    assert (await owner_api.send("PATCH", f"/profile/{old}", {"person_type": "staff"})).status_code == 423
+    a = (await db.execute(text("SELECT attrs FROM core.persons WHERE id = :p"), {"p": old})).scalar_one()
+    assert a.get("person_type_locked") is not True and "staff_marked_at" not in a
+    before = await _backup_security(db, org)
+    await verify_pin(owner_api)
+    assert (await owner_api.send("PATCH", f"/profile/{old}", {"person_type": "staff"})).status_code == 200
+    a = (await db.execute(text("SELECT attrs FROM core.persons WHERE id = :p"), {"p": old})).scalar_one()
+    assert a["person_type_locked"] is True and a["staff_marked_at"]
+    assert await _backup_security(db, org) == before + 1                                                  # báo kênh phụ
+    # đã có staff_marked_at: sửa trường khác (không đụng loại) vẫn theo quyền cũ
+    assert (await op.send("PATCH", f"/profile/{old}", {"note": "ca sáng"})).status_code == 200
+
+
+async def test_setup_lists_staff_without_marked_at_for_reconfirm(owner_api: Api, db: AsyncSession) -> None:
+    """Nợ #97: bước 2 của thẻ Thiết lập đánh dấu người đang là staff nhưng chưa có staff_marked_at để Sếp xác nhận lại bằng PIN."""
+    org = await _org(db)
+    g1 = await _group(db, org, "Nhân viên", 8)
+    old = await _person(db, org, "Hùng cũ", g1, "staff")
+    await _person(db, org, "Chú Bảy", g1, "customer")
+    await db.commit()
+    s = (await owner_api.get("/intel/setup")).json()
+    by_name = {p["name"]: p for p in s["staff"]["people"]}
+    assert by_name["Hùng cũ"]["needs_reconfirm"] is True and by_name["Chú Bảy"]["needs_reconfirm"] is False
+    await verify_pin(owner_api)
+    assert (await owner_api.send("PATCH", f"/profile/{old}", {"person_type": "staff"})).status_code == 200
+    s = (await owner_api.get("/intel/setup")).json()
+    assert next(p for p in s["staff"]["people"] if p["name"] == "Hùng cũ")["needs_reconfirm"] is False
