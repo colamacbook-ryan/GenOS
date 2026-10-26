@@ -30,6 +30,7 @@ from gh.biz.mem import entities
 log = logging.getLogger("gh.intel.questions")
 
 KIND = "cau_hoi_cho_xu_ly"
+CANDIDATE_CAP = 2000                     # trần số dòng ứng viên đọc mỗi lượt làm mới (không khoá)
 WAIT_ESCALATE_H = 2.0                    # cùng ngưỡng `levels.axes` (owner_unanswered_h > 2)
 OUTSIDE_NOTE = "có thể đã xử lý ngoài nhóm"
 AskerKind = Literal["customer", "internal", "kin", "other"]
@@ -58,21 +59,67 @@ class QuestionIn(BaseModel):
     summary: str | None = None
 
 
-def waiting_hours(asked_at: datetime, now: datetime) -> float:
-    return levels._age(now, asked_at)
+async def work_hours_of(db: AsyncSession, org_id: uuid.UUID) -> levels.WorkHours:
+    """Giờ làm của tổ chức: settings `intel.work_start` / `intel.work_end` (migration 0045; mặc định 08:00–17:30, giờ VN). Một nguồn với
+    `DeliveryState.work_hours` (spec r7 (c′), CNS-190); sai định dạng ⇒ mặc định + log. Hồ sơ Sếp không được đọc ở đây."""
+    s, _ = await signals.intel_settings(db, org_id)
+    d = levels.WorkHours()
+    return levels.WorkHours(start=signals._hhmm(s, "work_start", d.start, org_id), end=signals._hhmm(s, "work_end", d.end, org_id))
 
 
-def wake_at(asked_at: datetime) -> datetime:
-    """Mốc đồng hồ đầu tiên mà câu hỏi chặn việc có thể đổi mức."""
-    return levels._aware(asked_at) + timedelta(hours=WAIT_ESCALATE_H)
+def _day_windows(day: datetime, work: levels.WorkHours) -> list[tuple[datetime, datetime]]:
+    """Khung giờ làm của MỘT ngày lịch VN bắt đầu `day` (00:00). `end > start` ⇒ [start, end). `end <= start` ⇒ khung vắt nửa đêm
+    [start, 24h) ∪ [0, end) (vd 18:00–02:00; `end == start` ⇒ cả ngày)."""
+    ws, we = levels._minutes(work.start), levels._minutes(work.end)
+    if we > ws:
+        return [(day + timedelta(minutes=ws), day + timedelta(minutes=we))]
+    return [(day, day + timedelta(minutes=we)), (day + timedelta(minutes=ws), day + timedelta(days=1))] if we > 0 else [(day + timedelta(minutes=ws), day + timedelta(days=1))]
 
 
-def in_work_hours(now: datetime, quiet: levels.QuietHours | None = None) -> bool:
-    return not levels.in_quiet(now, quiet or levels.QuietHours())
+def waiting_hours(asked_at: datetime, now: datetime, work: levels.WorkHours | None = None) -> float:
+    """Giờ CHỜ tính trong giờ làm (spec r7 (c′) `owner_unanswered_h`): phần giao của [asked_at, now] với khung `work_hours` MỖI ngày lịch VN
+    (không có lịch nghỉ cuối tuần). Câu hỏi 17:00 thứ sáu, 08:30 thứ hai (khung 08:00–17:30) ⇒ 0,5 + 9,5 + 9,5 + 0,5 giờ, không phải 63 giờ."""
+    w = work or levels.WorkHours()
+    a, b = levels._aware(asked_at).astimezone(levels.VN), levels._aware(now).astimezone(levels.VN)
+    if b <= a:
+        return 0.0
+    total = 0.0
+    day = a.replace(hour=0, minute=0, second=0, microsecond=0)
+    while day <= b:
+        for lo0, hi0 in _day_windows(day, w):
+            lo, hi = max(a, lo0), min(b, hi0)
+            if hi > lo:
+                total += (hi - lo).total_seconds() / 3600
+        day += timedelta(days=1)
+    return total
+
+
+def wake_at(asked_at: datetime, work: levels.WorkHours | None = None) -> datetime:
+    """Mốc đồng hồ đầu tiên mà câu hỏi chặn việc có thể đổi mức: lúc đã chờ đủ `WAIT_ESCALATE_H` giờ TRONG giờ làm (khớp `waiting_hours`)."""
+    w = work or levels.WorkHours()
+    a = levels._aware(asked_at).astimezone(levels.VN)
+    need = timedelta(hours=WAIT_ESCALATE_H)
+    day = a.replace(hour=0, minute=0, second=0, microsecond=0)
+    for _ in range(400):                                                  # ~13 tháng; khung ngắn hơn 2 giờ vẫn ra mốc ở ngày sau
+        for lo0, hi0 in _day_windows(day, w):
+            lo = max(a, lo0)
+            if hi0 > lo:
+                if hi0 - lo >= need:
+                    return lo + need
+                need -= hi0 - lo
+        day += timedelta(days=1)
+    return a + timedelta(hours=WAIT_ESCALATE_H)
+
+
+def in_work_hours(now: datetime, work: levels.WorkHours | None = None) -> bool:
+    w = work or levels.WorkHours()
+    t = levels._aware(now).astimezone(levels.VN)
+    m, ws, we = t.hour * 60 + t.minute, levels._minutes(w.start), levels._minutes(w.end)
+    return ws <= m < we if we > ws else (m >= ws or m < we)
 
 
 def build_input(q: QuestionIn, now: datetime, *, subject_entity_id: uuid.UUID | None = None,
-                quiet: levels.QuietHours | None = None) -> levels.SignalIn:
+                work: levels.WorkHours | None = None) -> levels.SignalIn:
     """Hàm thuần: đầu vào mức của một câu hỏi. Khách / người thân / nội bộ chặn việc là "quan trọng" (impact cơ sở 2, §4.2.1 (f))."""
     important = q.asker in ("customer", "kin") or (q.asker == "internal" and q.blocks_work)
     return levels.SignalIn(
@@ -81,7 +128,7 @@ def build_input(q: QuestionIn, now: datetime, *, subject_entity_id: uuid.UUID | 
         thread=q.thread, work=q.work, customer_of_owner=q.asker == "customer", source_class="insider" if q.asker != "customer" else "outsider",
         confidence_exist=1.0, confidence_content=q.confidence_content, subject_entity_id=subject_entity_id,
         impact_base=levels.impact_base(KIND, important=important),
-        owner_unanswered_h=round(waiting_hours(q.asked_at, now), 3), in_work_hours=in_work_hours(now, quiet),
+        owner_unanswered_h=round(waiting_hours(q.asked_at, now, work), 3), in_work_hours=in_work_hours(now, work),
         harm_what="câu hỏi đang chờ, có thể chặn việc" if q.blocks_work else "")
 
 
@@ -93,7 +140,7 @@ async def _sent_by(db: AsyncSession, org_id: uuid.UUID, raw_event_id: uuid.UUID,
 
 async def emit(db: AsyncSession, org_id: uuid.UUID, q: QuestionIn, now: datetime) -> signals.Signal:
     """Ghi (hoặc gộp) tín hiệu câu hỏi: một câu hỏi gốc = một tín hiệu (`case_key` theo tin gốc, spec §4.2 bảng case_key)."""
-    st = await signals.delivery_state(db, org_id, now)
+    work = await work_hours_of(db, org_id)
     ent: uuid.UUID | None = None
     if q.asker_person_id is not None and not await _sent_by(db, org_id, q.raw_event_id, q.asker_person_id):
         # Tin gốc không do người này gửi ⇒ không gán câu hỏi cho họ (không để tin người khác mang nhãn khách/người thân).
@@ -103,7 +150,7 @@ async def emit(db: AsyncSession, org_id: uuid.UUID, q: QuestionIn, now: datetime
             ent = (await entities.ensure_person(db, org_id, q.asker_person_id)).id
         except entities.EntityError:
             ent = None
-    li = build_input(q, now, subject_entity_id=ent, quiet=st.quiet_hours)
+    li = build_input(q, now, subject_entity_id=ent, work=work)
     summary = f"{q.summary or q.title} — {OUTSIDE_NOTE}"
     ev = signals.EvidenceIn(type="raw_event", id=q.raw_event_id, received_at=None, source_field=q.source_field,
                             span_start=q.span_start, span_end=q.span_end, quote=q.quote)
@@ -113,19 +160,20 @@ async def emit(db: AsyncSession, org_id: uuid.UUID, q: QuestionIn, now: datetime
                           subject_id=q.asker_person_id, person_ids=[q.asker_person_id] if q.asker_person_id else [],
                           facts={"asker_kind": q.asker, "maybe_handled_outside": True, "blocks_work": q.blocks_work}, due_at=q.deadline_at)
     sig = await signals.upsert(db, org_id, up, now)
-    if q.blocks_work and wake_at(q.asked_at) > levels._aware(now):
-        # `relane` đã đặt `next_eval_at` theo hạn/cửa sổ; kéo về mốc 2 giờ nếu mốc đó đến trước (đường đồng hồ không đợi tin mới).
+    wake = wake_at(q.asked_at, work)
+    if q.blocks_work and wake > levels._aware(now):
+        # `relane` đã đặt `next_eval_at` theo hạn/cửa sổ; kéo về mốc đủ 2 giờ CHỜ TRONG GIỜ LÀM nếu mốc đó đến trước (đường đồng hồ không đợi tin mới).
         await db.execute(text("""UPDATE biz.alerts SET next_eval_at = LEAST(COALESCE(next_eval_at, :w), :w)
-                                 WHERE id = :i AND status IN ('open', 'acknowledged')"""), {"w": wake_at(q.asked_at), "i": sig.id})
+                                 WHERE id = :i AND status IN ('open', 'acknowledged')"""), {"w": wake, "i": sig.id})
         sig = await signals.get(db, org_id, sig.id) or sig
     return sig
 
 
 async def refresh_waiting(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, limit: int = 200) -> list[signals.Signal]:
-    """Câu hỏi chặn việc còn mở, đã quá `WAIT_ESCALATE_H` giờ mà `level_input` còn ghi ≤ 2 ⇒ làm mới `owner_unanswered_h`/`in_work_hours`
+    """Câu hỏi chặn việc còn mở, đã quá `WAIT_ESCALATE_H` giờ (đồng hồ tường — điều kiện cần; giờ chờ tính trong giờ làm ≤ giờ tường) mà `level_input` còn ghi ≤ 2 ⇒ làm mới `owner_unanswered_h`/`in_work_hours`
     rồi `relane`. Câu hỏi đã làm mới nhưng cờ `in_work_hours` đã lưu KHÁC giờ hiện tại (lần làm mới rơi vào giờ yên lặng) được chọn lại khi
     đổi giờ ⇒ không kẹt ở mức cũ. Chạy lại an toàn (cờ đã khớp giờ hiện tại thì không chọn lại). Trả các tín hiệu ĐỔI mức/phân phối. Bên gọi commit."""
-    st = await signals.delivery_state(db, org_id, now)
+    work = await work_hours_of(db, org_id)
     rows = (await db.execute(text("""
         SELECT id, level, delivery, level_input FROM biz.alerts
         WHERE org_id = :o AND kind = :k AND status IN ('open', 'acknowledged') AND level_input IS NOT NULL
@@ -133,15 +181,24 @@ async def refresh_waiting(db: AsyncSession, org_id: uuid.UUID, now: datetime, *,
           AND (COALESCE((level_input ->> 'owner_unanswered_h')::numeric, 0) <= :th
                OR COALESCE((level_input ->> 'in_work_hours')::boolean, true) <> :iw)     -- vào/ra giờ làm việc ⇒ đánh giá lại
           AND (level_input ->> 'msg_at')::timestamptz + make_interval(secs => :ths) <= :now
-        ORDER BY created_at LIMIT :n FOR UPDATE"""),
-                            {"o": org_id, "k": KIND, "th": WAIT_ESCALATE_H, "ths": WAIT_ESCALATE_H * 3600, "now": now, "n": limit,
-                                    "iw": in_work_hours(now, st.quiet_hours)})).all()
-    out: list[signals.Signal] = []
+        ORDER BY created_at LIMIT :n"""),                                           # KHÔNG khoá ở đây: chỉ khoá dòng thực sự cần ghi (dưới)
+                            {"o": org_id, "k": KIND, "th": WAIT_ESCALATE_H, "ths": WAIT_ESCALATE_H * 3600, "now": now, "n": CANDIDATE_CAP,
+                                    "iw": in_work_hours(now, work)})).all()
+    need: list[tuple[Any, float, bool]] = []
     for r in rows:
         li = dict(r.level_input)
-        asked = datetime.fromisoformat(str(li["msg_at"]))
-        li["owner_unanswered_h"] = round(waiting_hours(asked, now), 3)
-        li["in_work_hours"] = in_work_hours(now, st.quiet_hours)
+        h, iw = round(waiting_hours(datetime.fromisoformat(str(li["msg_at"])), now, work), 3), in_work_hours(now, work)
+        if h <= WAIT_ESCALATE_H and li.get("owner_unanswered_h", 0) <= WAIT_ESCALATE_H and li.get("in_work_hours", True) == iw:
+            continue                                        # chưa đủ giờ chờ TRONG giờ làm ⇒ mức không thể đổi: bỏ, không khoá, không tính vào `limit`
+        need.append((r, h, iw))
+    out: list[signals.Signal] = []
+    for r, h, iw in need[:limit]:
+        cur = (await db.execute(text("SELECT level_input FROM biz.alerts WHERE id = :i AND status IN ('open', 'acknowledged') FOR UPDATE"), {"i": r.id})).scalar_one_or_none()
+        if cur is None:
+            continue
+        li = dict(cur)
+        li["owner_unanswered_h"] = h
+        li["in_work_hours"] = iw
         await db.execute(text("UPDATE biz.alerts SET level_input = CAST(:li AS jsonb) WHERE id = :i"),
                          {"li": orjson.dumps(li).decode(), "i": r.id})
         sig = await signals.relane(db, org_id, r.id, now)

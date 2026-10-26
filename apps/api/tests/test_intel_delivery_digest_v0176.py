@@ -424,3 +424,10 @@ def test_display_mask_date_lookalike_stk_and_sentinel_injection() -> None:
         assert "ZQ" in out                                              # nguyên văn, không bị thay
     for keep in ("25/10/2026", "17:35", "2026-10-23 17:35", "25.000.000đ", "23.10.2026, 17:35", "2026-10-23T17:35:10"):
         assert m(keep) == keep, keep
+
+
+def test_digest_code_never_all_digits_so_masking_cannot_eat_it() -> None:
+    """Mã toàn số cạnh ngày bị bộ che số dài che mất (CI đỏ ngẫu nhiên ~1/256) — ký tự đầu luôn là chữ."""
+    for _ in range(2000):
+        c = delivery.new_code()
+        assert len(c) == 4 and c[0].isalpha() and set(c) <= set(delivery.CODE_ALPHABET)
