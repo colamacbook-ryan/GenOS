@@ -155,7 +155,8 @@ async def test_gate_needs_both_big_and_about_to_slip(db) -> None:  # type: ignor
     w2 = await _setup(db)
     await _demand(db, w2, body="Cần 50 tấn thép phi 16 giao Cần Thơ", needed_in_days=1)    # hạn ngày mai (< 48 giờ) ⇒ cổng
     r2 = await _one(db, w2.org)
-    assert r2.level == "red" and r2.gate == levels.G5
+    # r7: hạn ngày mai ⇒ qua cửa G5; < 24 giờ (U3) ⇒ 🔴, 24–72 giờ (U2) ⇒ P2 🟠 đầu bản tin (candidate G5) — tuỳ giờ chạy test
+    assert (r2.level, r2.gate) == ("red", levels.G5) or (r2.level, r2.gate, r2.candidate) == ("amber", None, levels.G5)
     w3 = await _setup(db)
     await _demand(db, w3, body="Cần 50 tấn thép phi 16 giao Cần Thơ", needed_in_days=4)    # còn xa ⇒ chưa sắp trôi
     r3 = await _one(db, w3.org)

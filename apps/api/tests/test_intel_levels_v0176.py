@@ -108,6 +108,7 @@ def test_levels_gate2_outsider_kin_claim_no_red() -> None:
 # ─── cổng 3 khách chê công khai / doạ bỏ (Q15) ────────────────────────────────
 
 def _g3(ago: float, **kw: object) -> L.SignalIn:
+    kw.setdefault("impact_base", 2)                            # detector: khách của Sếp ⇒ cơ sở impact 2 (§4.2.1 (f)); đường bảng r7 đọc nó
     return sig("xung_dot_khieu_nai", ago_h=ago, customer_of_owner=True, flags={"public": True}, **kw)  # type: ignore[arg-type]
 
 
@@ -134,17 +135,23 @@ def test_levels_gate3_supplier_not_customer_no_gate() -> None:
 
 def _g4(due: float, **kw: object) -> L.SignalIn:
     kw.setdefault("promise", {"to_customer": True})
+    kw.setdefault("impact_base", 2)
     return sig("nghia_vu_loi_hua", due_in_h=due, **kw)  # type: ignore[arg-type]
 
 
 def test_levels_gate4_four_hours_inclusive_and_overdue_today() -> None:
-    assert compute(_g4(4.0)).gate == G4
-    assert compute(_g4(-1.0)).gate == G4                       # đã trễ trong hôm nay, chưa xong ⇒ 🔴 (A17)
-    assert compute(_g4(4.5)).gate is None                      # còn 4,5 giờ, không trở ngại ⇒ chưa cổng
+    # r7 (R1, Ryan chốt): bỏ vế "còn ≤ 4 giờ tự thành 🔴". Đã trễ trong hôm nay mà khách CHƯA nhắc ⇒ 🟠 đầu bản tin (P2), khách đã nhắc ⇒ 🔴 (Q16).
+    assert compute(_g4(4.0)).level == "grey" and "milestone_running" in compute(_g4(4.0)).reasons
+    lv = compute(_g4(-1.0))
+    assert (lv.level, lv.delivery, lv.candidate, lv.gate) == ("amber", "digest_top", G4, None)
+    assert compute(_g4(-1.0, promise={"to_customer": True, "nudged_by_customer": True})).gate == G4     # A17 + Q16
+    assert compute(_g4(4.5)).gate is None
 
 
 def test_levels_gate4_obstacle_reported_today_red() -> None:
-    assert compute(_g4(7, promise={"to_customer": True, "obstacle_reported": True})).gate == G4
+    lv = compute(_g4(7, promise={"to_customer": True, "obstacle_reported": True}))
+    assert (lv.level, lv.candidate) == ("amber", G4)           # r7: có trở ngại mà khách chưa nhắc ⇒ cửa đạt, P2 🟠 đầu bản tin
+    assert compute(_g4(7, promise={"to_customer": True, "obstacle_reported": True, "nudged_by_customer": True})).gate == G4     # Q16
 
 
 def test_levels_gate4_completed_closes_a16() -> None:
@@ -173,8 +180,11 @@ def test_levels_gate5_off_in_family_context() -> None:
 
 def test_levels_gate5_48h_boundary() -> None:
     base = {"opportunity": {"catalog_score": 90}}
-    assert compute(sig("co_hoi_ket_noi", due_in_h=47.9, **base)).gate == G5  # type: ignore[arg-type]
-    assert compute(sig("co_hoi_ket_noi", due_in_h=48.0, **base)).gate is None  # type: ignore[arg-type]
+    # r7: cơ hội 24–72 giờ ⇒ I3 × U2 = P2 🟠 đầu bản tin (không 🔴); < 24 giờ ⇒ U3 ⇒ 🔴 (G5, `need_fields_n` vắng ⇒ không trần).
+    lv = compute(sig("co_hoi_ket_noi", due_in_h=47.9, **base))  # type: ignore[arg-type]
+    assert (lv.level, lv.gate, lv.candidate, lv.delivery) == ("amber", None, G5, "digest_top")
+    assert compute(sig("co_hoi_ket_noi", due_in_h=23.9, **base)).gate == G5  # type: ignore[arg-type]
+    assert compute(sig("co_hoi_ket_noi", due_in_h=-1, **base)).gate is None  # type: ignore[arg-type]    # hạn đã qua ⇒ đã trôi
 
 
 # ─── cổng 6 sự cố công việc gấp ───────────────────────────────────────────────
@@ -207,7 +217,7 @@ def test_levels_one_case_one_red_merge_and_escalation() -> None:
     prior = {"red_pushed": True, "gate": G3, "said_will_leave": False}
     lv = compute(_g3(2, case_prior=prior))
     assert (lv.level, lv.delivery) == ("red", "merge") and "merged" in lv.reasons
-    esc = sig("xung_dot_khieu_nai", ago_h=1, customer_of_owner=True, flags={"public": True, "said_will_leave": True},
+    esc = sig("xung_dot_khieu_nai", ago_h=1, customer_of_owner=True, impact_base=2, flags={"public": True, "said_will_leave": True},
               case_prior=prior)
     lv = compute(esc)
     assert lv.delivery == "push_now" and "escalation" in lv.reasons
@@ -344,17 +354,18 @@ def test_case_key_ten_kinds_stable_within_window() -> None:
 
 # ─── đồng hồ: mốc tính lại ────────────────────────────────────────────────────
 
-def test_levels_next_change_at_promise_four_hours() -> None:
+def test_levels_next_change_at_promise_due_soon_mark() -> None:
     s = _g4(6)
-    nxt = L.next_change_at(s, NOW)
-    assert nxt is not None and nxt <= NOW + timedelta(hours=2, seconds=1)
+    nxt = L.next_change_at(s, state(), NOW)
+    assert nxt == NOW + timedelta(hours=4)                     # r7: mốc cảnh báo `deadline_eff − 2 giờ` (Q-A); bỏ mốc "≤ 4 giờ"
     assert compute(s, now=NOW).gate is None
-    assert compute(s, now=nxt).gate == G4                      # tới mốc "≤ 4 giờ" ⇒ cổng 4 (Q16)
+    lv = compute(s, now=nxt)
+    assert (lv.level, lv.delivery, lv.gate) == ("amber", "digest_top", None) and "milestone_due_soon" in lv.reasons
 
 
 def test_levels_next_change_at_q15_24h() -> None:
     s = _g3(20)
-    nxt = L.next_change_at(s, NOW)
+    nxt = L.next_change_at(s, state(), NOW)
     assert nxt == NOW + timedelta(hours=4)
     assert compute(s, now=nxt).level == "amber"                # quá 24 giờ ⇒ 🟠 đứng đầu bản tin (Q15)
 

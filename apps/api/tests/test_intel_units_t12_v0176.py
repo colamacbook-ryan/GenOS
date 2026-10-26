@@ -222,7 +222,7 @@ async def test_t12_fraud_without_hard_rule_runs_d2_before_write(db: AsyncSession
 
 # ─── lời hứa ─────────────────────────────────────────────────────────────────
 
-async def test_t12_promise_to_customer_about_to_break_is_red_gate4(db: AsyncSession) -> None:
+async def test_t12_promise_to_customer_about_to_break_is_amber_top_gate4_candidate(db: AsyncSession) -> None:
     w = await _world(db)
     spid, siid, sent = await _person(db, w, "NV Hà")
     cpid, _, cent = await _person(db, w, "Chị Tư")
@@ -230,11 +230,12 @@ async def test_t12_promise_to_customer_about_to_break_is_red_gate4(db: AsyncSess
     await _customer_of(db, w, cent)
     raw = await mk_raw(db, w.org, w.channel, identity=siid, body="dạ 5h chiều nay em giao đủ 200 bao cho chị", group=w.group, at=NOW - timedelta(hours=2))
     uid = await _unit(db, w, raw, "nghia_vu_loi_hua", person=spid, people=[("nguoi_hua", sent), ("nguoi_duoc_hua", cent)],
-                      v={"deadline_at": (NOW + timedelta(hours=3)).isoformat()}, gate=levels.G4, at=NOW - timedelta(hours=2),
+                      v={"deadline_at": (NOW + timedelta(hours=1)).isoformat()}, gate=levels.G4, at=NOW - timedelta(hours=2),
                       conclusion="NV hứa giao 200 bao cho khách chiều nay")
     out = await promises.project_units(db, w.org, NOW)
     await db.commit()
-    assert [(s.level, s.gate) for s in out] == [("red", levels.G4)]
+    # r7 (Q-A): còn ≤ 2 giờ, không trở ngại, khách chưa nhắc ⇒ 🟠 đầu bản tin, candidate G4 (🔴 cần Q16: khách đã nhắc)
+    assert [(s.level, s.gate, s.candidate, s.delivery) for s in out] == [("amber", None, levels.G4, "digest_top")]
     p = (await db.execute(text("SELECT to_customer, promiser_person_id, signal_id FROM biz.promises WHERE org_id = :o AND meaning_unit_id = :u"),
                           {"o": w.org, "u": uid})).one()
     assert p.to_customer and p.promiser_person_id == spid and p.signal_id == out[0].id
@@ -244,7 +245,7 @@ async def test_t12_promise_to_customer_about_to_break_is_red_gate4(db: AsyncSess
 async def test_t12_promises_cold_start_owner_promise_in_confirmed_business_group(db: AsyncSession) -> None:
     """Cài mới: Hồ sơ chưa có `customer_of`/`staff_of`. Sếp (tin ĐI) hứa với người trong nhóm đã xác nhận `kinh_doanh` ⇒ bên nhận là khách
     (luật khởi động lạnh) ⇒ cổng 4. Nhóm CHƯA xác nhận ⇒ không suy khách (không cổng 4)."""
-    for business, want_gate in ((True, levels.G4), (False, None)):
+    for business in (True, False):
         w = await _world(db, business=business)
         cpid, _, cent = await _person(db, w, "Anh Bảy")
         raw = await mk_raw(db, w.org, w.channel, identity=w.owner_identity, body="ok chiều nay anh gửi hàng cho em nhé", group=w.group,
@@ -255,7 +256,7 @@ async def test_t12_promises_cold_start_owner_promise_in_confirmed_business_group
         await db.commit()
         assert len(out) == 1, business
         r = (await _rows(db, w.org))[0]
-        assert r.level_input["promise"]["to_customer"] is business and (r.gate == want_gate or (want_gate is None and r.gate != levels.G4))
+        assert r.level_input["promise"]["to_customer"] is business and r.gate is None and ((r.candidate == levels.G4) is business)
         assert r.facts["cold_start"] is business
 
 
@@ -274,7 +275,7 @@ async def test_t12_promises_cold_start_never_guesses_both_sides(db: AsyncSession
     await _unit(db, w, raw2, "nghia_vu_loi_hua", person=apid, people=[("nguoi_hua", aent), ("nguoi_duoc_hua", kent)],
                 v={"deadline_at": (NOW + timedelta(hours=2)).isoformat()}, at=NOW - timedelta(hours=1))
     out = await promises.project_units(db, w.org, NOW)
-    assert len(out) == 1 and out[0].gate == levels.G4
+    assert len(out) == 1 and out[0].candidate == levels.G4          # r7: còn 2 giờ ⇒ 🟠 `due_soon`, candidate G4
 
 
 async def test_t12_promise_fact_path_and_unit_path_never_double(db: AsyncSession) -> None:

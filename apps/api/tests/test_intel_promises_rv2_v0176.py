@@ -22,7 +22,7 @@ async def test_rv2_staff_promise_to_customer_without_due_is_amber_signal_and_rer
     await _fact(db, w, "promised_to", w.staff, "em sẽ gửi hợp đồng cho anh", at=NOW - timedelta(hours=2), due=None, to=w.cust)
     out = await promises.project(db, w.org, NOW)
     await db.commit()
-    assert len(out) == 1 and out[0].level == "amber" and out[0].gate is None
+    assert len(out) == 1 and out[0].level == "grey" and out[0].gate is None and "milestone_running" in out[0].reasons   # r7: không hạn, khách chưa nhắc ⇒ đang chạy
     for _ in range(2):                                              # chạy lại: không trùng, không lỗi
         await promises.project(db, w.org, NOW + timedelta(minutes=5))
         await db.commit()
@@ -48,7 +48,7 @@ async def test_rv2_invalid_calendar_date_only_skips_that_fact(db: AsyncSession) 
     await db.commit()
     out = await promises.project(db, w.org, NOW)
     await db.commit()
-    assert any(s.gate == levels.G4 for s in out)                      # lời hứa tốt vẫn ra 🔴; ngày sai = không hạn, không làm chết lượt quét
+    assert any(s.candidate == levels.G4 and s.level == "amber" for s in out)   # lời hứa tốt (còn 2 giờ ⇒ 🟠 `due_soon`) vẫn ra; ngày sai = không hạn, không làm chết lượt quét
 
 
 async def test_rv2_order_prefers_nearest_due(db: AsyncSession) -> None:
@@ -56,7 +56,7 @@ async def test_rv2_order_prefers_nearest_due(db: AsyncSession) -> None:
     await _fact(db, w, "promised_to", w.staff, "việc xa", at=NOW - timedelta(hours=5), due=NOW + timedelta(days=20), to=w.cust)
     await _fact(db, w, "promised_to", w.staff, "việc gần", at=NOW - timedelta(hours=9), due=NOW + timedelta(hours=2), to=w.cust)
     out = await promises.project(db, w.org, NOW, limit=1)
-    assert [s.gate for s in out] == [levels.G4]
+    assert [(s.level, s.candidate) for s in out] == [("amber", levels.G4)]        # việc gần (còn 2 giờ ⇒ 🟠 `due_soon`) xử lý trước
 
 
 async def test_rv2_failhigh_group_without_member_list(db: AsyncSession) -> None:
@@ -95,12 +95,12 @@ async def test_rv2_flood_of_processed_no_due_promises_cannot_push_out_real_deadl
     assert len(first) == 30
     await _fact(db, w, "promised_to", w.staff, "giao hàng chiều nay", at=NOW - timedelta(hours=2), due=NOW + timedelta(hours=3), to=w.cust)
     out = await promises.project(db, w.org, NOW, limit=3)
-    assert [s.gate for s in out] == [levels.G4]                       # 30 fact không hạn đã có tín hiệu ⇒ không quét lại
+    assert len(out) == 1 and "milestone_running" in out[0].reasons     # lời hứa có hạn 3 giờ xử lý ngay lượt đầu; 30 fact không hạn đã có tín hiệu ⇒ không quét lại
     # chưa xử lý: trần riêng cho nhóm không hạn, hạn thật xếp trước
     w2 = await _world(db)
     for i in range(30):
         await _fact(db, w2, "promised_to", w2.staff, f"việc {i}", at=NOW - timedelta(hours=40 - i), due=None, to=w2.cust)
     await _fact(db, w2, "promised_to", w2.staff, "giao hàng chiều nay", at=NOW - timedelta(hours=2), due=NOW + timedelta(hours=3), to=w2.cust)
     out2 = await promises.project(db, w2.org, NOW, limit=5)
-    assert out2[0].gate == levels.G4 and out2[0].level == "red"
+    assert out2[0].level == "grey" and "milestone_running" in out2[0].reasons    # hạn thật xếp trước (r7: còn 3 giờ ⇒ đang chạy ⚪)
     assert len(out2) == 2                                             # 1 có hạn + trần riêng nhóm không hạn = max(1, limit // 5)

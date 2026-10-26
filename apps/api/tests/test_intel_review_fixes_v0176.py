@@ -48,7 +48,7 @@ async def test_intel_cap_reservation_atomic_on_existing_rows_merge(db: AsyncSess
 
     async def one(i: int) -> signals.Signal:
         async with sessionmaker()() as s:
-            li = _li("nghia_vu_loi_hua", due_in_h=3, promise={"to_customer": True})
+            li = _li("nghia_vu_loi_hua", due_in_h=3, promise={"to_customer": True, "obstacle_reported": True, "nudged_by_customer": True})      # r7 Q16 ⇒ 🔴
             out = await signals.upsert(s, org, _up("nghia_vu_loi_hua", li, raws[i], f"nghia_vu_loi_hua:promise|E{i}"), NOW)
             await asyncio.sleep(0.3)                       # giữ transaction một lúc
             await s.commit()
@@ -119,7 +119,7 @@ async def test_intel_reeval_one_bad_row_does_not_block_other_org(db: AsyncSessio
     assert sb.next_eval_at is not None
     changed = await signals.reevaluate_due(db, sb.next_eval_at)
     assert [c.id for c in changed] == [sb.id]
-    assert (changed[0].level, changed[0].delivery) == ("red", "push_now")
+    assert (changed[0].level, changed[0].delivery) == ("amber", "digest_top")      # r7 Q-A: tới `deadline − 2 giờ` ⇒ 🟠 đầu bản tin
 
 
 async def test_intel_settings_bad_quiet_hours_fall_back_to_default(db: AsyncSession, caplog: pytest.LogCaptureFixture) -> None:
@@ -183,8 +183,8 @@ async def test_intel_case_prior_shared_across_kinds_same_case_key(db: AsyncSessi
     await _install(db, org)
     ck = levels.case_key("xung_dot_khieu_nai", at=NOW, customer_entity_id="c1", reply_chain_id="ch")
     raw = await _raw(db, org)
-    a = await signals.upsert(db, org, _up("xung_dot_khieu_nai", _li("xung_dot_khieu_nai", customer_of_owner=True, flags={"said_will_leave": True}), raw, ck), NOW)
-    b = await signals.upsert(db, org, _up("quan_he_nong_nguoi", _li("quan_he_nong_nguoi", customer_of_owner=True, flags={"said_will_leave": True}), raw, ck), NOW)
+    a = await signals.upsert(db, org, _up("xung_dot_khieu_nai", _li("xung_dot_khieu_nai", customer_of_owner=True, complaint_stage="exit_pending", flags={"said_will_leave": True}), raw, ck), NOW)
+    b = await signals.upsert(db, org, _up("quan_he_nong_nguoi", _li("quan_he_nong_nguoi", customer_of_owner=True, complaint_stage="exit_pending", flags={"said_will_leave": True}), raw, ck), NOW)
     assert a.id != b.id
     assert (a.level, a.delivery) == ("red", "push_now")
     assert b.delivery == "merge"
@@ -219,15 +219,15 @@ async def test_intel_muted_signal_closes_on_verified_done_message(db: AsyncSessi
 async def test_intel_digest_item_escalated_after_sent_shows_again(db: AsyncSession) -> None:
     org = await mk_org(db)
     await _install(db, org)
-    li = _li("nghia_vu_loi_hua", due_in_h=11, impact_base=2, promise={"to_customer": True}, flags={"nudged": True})
+    li = _li("nghia_vu_loi_hua", due_in_h=11, impact_base=2, promise={"to_customer": True})        # r7: còn > 2 giờ, khách chưa nhắc ⇒ đang chạy (⚪)
     s = await signals.upsert(db, org, _up("nghia_vu_loi_hua", li, await _raw(db, org), "nghia_vu_loi_hua:promise|D4"), NOW)
     d1 = await digest.build(db, org, NOW + timedelta(hours=1))
     assert str(s.id) in [it.signal_id for it in d1.items]
     await digest.mark_sent(db, org, d1, NOW + timedelta(hours=1))
-    t = NOW + timedelta(hours=8, minutes=30)              # 22:30 VN — giờ yên lặng, còn 2,5 giờ tới hạn
+    t = NOW + timedelta(hours=9)                          # 23:00 VN, còn đúng 2 giờ tới hạn ⇒ Q-A `due_soon`
     await signals.reevaluate_due(db, t)
     r = (await db.execute(text("SELECT level, delivery FROM biz.alerts WHERE id = :i"), {"i": s.id})).one()
-    assert (r.level, r.delivery) == ("red", "digest_morning")
+    assert (r.level, r.delivery) == ("amber", "digest_top")
     d2 = await digest.build(db, org, t + timedelta(hours=9))
     assert str(s.id) in [it.signal_id for it in d2.items]
 

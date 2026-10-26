@@ -153,7 +153,7 @@ async def test_paired_owner_promise_in_group_is_owner_side(db: AsyncSession) -> 
                     v={"deadline_at": (NOW + timedelta(hours=2)).isoformat()}, at=NOW - timedelta(hours=1))
     out = await promises.project_units(db, w.org, NOW)
     await db.commit()
-    assert len(out) == 1 and out[0].gate == levels.G4
+    assert len(out) == 1 and out[0].candidate == levels.G4          # r7: còn 2 giờ ⇒ 🟠 `due_soon`, candidate G4
     why = (await db.execute(text("""SELECT detail ->> 'why' FROM ops.action_log WHERE org_id = :o AND action = 'intel.promises.unit_done'"""),
                             {"o": w.org})).scalars().all()
     assert "not_owner_side" not in why

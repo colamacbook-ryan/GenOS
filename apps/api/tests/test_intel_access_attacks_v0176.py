@@ -42,7 +42,7 @@ async def _signal(db: AsyncSession, org: uuid.UUID, *, privacy: str = "chat_ok",
                                     VALUES (:o, now(), :c, :x, 'text', 'nội dung nhóm kín', '{}', '\\x01', :g) RETURNING id"""),
                             {"o": org, "c": ch, "x": uuid.uuid4().hex, "g": g})).scalar_one()
     now = clock.now()
-    li = levels.SignalIn(kind="xung_dot_khieu_nai", privacy=privacy, msg_at=now - timedelta(hours=1), customer_of_owner=True,  # type: ignore[arg-type]
+    li = levels.SignalIn(kind="xung_dot_khieu_nai", privacy=privacy, msg_at=now - timedelta(hours=1), customer_of_owner=True, impact_base=2,  # type: ignore[arg-type]
                          harm_what="mất khách", flags=levels.Flags(public=True), confidence_content=0.8, source_class="insider")
     sig = await signals.upsert(db, org, signals.UpsertIn(
         kind="xung_dot_khieu_nai", title="Bí mật nhân sự X" if privacy == "console_pin" else "Khiếu nại công khai", detector="raw_tail", level_input=li, case_key=f"k:{uuid.uuid4()}",

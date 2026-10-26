@@ -46,6 +46,8 @@ def _li(kind: str, *, ago_h: float = 1.0, due_in_h: float | None = None, now: da
                             "harm_what": "mất khách hôm nay", "thread": {"type": "group", "size": 20, "owner_in_thread": True},
                             "victims": [{"ref": "v1", "team": True}], "source_class": "insider", "confidence_exist": 1.0,
                             "confidence_content": 0.765}
+    if kind not in (levels.FR, levels.SK):
+        data["impact_base"] = 2        # detector (§4.2.1 (f)): loại thường đáng chú ý ⇒ cơ sở impact 2; đường bảng r7 đọc trường này
     data.update(kw)
     return levels.SignalIn.model_validate(data)
 
@@ -169,7 +171,7 @@ async def test_intel_case_key_two_kinds_same_event_are_two_signals(db: AsyncSess
 async def test_intel_close_da_xu_ly_goes_grey_none_and_closes_ask(db: AsyncSession) -> None:
     org = await mk_org(db)
     await _install(db, org)
-    li = _li("nghia_vu_loi_hua", due_in_h=3, promise={"to_customer": True})
+    li = _li("nghia_vu_loi_hua", due_in_h=3, promise={"to_customer": True, "obstacle_reported": True, "nudged_by_customer": True})     # r7 Q16: hôm nay + trở ngại + khách đã nhắc ⇒ 🔴
     up = _up("nghia_vu_loi_hua", li, await _raw(db, org, "chiều em giao"), "nghia_vu_loi_hua:promise|P1",
              suggested_action="Nhắc NV giao hàng", action_executable=True)
     s1 = await signals.upsert(db, org, up, NOW)
@@ -197,7 +199,7 @@ async def test_intel_demote_when_gate_no_longer_satisfied(db: AsyncSession) -> N
     """Cổng thôi thoả (khách hoãn hạn sang tuần sau) ⇒ tín hiệu bị hạ khỏi 🔴."""
     org = await mk_org(db)
     await _install(db, org)
-    li = _li("nghia_vu_loi_hua", due_in_h=2, promise={"to_customer": True})
+    li = _li("nghia_vu_loi_hua", due_in_h=2, promise={"to_customer": True, "obstacle_reported": True, "nudged_by_customer": True})
     s1 = await signals.upsert(db, org, _up("nghia_vu_loi_hua", li, await _raw(db, org), "nghia_vu_loi_hua:promise|P2"), NOW)
     assert s1.level == "red"
     moved = li.model_copy(update={"deadline_at": NOW + timedelta(days=6)})
@@ -223,16 +225,17 @@ async def test_intel_feedback_owner_correct_beats_system_reject(db: AsyncSession
 # ─── (c) tính lại theo đồng hồ ────────────────────────────────────────────────
 
 @pytest.mark.usefixtures("regular_push_on")
-async def test_intel_reeval_clock_promise_escalates_to_red_without_new_message(db: AsyncSession) -> None:
+async def test_intel_reeval_clock_promise_due_soon_goes_digest_top_without_new_message(db: AsyncSession) -> None:
     org = await mk_org(db)
     await _install(db, org)
     li = _li("nghia_vu_loi_hua", due_in_h=6, promise={"to_customer": True})
     s1 = await signals.upsert(db, org, _up("nghia_vu_loi_hua", li, await _raw(db, org), "nghia_vu_loi_hua:promise|P3"), NOW)
-    assert s1.level != "red" and s1.next_eval_at is not None and s1.next_eval_at <= NOW + timedelta(hours=2, seconds=1)
+    assert s1.level == "grey" and s1.next_eval_at == NOW + timedelta(hours=4)           # r7: mốc cảnh báo `deadline_eff − 2 giờ` (Q-A)
     assert await signals.reevaluate_due(db, NOW + timedelta(hours=1)) == []                # chưa tới mốc
     changed = await signals.reevaluate_due(db, s1.next_eval_at)
     assert [c.id for c in changed] == [s1.id]
-    assert (changed[0].level, changed[0].gate, changed[0].delivery) == ("red", levels.G4, "push_now")   # Q16: còn ≤ 4 giờ ⇒ 🔴
+    assert (changed[0].level, changed[0].gate, changed[0].delivery) == ("amber", None, "digest_top")   # Q-A: còn ≤ 2 giờ ⇒ 🟠 đầu bản tin
+    assert "milestone_due_soon" in changed[0].reasons
 
 
 async def test_intel_reeval_clock_q15_complaint_over_24h_goes_digest_top(db: AsyncSession) -> None:
@@ -255,7 +258,7 @@ async def test_intel_reeval_ignores_closed_and_other_org(db: AsyncSession) -> No
     sa = await signals.upsert(db, a, _up("nghia_vu_loi_hua", li, await _raw(db, a), "P"), NOW)
     sb = await signals.upsert(db, b, _up("nghia_vu_loi_hua", li, await _raw(db, b), "P"), NOW)
     await signals.transition(db, b, sb.id, "dismissed", now=NOW)
-    changed = await signals.reevaluate_due(db, NOW + timedelta(hours=3), org_id=a)
+    changed = await signals.reevaluate_due(db, NOW + timedelta(hours=4), org_id=a)
     assert [c.id for c in changed] == [sa.id]
     assert (await signals.get(db, b, sb.id)).status == "dismissed"  # type: ignore[union-attr]
     assert await signals.get(db, a, sb.id) is None                  # IDOR: không đọc chéo tổ chức
