@@ -30,6 +30,7 @@ from gh.biz.mem import entities
 log = logging.getLogger("gh.intel.questions")
 
 KIND = "cau_hoi_cho_xu_ly"
+CANDIDATE_CAP = 2000                     # trần số dòng ứng viên đọc mỗi lượt làm mới (không khoá)
 WAIT_ESCALATE_H = 2.0                    # cùng ngưỡng `levels.axes` (owner_unanswered_h > 2)
 OUTSIDE_NOTE = "có thể đã xử lý ngoài nhóm"
 AskerKind = Literal["customer", "internal", "kin", "other"]
@@ -66,39 +67,46 @@ async def work_hours_of(db: AsyncSession, org_id: uuid.UUID) -> levels.WorkHours
     return levels.WorkHours(start=signals._hhmm(s, "work_start", d.start, org_id), end=signals._hhmm(s, "work_end", d.end, org_id))
 
 
+def _day_windows(day: datetime, work: levels.WorkHours) -> list[tuple[datetime, datetime]]:
+    """Khung giờ làm của MỘT ngày lịch VN bắt đầu `day` (00:00). `end > start` ⇒ [start, end). `end <= start` ⇒ khung vắt nửa đêm
+    [start, 24h) ∪ [0, end) (vd 18:00–02:00; `end == start` ⇒ cả ngày)."""
+    ws, we = levels._minutes(work.start), levels._minutes(work.end)
+    if we > ws:
+        return [(day + timedelta(minutes=ws), day + timedelta(minutes=we))]
+    return [(day, day + timedelta(minutes=we)), (day + timedelta(minutes=ws), day + timedelta(days=1))] if we > 0 else [(day + timedelta(minutes=ws), day + timedelta(days=1))]
+
+
 def waiting_hours(asked_at: datetime, now: datetime, work: levels.WorkHours | None = None) -> float:
-    """Giờ CHỜ tính trong giờ làm (spec r7 (c′) `owner_unanswered_h`): phần giao của [asked_at, now] với khung `work_hours` mỗi ngày VN.
-    Câu hỏi 17:00 chiều thứ sáu, 8:30 sáng thứ hai ⇒ 0,5 + 0,5 giờ chờ, không phải 63 giờ. Khung rỗng/đảo ngược ⇒ 0."""
+    """Giờ CHỜ tính trong giờ làm (spec r7 (c′) `owner_unanswered_h`): phần giao của [asked_at, now] với khung `work_hours` MỖI ngày lịch VN
+    (không có lịch nghỉ cuối tuần). Câu hỏi 17:00 thứ sáu, 08:30 thứ hai (khung 08:00–17:30) ⇒ 0,5 + 9,5 + 9,5 + 0,5 giờ, không phải 63 giờ."""
     w = work or levels.WorkHours()
     a, b = levels._aware(asked_at).astimezone(levels.VN), levels._aware(now).astimezone(levels.VN)
-    ws, we = levels._minutes(w.start), levels._minutes(w.end)
-    if b <= a or we <= ws:
+    if b <= a:
         return 0.0
     total = 0.0
     day = a.replace(hour=0, minute=0, second=0, microsecond=0)
     while day <= b:
-        lo, hi = max(a, day + timedelta(minutes=ws)), min(b, day + timedelta(minutes=we))
-        if hi > lo:
-            total += (hi - lo).total_seconds() / 3600
+        for lo0, hi0 in _day_windows(day, w):
+            lo, hi = max(a, lo0), min(b, hi0)
+            if hi > lo:
+                total += (hi - lo).total_seconds() / 3600
         day += timedelta(days=1)
     return total
 
 
 def wake_at(asked_at: datetime, work: levels.WorkHours | None = None) -> datetime:
-    """Mốc đồng hồ đầu tiên mà câu hỏi chặn việc có thể đổi mức: lúc đã chờ đủ `WAIT_ESCALATE_H` giờ TRONG giờ làm."""
+    """Mốc đồng hồ đầu tiên mà câu hỏi chặn việc có thể đổi mức: lúc đã chờ đủ `WAIT_ESCALATE_H` giờ TRONG giờ làm (khớp `waiting_hours`)."""
     w = work or levels.WorkHours()
     a = levels._aware(asked_at).astimezone(levels.VN)
-    ws, we = levels._minutes(w.start), levels._minutes(w.end)
     need = timedelta(hours=WAIT_ESCALATE_H)
-    if we <= ws:
-        return a + need
     day = a.replace(hour=0, minute=0, second=0, microsecond=0)
-    for _ in range(400):                                                  # tối đa ~13 tháng; khung ngắn hơn 2 giờ vẫn ra mốc ở ngày sau
-        lo, hi = max(a, day + timedelta(minutes=ws)), day + timedelta(minutes=we)
-        if hi > lo:
-            if hi - lo >= need:
-                return lo + need
-            need -= hi - lo
+    for _ in range(400):                                                  # ~13 tháng; khung ngắn hơn 2 giờ vẫn ra mốc ở ngày sau
+        for lo0, hi0 in _day_windows(day, w):
+            lo = max(a, lo0)
+            if hi0 > lo:
+                if hi0 - lo >= need:
+                    return lo + need
+                need -= hi0 - lo
         day += timedelta(days=1)
     return a + timedelta(hours=WAIT_ESCALATE_H)
 
@@ -106,7 +114,8 @@ def wake_at(asked_at: datetime, work: levels.WorkHours | None = None) -> datetim
 def in_work_hours(now: datetime, work: levels.WorkHours | None = None) -> bool:
     w = work or levels.WorkHours()
     t = levels._aware(now).astimezone(levels.VN)
-    return levels._minutes(w.start) <= t.hour * 60 + t.minute < levels._minutes(w.end)
+    m, ws, we = t.hour * 60 + t.minute, levels._minutes(w.start), levels._minutes(w.end)
+    return ws <= m < we if we > ws else (m >= ws or m < we)
 
 
 def build_input(q: QuestionIn, now: datetime, *, subject_entity_id: uuid.UUID | None = None,
@@ -172,16 +181,22 @@ async def refresh_waiting(db: AsyncSession, org_id: uuid.UUID, now: datetime, *,
           AND (COALESCE((level_input ->> 'owner_unanswered_h')::numeric, 0) <= :th
                OR COALESCE((level_input ->> 'in_work_hours')::boolean, true) <> :iw)     -- vào/ra giờ làm việc ⇒ đánh giá lại
           AND (level_input ->> 'msg_at')::timestamptz + make_interval(secs => :ths) <= :now
-        ORDER BY created_at LIMIT :n FOR UPDATE"""),
-                            {"o": org_id, "k": KIND, "th": WAIT_ESCALATE_H, "ths": WAIT_ESCALATE_H * 3600, "now": now, "n": limit,
+        ORDER BY created_at LIMIT :n"""),                                           # KHÔNG khoá ở đây: chỉ khoá dòng thực sự cần ghi (dưới)
+                            {"o": org_id, "k": KIND, "th": WAIT_ESCALATE_H, "ths": WAIT_ESCALATE_H * 3600, "now": now, "n": CANDIDATE_CAP,
                                     "iw": in_work_hours(now, work)})).all()
-    out: list[signals.Signal] = []
+    need: list[tuple[Any, float, bool]] = []
     for r in rows:
         li = dict(r.level_input)
-        asked = datetime.fromisoformat(str(li["msg_at"]))
-        h, iw = round(waiting_hours(asked, now, work), 3), in_work_hours(now, work)
+        h, iw = round(waiting_hours(datetime.fromisoformat(str(li["msg_at"])), now, work), 3), in_work_hours(now, work)
         if h <= WAIT_ESCALATE_H and li.get("owner_unanswered_h", 0) <= WAIT_ESCALATE_H and li.get("in_work_hours", True) == iw:
-            continue                                        # chưa đủ giờ chờ TRONG giờ làm ⇒ mức không thể đổi (không ghi lại mỗi phút)
+            continue                                        # chưa đủ giờ chờ TRONG giờ làm ⇒ mức không thể đổi: bỏ, không khoá, không tính vào `limit`
+        need.append((r, h, iw))
+    out: list[signals.Signal] = []
+    for r, h, iw in need[:limit]:
+        cur = (await db.execute(text("SELECT level_input FROM biz.alerts WHERE id = :i AND status IN ('open', 'acknowledged') FOR UPDATE"), {"i": r.id})).scalar_one_or_none()
+        if cur is None:
+            continue
+        li = dict(cur)
         li["owner_unanswered_h"] = h
         li["in_work_hours"] = iw
         await db.execute(text("UPDATE biz.alerts SET level_input = CAST(:li AS jsonb) WHERE id = :i"),

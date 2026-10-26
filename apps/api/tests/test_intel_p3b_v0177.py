@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gh.biz.intel import levels, signals
 from gh.biz.intel.detectors import catalog_match, promises, questions
 from gh.biz.intel.detectors import units as U
-from gh.biz.mem import facts
+from gh.biz.mem import facts, vi_time
 from tests.mem_helpers import mk_org, mkfact
 from tests.test_intel_catalog_v0176 import _alerts as _cat_alerts
 from tests.test_intel_catalog_v0176 import _demand, _setup
@@ -42,6 +42,8 @@ def test_p3b_granularity_prefers_stored_then_recomputes_only_when_due_matches() 
     assert promises.deadline_granularity({}, "chiều mai giao", anchor, due_day) is None            # hạn tính lại (18:00) khác hạn thật ⇒ không đoán
     assert promises.deadline_granularity({}, "mai em giao", anchor, None) is None                  # không hạn ⇒ không độ mịn
     assert promises.deadline_granularity({}, "em giao hàng", anchor, due_day) is None
+    week = vi_time.parse("tuần sau em giao", anchor)
+    assert week.at is not None and promises.deadline_granularity({}, "tuần sau em giao", anchor, week.at) is None      # mơ hồ (tuần/ngày) ⇒ None
 
 
 def test_p3b_level_input_carries_granularity_and_promise_fields() -> None:
@@ -58,12 +60,14 @@ def test_p3b_level_input_carries_granularity_and_promise_fields() -> None:
     assert plain.promise.nudged_by_customer is False and plain.promise.fixed_occasion is False and plain.deadline_granularity is None
 
 
-def test_p3b_fixed_occasion_needs_model_flag_and_keyword_in_verified_quote() -> None:
-    assert promises.fixed_occasion_of({"fixed_occasion": True}, ["thứ bảy khai trương, em giao đủ bàn ghế"]) is True
-    assert promises.fixed_occasion_of({"fixed_occasion": True}, ["đám cưới con em tuần sau"]) is True
-    assert promises.fixed_occasion_of({"fixed_occasion": True}, ["cuối tuần em giao"]) is False       # "cuối" ≠ "cưới"
-    assert promises.fixed_occasion_of({"fixed_occasion": False}, ["khai trương thứ bảy"]) is False    # từ khoá một mình không đủ (model khai)
-    assert promises.fixed_occasion_of({}, ["khai trương thứ bảy"]) is False
+def test_p3b_occasion_keywords_share_verify_source() -> None:
+    from gh.refinery.verify import OCCASION_RE
+
+    assert promises._occasion_re() is OCCASION_RE                                 # MỘT nguồn từ khoá dịp
+    assert promises.occasion_in("thứ bảy khai trương, em giao đủ bàn ghế") and promises.occasion_in("đám cưới con em tuần sau")
+    assert promises.occasion_in("tiệc đầy tháng cháu") is True
+    for no in ("cuối tuần em giao", "tiệc cuối năm", "tết", "hỏi giá giúp em", "lễ tân", None, ""):
+        assert promises.occasion_in(no) is (no == "lễ tân"), no                   # "lễ" giữ ranh giới từ như verify ("lễ tân" vẫn khớp từ "lễ")
 
 
 def test_p3b_promise_source_class_ptt2() -> None:
@@ -156,6 +160,20 @@ async def test_p3b_unit_v1_compat_needs_flag_and_verified_quote_of_promisee_afte
     assert (await _li_of_unit(db, w)).promise.nudged_by_customer is False
 
 
+async def test_p3b_nudge_before_the_promise_is_not_a_nudge(db: AsyncSession) -> None:
+    # /2: tin "nhắc" gửi TRƯỚC lời hứa của NV (−3h < −2h) ⇒ false
+    w = await _promise_world(db)
+    nraw = await mk_raw(db, w.org, w.channel, identity=w.ciid, body="bao giờ có hàng em ơi", group=w.group, at=NOW - timedelta(hours=3))
+    await _promise_unit(db, w, flags={"nudged": True}, v={"contract_version": "brain-out/2", "nudge_message_id": f"m_{nraw}", "nudge_by_role": "customer"})
+    assert (await _li_of_unit(db, w)).promise.nudged_by_customer is False
+    # /1: trích dẫn của khách trước lời hứa ⇒ false
+    w = await _promise_world(db)
+    uid, _ = await _promise_unit(db, w, flags={"nudged": True}, v={"contract_version": "brain-out/1"})
+    early = await mk_raw(db, w.org, w.channel, identity=w.ciid, body="bao giờ có hàng em ơi", group=w.group, at=NOW - timedelta(hours=3))
+    await _add_evidence(db, uid, NOW - timedelta(hours=2), early, "bao giờ có hàng")
+    assert (await _li_of_unit(db, w)).promise.nudged_by_customer is False
+
+
 async def test_p3b_unit_v2_flag_nudged_without_message_id_does_not_use_compat_path(db: AsyncSession) -> None:
     w = await _promise_world(db)
     await _promise_unit(db, w, flags={"nudged": True}, nudge="giờ này hàng chưa tới em ơi", v={"contract_version": "brain-out/2"})
@@ -179,6 +197,19 @@ async def test_p3b_unit_fixed_occasion_true_when_verified_quote_has_keyword(db: 
     await db.commit()
     li = await _li_of_unit(db, w)
     assert li.promise.fixed_occasion is True
+
+
+async def test_p3b_fixed_occasion_checked_on_occasion_message_only(db: AsyncSession) -> None:
+    w = await _promise_world(db)
+    occ = await mk_raw(db, w.org, w.channel, identity=w.ciid, body="thứ bảy nhà em khai trương", group=w.group, at=NOW - timedelta(hours=3))
+    await _promise_unit(db, w, v={"contract_version": "brain-out/2", "fixed_occasion": True, "occasion_message_id": f"m_{occ}"})
+    assert (await _li_of_unit(db, w)).promise.fixed_occasion is True                       # từ khoá nằm trong thân tin `occasion_message_id`
+    w = await _promise_world(db)
+    plain = await mk_raw(db, w.org, w.channel, identity=w.ciid, body="mai em cần hàng", group=w.group, at=NOW - timedelta(hours=3))
+    uid, _ = await _promise_unit(db, w, v={"contract_version": "brain-out/2", "fixed_occasion": True, "occasion_message_id": f"m_{plain}"})
+    await db.execute(text("UPDATE clean.evidence SET quote = 'khai trương' WHERE meaning_unit_id = :u"), {"u": uid})   # từ khoá ở trích dẫn KHÁC không đủ
+    await db.commit()
+    assert (await _li_of_unit(db, w)).promise.fixed_occasion is False
 
 
 async def test_p3b_unit_granularity_derived_from_text_when_not_stored(db: AsyncSession) -> None:
@@ -293,10 +324,78 @@ async def test_p3b_staff_commitment_skipped_when_untrusted_or_has_other_promise_
     assert n == 1
 
 
-async def test_p3b_staff_commitment_skipped_when_customer_spoke_after_staff(db: AsyncSession) -> None:
+async def test_p3b_staff_commitment_customer_spoke_after_staff_is_nudged_not_blocked(db: AsyncSession) -> None:
+    """Khách nhắn SAU tin NV không chặn việc sinh lời hứa (đó là luật `staff_owned`): nó thành `nudged_by_customer` (Q16: NV hẹn 15h, 15h30 khách nhắc)."""
     w, _ = await _staff_commit_world(db)
     await mk_raw(db, w.org, w.channel, identity=w.ciid, body="vẫn chưa thấy gì hết", group=w.group, at=NOW - timedelta(minutes=10))
+    out = await promises.project_staff_commitments(db, w.org, NOW)
+    await db.commit()
+    assert len(out) == 1
+    li = levels.SignalIn.model_validate((await _rows(db, w.org, "nghia_vu_loi_hua"))[0].level_input)
+    assert li.promise.nudged_by_customer is True and li.promise.to_customer is True
+
+
+async def test_p3b_staff_commitment_refresh_sets_nudged_when_customer_messages_later(db: AsyncSession) -> None:
+    w, _ = await _staff_commit_world(db)
+    out = await promises.project_staff_commitments(db, w.org, NOW)
+    await db.commit()
+    assert levels.SignalIn.model_validate((await _rows(db, w.org, "nghia_vu_loi_hua"))[0].level_input).promise.nudged_by_customer is False
+    await promises.refresh_staff_commitments(db, w.org, NOW)                     # chưa có tin khách sau ⇒ không đổi
+    assert levels.SignalIn.model_validate((await _rows(db, w.org, "nghia_vu_loi_hua"))[0].level_input).promise.nudged_by_customer is False
+    await mk_raw(db, w.org, w.channel, identity=w.ciid, body="15h30 rồi mà chưa thấy", group=w.group, at=NOW + timedelta(minutes=90))
+    await promises.refresh_staff_commitments(db, w.org, NOW + timedelta(minutes=95))
+    await db.commit()
+    li = levels.SignalIn.model_validate((await _rows(db, w.org, "nghia_vu_loi_hua"))[0].level_input)
+    assert li.promise.nudged_by_customer is True and li.flags.nudged is True and len(out) == 1
+    assert await promises.refresh_staff_commitments(db, w.org, NOW + timedelta(minutes=96)) == []          # đã bật ⇒ không chọn lại
+
+
+async def test_p3b_staff_commitment_deadline_must_come_from_staff_message(db: AsyncSession) -> None:
+    """Khách nêu "15h", NV chỉ nói "em đang kiểm tra kho" ⇒ NV chưa hẹn gì ⇒ không sinh lời hứa, và đánh dấu vĩnh viễn."""
+    w = await _world(db)
+    cpid, ciid, _ = await _person(db, w, "Anh Bình", ptype="customer")
+    spid, siid, sent = await _person(db, w, "NV Hoa")
+    await db.execute(text("""UPDATE core.persons SET person_type = 'staff', attrs = attrs || jsonb_build_object('person_type_locked', true, 'staff_marked_at', CAST(:t AS text))
+                             WHERE id = :p"""), {"t": (NOW - timedelta(days=2)).isoformat(), "p": spid})
+    await db.commit()
+    r1 = await mk_raw(db, w.org, w.channel, identity=ciid, body="trước 15h anh cần hàng, không thì huỷ đơn", group=w.group, at=NOW - timedelta(minutes=50))
+    r2 = await mk_raw(db, w.org, w.channel, identity=siid, body="dạ em đang kiểm tra kho anh nhé", group=w.group, at=NOW - timedelta(minutes=30))
+    uid = await _unit(db, w, r1, "xung_dot_khieu_nai", person=cpid, flags={"said_will_leave": True}, people=[("nguoi_gui", None)],
+                      v={"status_hint": "dang_xu_ly", "status_by_person_id": str(spid), "status_at": (NOW - timedelta(minutes=30)).isoformat(),
+                         "deadline_at": datetime(2026, 10, 23, 15, 0, tzinfo=VN).isoformat()}, at=NOW - timedelta(minutes=50))
+    await _add_evidence(db, uid, NOW - timedelta(minutes=50), r2, "em đang kiểm tra kho")
     assert await promises.project_staff_commitments(db, w.org, NOW) == []
+    why = (await db.execute(text("SELECT detail ->> 'why' FROM ops.action_log WHERE org_id = :o AND action = :a"), {"o": w.org, "a": promises.STAFF_COMMIT_ACTION})).scalar_one()
+    assert why == "deadline_not_from_staff"
+    assert await _rows(db, w.org, "nghia_vu_loi_hua") == []
+
+
+async def test_p3b_staff_commitment_one_card_per_staff_message_and_other_paths_defer(db: AsyncSession) -> None:
+    w, uid = await _staff_commit_world(db)
+    await promises.project_staff_commitments(db, w.org, NOW)
+    await db.commit()
+    assert len(await _rows(db, w.org, "nghia_vu_loi_hua")) == 1
+    staff_raw = (await db.execute(text("SELECT raw_event_id FROM clean.evidence WHERE meaning_unit_id = :u AND quote = 'qua 15h em xử lý xong'"), {"u": uid})).scalar_one()
+    # đơn vị lời hứa thứ hai trên chính tin NV ⇒ đường đơn vị nhường (đánh dấu), không đẻ thẻ thứ hai
+    await _unit(db, w, staff_raw, "nghia_vu_loi_hua", person=w.spid, people=[("nguoi_hua", w.sent), ("nguoi_duoc_hua", w.cent)],
+                v={"deadline_at": datetime(2026, 10, 23, 15, 0, tzinfo=VN).isoformat()}, at=NOW - timedelta(minutes=30))
+    await _staff_of(db, w, w.sent)
+    assert await promises.project_units(db, w.org, NOW) == []
+    # đường fact trên cùng tin NV cũng nhường
+    await facts.assert_fact(db, mkfact(w.org, w.sent, {"text": "xử lý xong", "to_entity_id": str(w.cent), "due_at": datetime(2026, 10, 23, 15, 0, tzinfo=VN).isoformat()},
+                                       NOW - timedelta(minutes=30), predicate="promised_to", raw=staff_raw))
+    await db.commit()
+    assert await promises.project(db, w.org, NOW) == []
+    assert len(await _rows(db, w.org, "nghia_vu_loi_hua")) == 1
+
+
+async def test_p3b_staff_commitment_superseded_unit_makes_no_card(db: AsyncSession) -> None:
+    w, uid = await _staff_commit_world(db)
+    other = (await db.execute(text("SELECT id FROM clean.meaning_units WHERE id <> :u AND org_id = :o LIMIT 1"), {"u": uid, "o": w.org})).scalar_one_or_none()
+    await db.execute(text("UPDATE clean.meaning_units SET superseded_by = COALESCE(CAST(:o AS uuid), core.uuid_v7()) WHERE id = :u"), {"o": other, "u": uid})
+    await db.commit()
+    assert await promises.project_staff_commitments(db, w.org, NOW) == []
+    assert await _rows(db, w.org, "nghia_vu_loi_hua") == []
 
 
 async def test_p3b_staff_commitment_does_not_block_complaint_path(db: AsyncSession) -> None:
@@ -319,7 +418,7 @@ def test_p3b_waiting_hours_counts_only_work_hours() -> None:
     assert questions.waiting_hours(datetime(2026, 10, 23, 18, 0, tzinfo=VN), datetime(2026, 10, 24, 7, 0, tzinfo=VN), wh) == 0.0   # cả đêm ngoài giờ làm
     assert questions.waiting_hours(datetime(2026, 10, 23, 9, 0, tzinfo=VN), datetime(2026, 10, 23, 12, 30, tzinfo=VN), wh) == pytest.approx(3.5)
     assert questions.waiting_hours(mon_0830, fri_17, wh) == 0.0                                  # đồng hồ lệch ⇒ không âm
-    assert questions.waiting_hours(fri_17, mon_0830, levels.WorkHours(start="09:00", end="09:00")) == 0.0
+    assert questions.waiting_hours(fri_17, mon_0830, levels.WorkHours(start="09:00", end="09:00")) == pytest.approx(63.5)   # end == start ⇒ cả ngày
     assert questions.waiting_hours(datetime(2026, 10, 23, 9, 0, tzinfo=VN), datetime(2026, 10, 23, 12, 30, tzinfo=VN),
                                    levels.WorkHours(start="10:00", end="11:00")) == pytest.approx(1.0)       # giờ làm tuỳ chỉnh
 
@@ -334,6 +433,19 @@ def test_p3b_in_work_hours_and_wake_at_follow_work_window() -> None:
     assert questions.wake_at(datetime(2026, 10, 23, 16, 30, tzinfo=VN), wh) == datetime(2026, 10, 24, 9, 0, tzinfo=VN)
     assert questions.wake_at(datetime(2026, 10, 23, 9, 0, tzinfo=VN), wh) == datetime(2026, 10, 23, 11, 0, tzinfo=VN)
     assert questions.wake_at(datetime(2026, 10, 23, 20, 0, tzinfo=VN), wh) == datetime(2026, 10, 24, 10, 0, tzinfo=VN)   # hỏi ngoài giờ ⇒ tính từ 08:00 sáng sau
+
+
+def test_p3b_overnight_work_window() -> None:
+    wh = levels.WorkHours(start="18:00", end="02:00")                       # vắt nửa đêm: [18:00, 24h) ∪ [0, 02:00)
+    assert questions.in_work_hours(datetime(2026, 10, 23, 18, 0, tzinfo=VN), wh) and questions.in_work_hours(datetime(2026, 10, 24, 1, 59, tzinfo=VN), wh)
+    assert not questions.in_work_hours(datetime(2026, 10, 24, 2, 0, tzinfo=VN), wh) and not questions.in_work_hours(datetime(2026, 10, 23, 12, 0, tzinfo=VN), wh)
+    assert questions.waiting_hours(datetime(2026, 10, 23, 17, 0, tzinfo=VN), datetime(2026, 10, 24, 3, 0, tzinfo=VN), wh) == pytest.approx(8.0)   # 6 + 2
+    assert questions.waiting_hours(datetime(2026, 10, 23, 19, 0, tzinfo=VN), datetime(2026, 10, 23, 21, 30, tzinfo=VN), wh) == pytest.approx(2.5)
+    assert questions.wake_at(datetime(2026, 10, 23, 17, 0, tzinfo=VN), wh) == datetime(2026, 10, 23, 20, 0, tzinfo=VN)
+    assert questions.wake_at(datetime(2026, 10, 23, 23, 30, tzinfo=VN), wh) == datetime(2026, 10, 24, 1, 30, tzinfo=VN)   # 0,5 giờ trước nửa đêm + 1,5 giờ sau
+    for asked in (datetime(2026, 10, 23, 9, 0, tzinfo=VN), datetime(2026, 10, 23, 23, 30, tzinfo=VN), datetime(2026, 10, 24, 1, 0, tzinfo=VN)):
+        w = questions.wake_at(asked, wh)                                    # wake_at khớp waiting_hours: đúng mốc ⇒ đủ 2 giờ
+        assert questions.waiting_hours(asked, w, wh) == pytest.approx(2.0)
 
 
 def test_p3b_build_input_uses_work_hours() -> None:
@@ -398,6 +510,23 @@ async def test_p3b_questions_refresh_does_not_rewrite_when_work_wait_not_enough(
     _ = signals
 
 
+async def test_p3b_refresh_waiting_rows_not_needing_write_do_not_starve_others(db: AsyncSession) -> None:
+    w = await _world(db)
+    cpid, ciid, _ = await _person(db, w, "Anh Bình", ptype="customer")
+    sigs = []
+    for hour in (17, 9):                                                  # A (17:00, chờ trong giờ làm ít) tạo trước B (09:00, chờ nhiều)
+        asked = datetime(2026, 10, 23, hour, 0, tzinfo=VN)
+        raw = await mk_raw(db, w.org, w.channel, identity=ciid, body=f"anh cần báo giá {hour}", group=w.group, at=asked)
+        q = questions.QuestionIn(asked_at=asked, raw_event_id=raw, asker="internal", blocks_work=True, thread_key=f"g:{w.group}", group_id=w.group)
+        sigs.append(await questions.emit(db, w.org, q, datetime(2026, 10, 23, 18, 0, tzinfo=VN)))
+        await db.commit()
+    await db.execute(text("UPDATE biz.alerts SET created_at = created_at - interval '1 hour' WHERE id = :i"), {"i": sigs[0].id})
+    await db.commit()
+    await questions.refresh_waiting(db, w.org, datetime(2026, 10, 24, 3, 0, tzinfo=VN), limit=1)     # A không cần ghi ⇒ không chiếm chỗ của B
+    h = {r.id: r.level_input["owner_unanswered_h"] for r in await _rows(db, w.org, "cau_hoi_cho_xu_ly")}
+    assert h[sigs[1].id] > 2 and h[sigs[0].id] < 2
+
+
 # ─── catalog_match: need_fields_n, explicit_urgent ───────────────────────────
 
 def test_p3b_need_fields_of_none_when_no_source() -> None:
@@ -410,16 +539,22 @@ def test_p3b_need_fields_of_none_when_no_source() -> None:
         assert catalog_match.need_fields_of({"v": {"need_fields_n": bad}}) is None
 
 
-def test_p3b_urgent_only_from_verified_quotes() -> None:
-    def e(q: str, status: str) -> Any:
-        return SimpleNamespace(quote=q, quote_status=status)
+def test_p3b_urgent_only_from_verified_customer_quotes_without_negation() -> None:
+    cust, staff = uuid.uuid4(), uuid.uuid4()
 
-    assert catalog_match.urgent_in_verified([e("Cần gấp 50 tấn thép", "verified")]) is True
-    assert catalog_match.urgent_in_verified([e("Cần gấp 50 tấn thép", "unverifiable")]) is False
-    assert catalog_match.urgent_in_verified([e("cần 50 tấn thép, tuần sau", "verified")]) is False
-    assert catalog_match.urgent_in_verified([e("đã có bên khác xem rồi", "verified")]) is False       # "đã có bên khác xem" một mình không phải
-    assert catalog_match.urgent_in_verified([e("ai nhanh thì được", "unverifiable"), e("cần ngay hôm nay", "verified")]) is True   # trích dẫn kiểm được vẫn tính
-    assert catalog_match.urgent_in_verified([e("", "verified")]) is False and catalog_match.urgent_in_verified([]) is False
+    def e(q: str, status: str = "verified", by: uuid.UUID | None = cust) -> Any:
+        return SimpleNamespace(quote=q, quote_status=status, sender_pid=by)
+
+    assert catalog_match.urgent_in_verified([e("Cần gấp 50 tấn thép")], cust) is True
+    assert catalog_match.urgent_in_verified([e("Cần gấp 50 tấn thép", "unverifiable")], cust) is False
+    assert catalog_match.urgent_in_verified([e("cần 50 tấn thép, tuần sau")], cust) is False
+    assert catalog_match.urgent_in_verified([e("đã có bên khác xem rồi")], cust) is False
+    assert catalog_match.urgent_in_verified([e("ai nhanh thì được", "unverifiable"), e("cần ngay hôm nay")], cust) is True
+    assert catalog_match.urgent_in_verified([e("")], cust) is False and catalog_match.urgent_in_verified([], cust) is False
+    assert catalog_match.urgent_in_verified([e("bên anh có cần gấp không ạ", by=staff)], cust) is False          # câu NV hỏi không tính
+    for neg in ("không gấp đâu em", "chưa cần gấp, tuần sau cũng được", "không cần gấp", "không khẩn cấp"):
+        assert catalog_match.urgent_in_verified([e(neg)], cust) is False, neg
+    assert catalog_match.urgent_in_verified([e("không gấp lắm nhưng cần ngay chiều nay")], cust) is True          # phủ định chỉ che đúng cụm
 
 
 async def test_p3b_catalog_demand_fills_need_fields_n_and_explicit_urgent(db: AsyncSession) -> None:
@@ -460,6 +595,10 @@ def test_p3b_public_flag_uses_public_eff_only_for_g3_kinds_on_v2() -> None:
         assert U.public_flag(kind, {"contract_version": "brain-out/1"}, {"public": True}) is True      # /1 như r6.6.1
         assert U.public_flag(kind, {}, {"public": True}) is True                        # đơn vị cũ (không contract_version)
         assert U.public_flag(kind, {}, {}) is False
+    # r7.3: đề cử G1/G2 ⇒ Bước 0 ⇒ cờ thô dù kind là khiếu nại (public thiếu venue vẫn True)
+    for gate in levels.BYPASS_GATES:
+        assert U.public_flag("xung_dot_khieu_nai", {"contract_version": "brain-out/2", "public_eff": False}, {"public": True}, gate) is True
+    assert U.public_flag("xung_dot_khieu_nai", {"contract_version": "brain-out/2", "public_eff": False}, {"public": True}, levels.G3) is False
     # Bước 0 / loại khác: luôn đọc cờ thô (B2)
     for kind in ("rui_ro_lua_dao", "suc_khoe_an_toan", "nghia_vu_loi_hua"):
         assert U.public_flag(kind, {"contract_version": "brain-out/2", "public_eff": False}, {"public": True}) is True
@@ -501,14 +640,16 @@ def test_p3b_g3_fields_keys_match_runner_verified_fields() -> None:
     """P3a ghi `entities.v` bằng `runner.verified_fields`; `units.g3_fields` phải đọc ĐÚNG các khoá đó (không lệch tên)."""
     from gh.refinery.runner import verified_fields
 
-    vu = SimpleNamespace(msg_at=NOW, event_at=NOW, event_time_unparsed=False, deadline_at=None, deadline_unparsed=False, ongoing=False, money_vnd=None,
+    vu = SimpleNamespace(msg_at=NOW, event_at=NOW, event_time_unparsed=False, deadline_at=None, deadline_granularity="day", deadline_unparsed=False, ongoing=False, money_vnd=None,
                          status_by_person_id=None, status_at=None, txn_state=None, txn_at=None, delivery_form="direct", need_fields_n=None,
                          status_by_role=None, public_eff=True, stage_by_role="customer", asks_by_role="customer", nudge_by_role=None,
                          nudge_rejected=False, contract_version="brain-out/2")
     unit = SimpleNamespace(status_hint="dang_mo", condition=None, complaint_stage="ultimatum", stage_message_id="m_1", asks_for_owner=True,
-                           public_venue="social", flags=SimpleNamespace(public=True), need=None, fixed_occasion=False, nudge_message_id=None, owner_action=None)
+                           public_venue="social", flags=SimpleNamespace(public=True), need=None, fixed_occasion=False, occasion_message_id=None, nudge_message_id=None, owner_action=None)
     v = verified_fields(vu, unit, [])
     g3 = U.g3_fields(v)
     assert g3 == {"complaint_stage": "ultimatum", "asks_for_owner": True, "public_venue": "social"}
     assert {"complaint_stage", "asks_for_owner", "public_venue", "public_eff", "contract_version", "need_fields_n", "fixed_occasion",
-            "nudge_message_id", "nudge_rejected", "status_at", "status_by_person_id", "status_hint", "deadline_at"} <= set(v)
+            "nudge_message_id", "nudge_rejected", "status_at", "status_by_person_id", "status_hint", "deadline_at", "deadline_granularity",
+            "occasion_message_id"} <= set(v)
+    assert v["deadline_granularity"] == "day"

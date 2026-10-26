@@ -142,10 +142,16 @@ def need_fields_of(entities_json: Any) -> int | None:
     return n if isinstance(n, int) and not isinstance(n, bool) and 0 <= n <= 4 else None
 
 
-def urgent_in_verified(ev: Any) -> bool:
-    """`explicit_urgent` (spec r7 §4.2 cổng 5, A2): CHỈ khi trích dẫn `verified` có từ trong `vi_time.URGENT_LEXICON` (gấp, khẩn, cần ngay…).
-    Trích dẫn chưa kiểm không được tính, và cũng không làm mất từ khoá nằm ở trích dẫn đã kiểm. "Đã có bên khác xem" một mình không phải."""
-    return vi_time.has_urgent(" ".join(str(e.quote) for e in ev if e.quote_status == "verified" and e.quote))
+_NEGATED_URGENT = re.compile(r"(?<!\w)(?:không|chưa|chẳng|khỏi|đâu)\s+(?:cần\s+|phải\s+|có\s+|còn\s+)?(?:quá\s+|lắm\s+)?(?:gấp|khẩn(?:\s+cấp|\s+trương)?|ngay|asap)(?!\w)", re.I)
+
+
+def urgent_in_verified(ev: Any, customer_person_id: uuid.UUID | None = None) -> bool:
+    """`explicit_urgent` (spec r7 §4.2 cổng 5, A2): CHỈ khi trích dẫn `verified` CỦA KHÁCH (người gửi = `customer_person_id`; câu NV/Sếp hỏi lại
+    "có gấp không" không tính) có từ trong `vi_time.URGENT_LEXICON` (gấp, khẩn, cần ngay…) và từ đó không bị phủ định ("không gấp", "chưa cần gấp").
+    Trích dẫn chưa kiểm không được tính, nhưng không làm mất từ khoá ở trích dẫn đã kiểm. "Đã có bên khác xem" một mình không phải."""
+    parts = [str(e.quote) for e in ev if e.quote_status == "verified" and e.quote
+             and (customer_person_id is None or getattr(e, "sender_pid", None) == customer_person_id)]
+    return vi_time.has_urgent(_NEGATED_URGENT.sub(" ", " ".join(parts)))
 
 
 def _deadline(needed_by: Any) -> datetime | None:
@@ -190,12 +196,14 @@ async def process_demand(db: AsyncSession, org_id: uuid.UUID, demand_id: uuid.UU
     if (not scored and not res_items) or d.person_id is None or d.meaning_unit_id is None:
         return []
     best = max(scored, key=lambda x: x[0]) if scored else None
-    ev = (await db.execute(text("""SELECT raw_event_id, raw_received_at, quote, quote_status FROM clean.evidence WHERE meaning_unit_id = :u
-                                   ORDER BY raw_received_at"""), {"u": d.meaning_unit_id})).all()
+    ev = (await db.execute(text("""SELECT ce.raw_event_id, ce.raw_received_at, ce.quote, ce.quote_status, pi.person_id AS sender_pid
+                                   FROM clean.evidence ce LEFT JOIN raw.events re ON re.id = ce.raw_event_id AND re.received_at = ce.raw_received_at
+                                   LEFT JOIN core.person_identities pi ON pi.id = re.sender_identity_id
+                                   WHERE ce.meaning_unit_id = :u ORDER BY ce.raw_received_at"""), {"u": d.meaning_unit_id})).all()
     if not ev:
         return []
     verified = all(e.quote_status == "verified" for e in ev)
-    urgent = urgent_in_verified(ev)
+    urgent = urgent_in_verified(ev, d.person_id)
     value = demand["value_vnd"]
     below = below_min(lim, value)
     key = str(best[2].id) if best else "resource:" + ",".join(sorted(dwords))

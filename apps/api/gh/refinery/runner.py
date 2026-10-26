@@ -866,14 +866,14 @@ def verified_fields(vu: Any, u: Any, people: list[dict[str, Any]]) -> dict[str, 
           "asks_for_owner": bool(getattr(u, "asks_for_owner", False)), "public_venue": getattr(u, "public_venue", None),
           "public": bool(u.flags.public) if getattr(u, "flags", None) is not None else False,
           "need_fields_n": getattr(vu, "need_fields_n", None), "need": need.model_dump(mode="json") if need is not None else None,
-          "fixed_occasion": bool(getattr(u, "fixed_occasion", False)), "nudge_message_id": getattr(u, "nudge_message_id", None),
+          "fixed_occasion": bool(getattr(u, "fixed_occasion", False)), "occasion_message_id": getattr(u, "occasion_message_id", None), "nudge_message_id": getattr(u, "nudge_message_id", None),
           "owner_action": getattr(u, "owner_action", None), "status_by_role": getattr(vu, "status_by_role", None),
           # đường bảng: `public_eff` (public sau luật venue; `public` thô giữ nguyên cho Bước 0), vai người gửi bằng chứng, nhắc bị từ chối, phiên bản
           "public_eff": bool(getattr(vu, "public_eff", False)), "stage_by_role": getattr(vu, "stage_by_role", None),
           "asks_by_role": getattr(vu, "asks_by_role", None), "nudge_by_role": getattr(vu, "nudge_by_role", None),
           "nudge_rejected": bool(getattr(vu, "nudge_rejected", False)), "contract_version": getattr(vu, "contract_version", None)}
     return out | v2 | {"msg_at": _t(vu.msg_at), "event_at": _t(vu.event_at), "event_time_unparsed": bool(vu.event_time_unparsed),
-                  "deadline_at": _t(vu.deadline_at), "deadline_unparsed": bool(vu.deadline_unparsed), "ongoing": bool(vu.ongoing),
+                  "deadline_at": _t(vu.deadline_at), "deadline_granularity": getattr(vu, "deadline_granularity", None), "deadline_unparsed": bool(vu.deadline_unparsed), "ongoing": bool(vu.ongoing),
                   "money_vnd": vu.money_vnd, "status_by_person_id": str(vu.status_by_person_id) if vu.status_by_person_id else None,
                   "status_at": _t(vu.status_at), "txn_state": vu.txn_state, "txn_at": _t(vu.txn_at), "delivery_form": vu.delivery_form}
 SCAN_BATCH = 500

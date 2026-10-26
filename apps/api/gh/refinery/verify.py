@@ -124,6 +124,7 @@ class VerifiedUnit:
     deadline_lunar: bool = False
     deadline_ambiguous: bool = False
     deadline_unparsed: bool = False
+    deadline_granularity: str | None = None   # `vi_time.Due.granularity` của hạn (minute|hour|part_of_day|day|week); lưu ở `entities.v` cạnh `deadline_at`
     ongoing: bool = False
     explicit_urgent: bool = False
     money_vnd: int | None = None
@@ -611,6 +612,7 @@ def _verify_unit(res: Verified, vu: VerifiedUnit, ev_by_id: Mapping[str, Any], m
             res.bump("deadline_unparsed")
         else:
             vu.deadline_at, vu.deadline_lunar, vu.deadline_ambiguous = due.at, due.lunar, due.ambiguous
+            vu.deadline_granularity = due.granularity
             if due.recurrence is not None:
                 notes.append("deadline_recurring")
 

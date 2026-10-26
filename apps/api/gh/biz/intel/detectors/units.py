@@ -99,10 +99,13 @@ def g3_fields(v: dict[str, Any]) -> dict[str, Any]:
             "public_venue": venue if venue in VENUES else None}
 
 
-def public_flag(kind: str | None, v: dict[str, Any], fl: dict[str, Any]) -> bool:
+def public_flag(kind: str | None, v: dict[str, Any], fl: dict[str, Any], gate: str | None = None) -> bool:
     """`flags.public` khi dựng `SignalIn` / `ComplaintIn` cho đường bảng (spec r7 (c′), P3a: "đường bảng đọc `public_eff`"). `xung_dot_khieu_nai` /
     `quan_he_nong_nguoi` + `brain-out/2` ⇒ `entities.v.public_eff` (`flags.public` chỉ tính khi có `public_venue`); `/1` hoặc loại khác ⇒ cờ thô như
-    r6.6.1. Bước 0 (lừa đảo/an toàn) KHÔNG đi qua hàm này: vẫn đọc `flags.public` thô (B2)."""
+    r6.6.1. Bước 0 KHÔNG đi qua hàm này: kind lừa đảo/an toàn, và (r7.3) mọi đơn vị có `gate_candidate ∈ levels.BYPASS_GATES` (G1/G2 luôn đi Bước 0)
+    ⇒ vẫn đọc `flags.public` thô (B2)."""
+    if gate in levels.BYPASS_GATES:
+        return fl.get("public") is True
     if kind in ("xung_dot_khieu_nai", "quan_he_nong_nguoi") and v.get("contract_version") == "brain-out/2":
         return v.get("public_eff") is True
     return fl.get("public") is True
@@ -211,7 +214,7 @@ def signal_input(kind: str, u: Any, p: People, sets: g.OrgSets, *, customer_of_o
     fl = dict(u.flags or {})
     f = g.flags_of(fl)
     if kind in ("xung_dot_khieu_nai", "quan_he_nong_nguoi"):
-        f = f.model_copy(update={"public": public_flag(kind, v, fl)})
+        f = f.model_copy(update={"public": public_flag(kind, v, fl, u.gate_candidate)})
     observed = u.observed_at
     msg_at = _when(v.get("msg_at")) or observed
     event_at = _when(v.get("event_at")) or msg_at
@@ -397,7 +400,7 @@ async def _route_conflict(db: AsyncSession, org_id: uuid.UUID, u: Any, p: People
 
     fl = dict(u.flags or {})
     v = verified(u)
-    raw_public = public_flag(u.kind_hint, v, fl)
+    raw_public = public_flag(u.kind_hint, v, fl, u.gate_candidate)
     if u.kind_hint == "quan_he_nong_nguoi" and not (fl.get("said_will_leave") is True or raw_public):
         return None                                         # nguội đi / im lặng: không phải lời chê ⇒ chiếu thường
     s = p.sender
