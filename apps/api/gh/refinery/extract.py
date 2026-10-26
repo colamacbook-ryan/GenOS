@@ -216,7 +216,7 @@ class GroupEvent:
     body: str | None = None
     sender_person_id: uuid.UUID | None = None
     sender_name: str | None = None
-    sender_role: str | None = None    # P-T6: vai người gửi cạnh `from` ("customer" | "staff" | "owner" | …); `verify` kiểm người gửi theo vai
+    sender_role: str | None = None    # P-T6: vai cạnh `from` ("customer"|"cold_customer"|"staff"|"staff_side"|"owner"|None); `verify`: trường của khách cần vai khách, None ⇒ bỏ trường
     kind: str = "text"
     reply_to: str | None = None
     forwarded: bool = False
@@ -302,7 +302,7 @@ def router_caller(router: Any, org_id: uuid.UUID, *, agent_key: str = AGENT_KEY,
 
 
 #: nhãn vai người gửi hiện trong prompt (khoá `role` cạnh `from`)
-ROLE_LABELS = {"customer": "khach", "staff": "nhan_vien", "owner": "sep"}
+ROLE_LABELS = {"customer": "khach", "cold_customer": "khach", "staff": "nhan_vien", "staff_side": "nhan_vien", "owner": "sep"}
 
 
 @lru_cache(maxsize=1)

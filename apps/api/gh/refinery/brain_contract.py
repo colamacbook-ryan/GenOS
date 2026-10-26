@@ -238,7 +238,9 @@ class Unit(_Strict):
 
 
 def _normalize_v2_impl(u: Unit, quoted: set[str], notes: list[str]) -> None:
-    """Chuẩn hoá trường `brain-out/2` (§4F.2, cùng kiểu §4F.1): id lạ ⇒ null + ghi chú; thiếu id đi kèm ⇒ về mặc định; không raise."""
+    """Chuẩn hoá trường `brain-out/2` (§4F.2, cùng kiểu §4F.1): id lạ ⇒ null + ghi chú; thiếu id đi kèm ⇒ về mặc định; không raise.
+    KHÔNG đổi `flags.public` thô (Bước 0 đọc nó từ `meaning_units.flags`, B2): quy tắc "public không kèm venue" xử lý ở `BrainOut` (chỉ /2,
+    ghi chú) và `public_eff` do `verify` tính cho đường bảng."""
     for fld in ("stage_message_id", "asks_message_id", "occasion_message_id", "nudge_message_id"):
         mid = getattr(u, fld)
         if mid is not None and mid not in quoted:
@@ -253,9 +255,6 @@ def _normalize_v2_impl(u: Unit, quoted: set[str], notes: list[str]) -> None:
     if u.fixed_occasion and u.occasion_message_id is None:
         notes.append("fixed_occasion_no_message")
         u.fixed_occasion = False
-    if u.flags.public and u.public_venue is None:
-        notes.append("public_without_venue")
-        u.flags = u.flags.model_copy(update={"public": False})
     if u.need is not None:
         cells = {}
         for name in NEED_CELLS:
@@ -324,6 +323,22 @@ class BrainOut(_Strict):
     memory_updates: list[MemoryUpdate] = Field(default_factory=list)
     unreadable: Unreadable = Field(default_factory=Unreadable)
     owner_question: Annotated[str, StringConstraints(max_length=MAX_OWNER_QUESTION_CHARS)] | None = None
+
+    @model_validator(mode="after")
+    def _public_needs_venue(self) -> BrainOut:
+        """§4F.2 (chỉ `/2`): `flags.public` không kèm `public_venue` ⇒ ghi chú `public_without_venue`; `public_eff = false` (xem `public_effective`).
+        `flags.public` thô giữ nguyên."""
+        if self.contract_version == "brain-out/2":
+            for u in self.units:
+                if u.flags.public and u.public_venue is None and "public_without_venue" not in u.normalization_notes:
+                    u.normalization_notes = [*u.normalization_notes, "public_without_venue"]
+        return self
+
+
+def public_effective(contract_version: str, unit: Unit) -> bool:
+    """`public_eff` (§4F.2, chỉ dùng cho đường bảng): `/2` ⇒ `flags.public` chỉ tính khi có `public_venue`; `/1` ⇒ giữ nguyên `flags.public`
+    (đầu ra cũ không có venue, tương thích r6.6.1). `flags.public` thô không bị sửa."""
+    return unit.flags.public and (contract_version != "brain-out/2" or unit.public_venue is not None)
 
 
 def json_schema() -> dict[str, Any]:

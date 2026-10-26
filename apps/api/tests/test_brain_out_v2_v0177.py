@@ -86,11 +86,16 @@ def test_v2_enums_and_extra_forbid() -> None:
         bc.BrainOut.model_validate({"contract_version": "brain-out/3", "thread_ref": THREAD})
 
 
-def test_normalize_public_without_venue_becomes_false() -> None:
-    u = out(unit(flags={"public": True})).units[0]
-    assert u.flags.public is False and "public_without_venue" in u.normalization_notes
+def test_public_without_venue_only_noted_in_v2_and_raw_flag_untouched() -> None:
+    """Gen chốt: `flags.public` thô KHÔNG đổi (Bước 0 đọc nó, B2); /2 ghi chú + `public_effective` = false; /1 không đụng."""
+    o2 = out(unit(flags={"public": True}))
+    u = o2.units[0]
+    assert u.flags.public is True and "public_without_venue" in u.normalization_notes and bc.public_effective("brain-out/2", u) is False
     u2 = out(unit(flags={"public": True}, public_venue="social")).units[0]
-    assert u2.flags.public is True and u2.public_venue == "social" and "public_without_venue" not in u2.normalization_notes
+    assert u2.flags.public is True and "public_without_venue" not in u2.normalization_notes and bc.public_effective("brain-out/2", u2) is True
+    o1 = bc.BrainOut.model_validate({"contract_version": "brain-out/1", "thread_ref": THREAD, "units": [unit(flags={"public": True})]})
+    assert o1.units[0].flags.public is True and "public_without_venue" not in o1.units[0].normalization_notes
+    assert bc.public_effective("brain-out/1", o1.units[0]) is True
 
 
 def test_normalize_message_ids_and_missing_ids() -> None:
@@ -124,18 +129,29 @@ def test_verify_stage_asks_nudge_need_customer_sender() -> None:
     assert (got.complaint_stage, got.stage_message_id, got.asks_for_owner, got.asks_message_id, got.nudge_message_id) == (None, None, False, None, None)
     assert {"stage_message_sender_not_customer", "asks_message_sender_not_customer", "nudge_message_sender_not_customer"} <= set(u0(v).notes)
     assert v.counters["asks_message_sender_not_customer"] == 1
-    # đúng khách
+    assert u0(v).nudge_rejected is True
+    # NV CHƯA xác nhận (staff_side) cũng bị từ chối
+    ev2 = [*EVENTS, ev("m_10", "Cho chị gặp anh chủ", "staff_side", STAFF, 2)]
+    o = out(unit([q("m_10", "Cho chị gặp anh chủ")], complaint_stage="voice", stage_message_id="m_10", asks_for_owner=True, asks_message_id="m_10"))
+    g2 = verify.check(o, ev2, None, now=NOW).units[0]
+    assert g2.unit.complaint_stage is None and g2.unit.asks_for_owner is False and "stage_message_sender_not_customer" in g2.notes
+    # đúng khách (cả khách khởi động lạnh) ⇒ giữ, lưu vai
     qs = [q("m_2", "Cho chị nói chuyện với anh chủ nha"), q("m_6", "Anh ơi 2h rồi sao chưa thấy ai")]
-    got = u0(chk(out(unit(qs, asks_for_owner=True, asks_message_id="m_2", nudge_message_id="m_6")))).unit
-    assert got.asks_for_owner is True and got.nudge_message_id == "m_6"
+    r = u0(chk(out(unit(qs, asks_for_owner=True, asks_message_id="m_2", nudge_message_id="m_6", complaint_stage="voice", stage_message_id="m_2"))))
+    got = r.unit
+    assert got.asks_for_owner is True and got.nudge_message_id == "m_6" and r.nudge_rejected is False
+    assert (r.asks_by_role, r.nudge_by_role, r.stage_by_role, r.contract_version, r.public_eff) == ("customer", "customer", "customer", "brain-out/2", False)
+    ev3 = [ev("m_2", "Cho chị nói chuyện với anh chủ nha", "cold_customer", CUS, 5)]
+    r3 = verify.check(out(unit([q("m_2", "Cho chị nói chuyện với anh chủ nha")], asks_for_owner=True, asks_message_id="m_2")), ev3, None, now=NOW).units[0]
+    assert r3.unit.asks_for_owner is True and r3.asks_by_role == "cold_customer"
 
 
-def test_verify_unverified_quote_unit_absent_and_role_unknown_kept_with_note() -> None:
+def test_verify_unverified_quote_unit_absent_and_role_unknown_dropped() -> None:
     v = chk(out(unit([q("m_1", "câu bịa không có trong tin")], complaint_stage="voice", stage_message_id="m_1")))
     assert u0(v).status == "absent"
     qs = [q("m_8", "Cần 50 tấn thép")]
     v = chk(out(unit(qs, complaint_stage="voice", stage_message_id="m_8")))
-    assert u0(v).unit.complaint_stage == "voice" and "stage_message_role_unchecked" in u0(v).notes
+    assert u0(v).unit.complaint_stage is None and "stage_message_role_unknown" in u0(v).notes     # vai không rõ ⇒ bỏ trường (spec (c′))
 
 
 def test_verify_status_dang_xu_ly() -> None:
@@ -247,3 +263,39 @@ def test_history_evidence_prefers_promise_units_before_cap() -> None:
     # `have` loại tin đã có; kind khác không đổi hành vi cũ khi không có lời hứa
     want2 = runner.pick_history_evidence(others, {ids[13]})
     assert ids[13] not in want2 and len(want2) == 10 and ids[3] in want2
+
+
+def test_owner_action_price_only_counts_customer_messages_and_narrow_regex() -> None:
+    ev2 = [*EVENTS, ev("m_9", "Báo giá giùm anh 20 máy lạnh 1HP", "staff", STAFF, 3), ev("m_11", "Gia đình anh ở Bình Tân", "customer", CUS, 2)]
+    for body_q, mid in (("Báo giá giùm anh 20 máy lạnh 1HP", "m_9"), ("Gia đình anh ở Bình Tân", "m_11")):
+        o = out(unit([q(mid, body_q)], owner_action="Giao NV Hoa báo giá anh Khoa"))
+        assert verify.check(o, ev2, None, now=NOW).units[0].unit.owner_action is None          # NV nói / "gia đình" không phải khách hỏi giá
+    ev3 = [*EVENTS, ev("m_12", "Giá sao vậy em", "customer", CUS, 2)]
+    o = out(unit([q("m_12", "Giá sao vậy em")], owner_action="Giao NV Hoa báo giá anh Khoa"))
+    assert verify.check(o, ev3, None, now=NOW).units[0].unit.owner_action == "Giao NV Hoa báo giá anh Khoa"
+
+
+@pytest.mark.parametrize(("action", "kept"), [("Bàn thêm với anh Tâm về lịch lắp", True), ("Bán thêm combo cho anh Tâm", False), ("Chốt đơn ngay", False),
+                                              ("Gọi anh Tâm, đừng bán thêm gì", False)])
+def test_selling_regex_has_word_boundaries_and_accent_distinction(action: str, kept: bool) -> None:
+    assert (u0(chk(out(unit(owner_action=action)))).unit.owner_action is not None) is kept
+
+
+def test_occasion_keywords_extended_with_word_boundary() -> None:
+    for body, mid_ok in (("Lễ cắt băng thứ 7 nhé", True), ("Đám giỗ ông nội cuối tuần", True), ("Đầy tháng bé Na chủ nhật", True), ("Thôi nôi con anh", True)):
+        ev2 = [ev("m_20", body, "customer", CUS, 2)]
+        o = out(unit([q("m_20", body)], kind="nghia_vu_loi_hua", fixed_occasion=True, occasion_message_id="m_20"))
+        assert verify.check(o, ev2, None, now=NOW).units[0].unit.fixed_occasion is mid_ok, body
+    ev2 = [ev("m_21", "Anh tới thăm xã luỹ nhé", "customer", CUS, 2)]
+    o = out(unit([q("m_21", "Anh tới thăm xã luỹ nhé")], kind="nghia_vu_loi_hua", fixed_occasion=True, occasion_message_id="m_21"))
+    assert verify.check(o, ev2, None, now=NOW).units[0].unit.fixed_occasion is False
+
+
+def test_owner_action_and_need_text_are_credential_masked_before_saving() -> None:
+    ev2 = [ev("m_30", "Cần 50 tấn thép, mật khẩu kho: Abc12345", "customer", CUS, 2)]
+    o = out(unit([q("m_30", "Cần 50 tấn thép, mật khẩu kho: Abc12345")], kind="co_hoi_ket_noi",
+                 need={"what": {"text": "thép, mật khẩu kho: Abc12345", "message_id": "m_30"}},
+                 owner_action="Gọi khách, thẻ 4111 1111 1111 1111 và OTP 482913"))
+    r = verify.check(o, ev2, None, now=NOW).units[0]
+    assert r.unit.need is not None and r.unit.need.what is not None and "Abc12345" not in r.unit.need.what.text and "[mật khẩu]" in r.unit.need.what.text
+    assert r.unit.owner_action is not None and "4111" not in r.unit.owner_action and "482913" not in r.unit.owner_action

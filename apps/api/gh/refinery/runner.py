@@ -809,35 +809,44 @@ def pick_history_evidence(history: Sequence[Any], have: set[uuid.UUID], *, limit
     return want
 
 
-async def sender_roles(db: AsyncSession, org_id: uuid.UUID, person_ids: Collection[uuid.UUID | None]) -> dict[uuid.UUID, str | None]:
-    """Vai người gửi cho prompt/`verify` (P-T6, `GroupEvent.sender_role`) — CHỈ từ dữ liệu đã có, không suy đoán:
+async def sender_roles(db: AsyncSession, org_id: uuid.UUID, person_ids: Collection[uuid.UUID | None], *,
+                       thread_key: str | None = None) -> dict[uuid.UUID, str | None]:
+    """Vai người gửi cho prompt/`verify` (P-T6, `GroupEvent.sender_role`) — CHỈ từ dữ liệu đã có của tổ chức `org_id`, không suy đoán:
     `owner` = hồ sơ người của Sếp (thực thể Sếp đã gộp, hoặc `attrs.is_owner` do ghép mã); `staff` = `generic.staff_trusted` (person_type staff +
-    khoá loại + `staff_marked_at`, Sếp đã xác nhận qua Owner + PIN — cùng luật v0.1.76); `customer` = `generic.hard_customer` (fact `customer_of`
-    hoặc `person_type = customer`); còn lại ⇒ None. Vai None ⇒ `verify` GIỮ trường của khách và ghi `*_role_unchecked` (khách thường chưa đăng
-    ký không bị mất trường — quyết định có chủ đích, spec §4F.2 không bắt buộc vai)."""
+    khoá loại + `staff_marked_at`, Sếp đã xác nhận qua Owner + PIN — cùng luật v0.1.76); `staff_side` = có dấu hiệu phía Sếp
+    (`generic.hard_owner_side`: person_type staff hoặc fact `staff_of`) nhưng CHƯA được tin; `customer` = `generic.hard_customer` (fact
+    `customer_of` hoặc person_type customer); `cold_customer` = khởi động lạnh (`generic.cold_customer`) trong nhóm `kinh_doanh` Sếp đã xác nhận
+    hoặc trong DM của Sếp (`thread_key` bắt đầu `dm:`); còn lại ⇒ None.
+    `verify` dùng vai cho trường của KHÁCH (bậc khiếu nại, đòi Sếp, nhắc): vai phía Sếp ⇒ từ chối; vai None (không rõ) ⇒ trường về null, đường
+    tương thích r6.6.1 an toàn (spec (c′): không có nguồn thì không dùng). Người của tổ chức khác không bao giờ được tra (lọc theo `org_id`)."""
     ids = {p for p in person_ids if p is not None}
     if not ids:
         return {}
     from gh.biz.intel.detectors import generic as g
     from gh.biz.mem import profile as profile_mod
+    mine = set((await db.execute(text("SELECT id FROM core.persons WHERE org_id = :o AND id = ANY(:i)"), {"o": org_id, "i": list(ids)})).scalars().all())
     owner_people = set(await profile_mod.owner_person_ids(db, org_id)) | set(await g.paired_owner_person_ids(db, org_id))
     sets = await g.org_sets(db, org_id)
-    out: dict[uuid.UUID, str | None] = {}
-    for pid in ids:
+    gid = thread_group(thread_key) if thread_key else None
+    cold_ok = (thread_key is not None and thread_key.startswith("dm:")) or await g.business_group(db, org_id, gid)
+    out: dict[uuid.UUID, str | None] = {p: None for p in ids}
+    for pid in mine:
         if pid in owner_people:
             out[pid] = "owner"
             continue
         w = await g.who_person(db, org_id, pid)
         if w is None:
-            out[pid] = None
-        elif sets.is_owner(w.entity_id):
+            continue
+        if sets.is_owner(w.entity_id):
             out[pid] = "owner"
         elif g.staff_trusted(w.person_type, locked=w.locked, marked_at=w.staff_marked_at):
             out[pid] = "staff"
+        elif g.hard_owner_side(w, sets):
+            out[pid] = "staff_side"
         elif g.hard_customer(w, sets):
             out[pid] = "customer"
-        else:
-            out[pid] = None
+        elif g.cold_customer(w, sets, biz_group=cold_ok):
+            out[pid] = "cold_customer"
     return out
 
 
@@ -858,7 +867,11 @@ def verified_fields(vu: Any, u: Any, people: list[dict[str, Any]]) -> dict[str, 
           "public": bool(u.flags.public) if getattr(u, "flags", None) is not None else False,
           "need_fields_n": getattr(vu, "need_fields_n", None), "need": need.model_dump(mode="json") if need is not None else None,
           "fixed_occasion": bool(getattr(u, "fixed_occasion", False)), "nudge_message_id": getattr(u, "nudge_message_id", None),
-          "owner_action": getattr(u, "owner_action", None), "status_by_role": getattr(vu, "status_by_role", None)}
+          "owner_action": getattr(u, "owner_action", None), "status_by_role": getattr(vu, "status_by_role", None),
+          # đường bảng: `public_eff` (public sau luật venue; `public` thô giữ nguyên cho Bước 0), vai người gửi bằng chứng, nhắc bị từ chối, phiên bản
+          "public_eff": bool(getattr(vu, "public_eff", False)), "stage_by_role": getattr(vu, "stage_by_role", None),
+          "asks_by_role": getattr(vu, "asks_by_role", None), "nudge_by_role": getattr(vu, "nudge_by_role", None),
+          "nudge_rejected": bool(getattr(vu, "nudge_rejected", False)), "contract_version": getattr(vu, "contract_version", None)}
     return out | v2 | {"msg_at": _t(vu.msg_at), "event_at": _t(vu.event_at), "event_time_unparsed": bool(vu.event_time_unparsed),
                   "deadline_at": _t(vu.deadline_at), "deadline_unparsed": bool(vu.deadline_unparsed), "ongoing": bool(vu.ongoing),
                   "money_vnd": vu.money_vnd, "status_by_person_id": str(vu.status_by_person_id) if vu.status_by_person_id else None,
@@ -1617,7 +1630,7 @@ class GroupTurns:
         pack = await retrieve.pack(db, org_id, tk, [{"sender_person_id": b.person_id, "raw_event_id": b.event_id, "text": b.body}
                                                     for b in blocks], now=clock.now())
         ctx_events = await self._history_evidence(db, org_id, tk, blocks, ctx_events, pack)
-        roles = await sender_roles(db, org_id, [e.sender_person_id for e in (*new_events, *ctx_events)])
+        roles = await sender_roles(db, org_id, [e.sender_person_id for e in (*new_events, *ctx_events)], thread_key=tk)
         for ge in (*new_events, *ctx_events):
             ge.sender_role = roles.get(ge.sender_person_id) if ge.sender_person_id is not None else None       # P-T6: vai cạnh `from`
         all_ids = [m.event_id for b in blocks for m in b.all_events] + [c.raw_event_id for c in ctx_events if c.raw_event_id]
@@ -1700,7 +1713,11 @@ class GroupTurns:
             ORDER BY e.occurred_at DESC"""), {"o": org_id, "wids": list(want), "wrs": list(want.values()), **sp})).all()  # noqa: S608 — `where` là hằng nội bộ
         extra: list[Any] = []
         used = 0
-        for r in rows:
+        by_id = {r.id: r for r in rows}
+        for rid in want:                                        # trần ký tự theo THỨ TỰ ƯU TIÊN của `pick_history_evidence`, không theo giờ gửi
+            r = by_id.get(rid)
+            if r is None:
+                continue
             n = len(r.body_text or "")
             if used + n > HISTORY_EVIDENCE_CHARS:
                 continue
@@ -1840,7 +1857,7 @@ class GroupTurns:
                              {"id": aid, "o": org_id, "t": tk, "run": st.run_id, "wf": window.new_events[0].sent_at,
                               "wt": window.new_events[-1].sent_at, "nn": len(evs), "cn": len(window.context_events),
                               "fn": len(pack.facts) + len(pack.related), "pv": getattr(pack, "profile_version", None),
-                              "m": analysis.model, "cv": CONTRACT_VERSION, "ti": analysis.tokens_in, "to": analysis.tokens_out, "er": "[]", "st": since})
+                              "m": analysis.model, "cv": getattr(analysis.out, "contract_version", None) or CONTRACT_VERSION, "ti": analysis.tokens_in, "to": analysis.tokens_out, "er": "[]", "st": since})
             fact_ins: list[Any] = []
             unit_ids: dict[str, tuple[uuid.UUID, datetime]] = {}
             for vu in verified.units:

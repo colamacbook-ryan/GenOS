@@ -26,7 +26,7 @@ from difflib import SequenceMatcher
 from typing import Any
 
 from gh.biz.mem import vi_time
-from gh.refinery.brain_contract import NEED_CELLS, BrainOut, FactProposed, MemoryUpdate, Need, Unit
+from gh.refinery.brain_contract import NEED_CELLS, BrainOut, FactProposed, MemoryUpdate, Need, Unit, public_effective
 from gh.textnorm import strip_accents
 
 DEFAULT_TZ = vi_time.DEFAULT_TZ
@@ -35,14 +35,20 @@ _LABEL_RE = re.compile(r"\[(?:đã che|OTP \d+ số|mật khẩu|token|CVV|thẻ
 TXN_JUST_DONE = timedelta(hours=24)
 #: `quotes[].field` → loại `clean.media_texts` (body/caption nằm ở thân tin).
 FIELD_TO_MEDIA_KIND = {"transcript": "transcript", "ocr": "ocr"}
-#: Vai người gửi tin (đọc từ thuộc tính/khoá `sender_role` của tin; P2 điền theo `person_type`/`person_role`): "customer" | "staff" | "owner" | …;
-#: thiếu ⇒ không kiểm được vai (giữ trường, ghi `*_role_unchecked`). Trường của KHÁCH (bậc khiếu nại, đòi Sếp, nhắc) không nhận tin của NV/Sếp.
-NON_CUSTOMER_ROLES = frozenset({"staff", "owner"})
-#: Từ khoá dịp cố định (§4F.2 `fixed_occasion`): phải có trong tin `occasion_message_id` (so trên chữ thường, giữ dấu).
-OCCASION_RE = re.compile(r"khai trương|cưới|giỗ|hội chợ|tân gia|tất niên|sinh nhật|lễ kỷ niệm|triển lãm")
-#: Từ cấm của `owner_action` (Q18, spec §4.2 "Việc Sếp cần làm"): so trên chữ bỏ dấu.
-SELLING_RE = re.compile(r"chao hang|moi mua|upsell|ban them|goi y mua|khuyen mai de chot|chot don|chot sale")
-ASKED_PRICE_RE = re.compile(r"\bgia\b|bao nhieu|bao gia")
+#: Vai người gửi tin (đọc từ thuộc tính/khoá `sender_role` của tin; `runner.sender_roles` điền): "customer" | "cold_customer" (khách theo luật khởi
+#: động lạnh) | "staff" | "staff_side" (người có dấu hiệu phía Sếp nhưng chưa được Sếp xác nhận) | "owner" | None (không rõ).
+#: Trường của KHÁCH (bậc khiếu nại, đòi Sếp, nhắc) chỉ nhận tin của khách; vai phía Sếp ⇒ từ chối; vai None (không rõ) ⇒ KHÔNG dùng
+#: (trường về null/mặc định = đường tương thích r6.6.1, an toàn; spec (c′) "không có nguồn thì không dùng").
+NON_CUSTOMER_ROLES = frozenset({"staff", "staff_side", "owner"})
+CUSTOMER_ROLES = frozenset({"customer", "cold_customer"})
+#: Từ khoá dịp cố định (§4F.2 `fixed_occasion`): phải có trong tin `occasion_message_id` (chữ thường, giữ dấu, có ranh giới từ).
+OCCASION_RE = re.compile(r"(?<!\w)(?:khai trương|cưới|đám giỗ|giỗ|hội chợ|tân gia|tất niên|sinh nhật|lễ kỷ niệm|triển lãm|đầy tháng|thôi nôi|lễ)(?!\w)")
+#: Từ cấm của `owner_action` (Q18, spec §4.2 "Việc Sếp cần làm"), có ranh giới từ. Bản có dấu (phân biệt "bán thêm" với "bàn thêm") +
+#: bản bỏ dấu cho các cụm KHÔNG đồng âm với từ thường (không có "ban them").
+SELLING_RE = re.compile(r"(?<!\w)(?:chào hàng|mời mua|upsell|bán thêm|gợi ý mua|khuyến mãi để chốt|chốt đơn|chốt sale)(?!\w)")
+SELLING_FOLDED_RE = re.compile(r"(?<![a-z0-9])(?:chao hang|moi mua|upsell|goi y mua|khuyen mai de chot|chot don|chot sale)(?![a-z0-9])")
+#: Khách đã hỏi giá (cho phép "báo giá" trong `owner_action`), trên chữ bỏ dấu.
+ASKED_PRICE_RE = re.compile(r"(?<![a-z0-9])(?:hoi gia|bao gia|gia bao nhieu|bao nhieu tien|gia sao)(?![a-z0-9])")
 MIN_QUOTE_COPY_CHARS = 20      # `owner_action` chứa một đoạn liền ≥ ngần này ký tự của trích dẫn ⇒ coi là chép lời khách
 
 
@@ -125,6 +131,12 @@ class VerifiedUnit:
     status_by_person_id: uuid.UUID | None = None
     status_at: datetime | None = None
     status_by_role: str | None = None        # vai người gửi tin `status_message_id` (nếu tin có `sender_role`); P2 kiểm NV
+    stage_by_role: str | None = None         # vai người gửi tin `stage_message_id` / `asks_message_id` / `nudge_message_id` (khi trường được giữ)
+    asks_by_role: str | None = None
+    nudge_by_role: str | None = None
+    nudge_rejected: bool = False             # model khai `nudge_message_id` nhưng bị từ chối (tin không verified / người gửi không phải khách); KHÔNG sửa `flags.nudged`
+    public_eff: bool = False                 # `flags.public` sau luật venue (chỉ /2; `flags.public` thô giữ nguyên) — cho đường bảng
+    contract_version: str | None = None      # phiên bản hợp đồng của đầu ra model (cho `entities.v`)
     need_fields_n: int | None = None         # r7: số ô `need` có trích dẫn verified (0–4); None = đơn vị không khai `need`
     txn_state: str | None = None             # pending | just_done | done_cannot_stop
     txn_at: datetime | None = None
@@ -671,30 +683,42 @@ def _verify_v2(res: Verified, vu: VerifiedUnit, u: Unit, q_by_msg: Mapping[str, 
         r = _g(ev, "sender_role") if ev is not None else None
         return str(r) if r else None
 
-    def customer_msg(field_name: str, mid: str | None) -> bool:
-        """Tin `mid` phải verified và do KHÁCH gửi (không phải NV/Sếp); thiếu vai ⇒ chấp nhận nhưng ghi `*_role_unchecked`."""
+    def customer_msg(field_name: str, mid: str | None) -> tuple[bool, str | None]:
+        """Tin `mid` phải verified và do KHÁCH gửi: vai phía Sếp ⇒ từ chối; vai không rõ ⇒ từ chối (trường về mặc định, spec (c′))."""
         q = _verified_msg(q_by_msg, mid)
         if q is None:
             notes.append(f"{field_name}_unverified")
             res.bump(f"{field_name}_unverified")
-            return False
+            return False, None
         role = role_of(q)
-        if role is None:
-            notes.append(f"{field_name}_role_unchecked")
-            res.bump(f"{field_name}_role_unchecked")
-            return True
-        if role in NON_CUSTOMER_ROLES:
-            notes.append(f"{field_name}_sender_not_customer")
-            res.bump(f"{field_name}_sender_not_customer")
-            return False
-        return True
+        if role in CUSTOMER_ROLES:
+            return True, role
+        reason = "sender_not_customer" if role in NON_CUSTOMER_ROLES else "role_unknown"
+        notes.append(f"{field_name}_{reason}")
+        res.bump(f"{field_name}_{reason}")
+        return False, role
 
-    if u.complaint_stage is not None and not customer_msg("stage_message", u.stage_message_id):
-        upd.update(complaint_stage=None, stage_message_id=None)
-    if u.asks_for_owner and not customer_msg("asks_message", u.asks_message_id):
-        upd.update(asks_for_owner=False, asks_message_id=None)
-    if u.nudge_message_id is not None and not customer_msg("nudge_message", u.nudge_message_id):
-        upd["nudge_message_id"] = None
+    if u.complaint_stage is not None:
+        ok, role = customer_msg("stage_message", u.stage_message_id)
+        if ok:
+            vu.stage_by_role = role
+        else:
+            upd.update(complaint_stage=None, stage_message_id=None)
+    if u.asks_for_owner:
+        ok, role = customer_msg("asks_message", u.asks_message_id)
+        if ok:
+            vu.asks_by_role = role
+        else:
+            upd.update(asks_for_owner=False, asks_message_id=None)
+    if u.nudge_message_id is not None:
+        ok, role = customer_msg("nudge_message", u.nudge_message_id)
+        if ok:
+            vu.nudge_by_role = role
+        else:
+            vu.nudge_rejected = True
+            upd["nudge_message_id"] = None
+    vu.contract_version = res.out.contract_version
+    vu.public_eff = public_effective(res.out.contract_version, u)
 
     # status `dang_xu_ly`: cần tin chứng minh verified (vai NV do P2 kiểm theo `status_by_role`/`status_by_person_id`); không ⇒ `dang_mo`
     sq = _verified_msg(q_by_msg, u.status_message_id)
@@ -712,7 +736,7 @@ def _verify_v2(res: Verified, vu: VerifiedUnit, u: Unit, q_by_msg: Mapping[str, 
             cell = getattr(u.need, name)
             nq = _verified_msg(q_by_msg, cell.message_id) if cell is not None else None
             if cell is not None and nq is not None and norm(cell.text) in norm(_message_text(ev_by_id[nq.message_id], media)):
-                kept[name] = cell
+                kept[name] = cell.model_copy(update={"text": mask_credentials(cell.text) or ""})      # che OTP/mật khẩu/thẻ trước khi lưu
             else:
                 if cell is not None:
                     notes.append(f"need_{name}_unverified")
@@ -731,15 +755,18 @@ def _verify_v2(res: Verified, vu: VerifiedUnit, u: Unit, q_by_msg: Mapping[str, 
 
     # owner_action (Q18): không chép lời trong tin, không từ chào bán; "báo giá" chỉ khi khách đã hỏi giá
     if u.owner_action is not None:
-        reason = _owner_action_problem(u.owner_action, [q for q in q_by_msg.values() if q.status == "verified"], ev_by_id, media)
+        reason = _owner_action_problem(u.owner_action, [q for q in q_by_msg.values() if q.status == "verified"], ev_by_id, media, role_of)
         if reason is not None:
             notes.append(f"owner_action_dropped:{reason}")
             res.bump("owner_action_dropped")
             upd["owner_action"] = None
+        else:
+            upd["owner_action"] = mask_credentials(u.owner_action)
     return u.model_copy(update=upd) if upd else u
 
 
-def _owner_action_problem(action: str, quotes: Sequence[VerifiedQuote], ev_by_id: Mapping[str, Any], media: Mapping[str, list[Any]]) -> str | None:
+def _owner_action_problem(action: str, quotes: Sequence[VerifiedQuote], ev_by_id: Mapping[str, Any], media: Mapping[str, list[Any]],
+                          role_of: Any) -> str | None:
     a = norm(action)
     for q in quotes:
         qt = norm(q.text)
@@ -748,10 +775,12 @@ def _owner_action_problem(action: str, quotes: Sequence[VerifiedQuote], ev_by_id
             if m.size >= min(MIN_QUOTE_COPY_CHARS, len(qt)):
                 return "copies_quote"
     af = _fold(a)
-    if SELLING_RE.search(af):
+    if SELLING_RE.search(norm(a).lower()) or SELLING_FOLDED_RE.search(af):
         return "selling_verb"
     if "bao gia" in af:
-        blob = _fold("\n".join(_message_text(ev_by_id[q.message_id], media) for q in quotes if q.message_id in ev_by_id))
+        # chỉ tin của KHÁCH (hoặc vai không rõ), không phải NV/Sếp, mới cho thấy khách đã hỏi giá
+        blob = _fold("\n".join(_message_text(ev_by_id[q.message_id], media) for q in quotes
+                               if q.message_id in ev_by_id and role_of(q) not in NON_CUSTOMER_ROLES))
         if not ASKED_PRICE_RE.search(blob):
             return "quote_price_not_asked"
     return None
@@ -777,4 +806,4 @@ def _verify_facts(res: Verified, facts: Sequence[FactProposed], unit_by_ref: Map
 
 
 __all__ = ["MediaText", "Verified", "VerifiedUnit", "VerifiedQuote", "VerifiedFact", "check", "norm", "parse_money_vnd",
-           "ONGOING_WINDOW", "NON_CUSTOMER_ROLES"]
+           "ONGOING_WINDOW", "NON_CUSTOMER_ROLES", "CUSTOMER_ROLES"]

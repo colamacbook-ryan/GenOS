@@ -95,7 +95,7 @@ Trích dẫn đúng tin, đúng trường, từng chữ · loại theo cây D ·
 ## M. Vai trò người (`people[].role`)
 `nguoi_hua` · `nguoi_duoc_hua` · `nguoi_hoi` · `nguoi_bi_anh_huong` (nạn nhân) · `nguoi_gui` · `nguoi_bi_mao_danh` (người bị mạo danh **và** chủ tài khoản bị chiếm) · `nguoi_nhan_tien` (chủ STK / người nhận tiền, để code nối STK với người) · `khac`.
 
-Mỗi tin trong dữ liệu có thể kèm khoá **`role`** cạnh `from`/`from_ref`: `khach` (khách của Sếp) · `nhan_vien` (nhân viên của Sếp) · `sep` (chính Sếp). Dùng nó để biết **ai nói**: khách than phiền/đòi/nhắc ≠ nhân viên báo "em đang xử lý" ≠ Sếp tự nhắc. Thiếu `role` thì không đoán vai từ giọng văn. Chỉ tin của **khách** mới làm bằng chứng cho `complaint_stage`, `asks_for_owner`, `nudge_message_id`; chỉ tin của **nhân viên** mới làm bằng chứng cho `status_hint: "dang_xu_ly"`.
+Mỗi tin trong dữ liệu có thể kèm khoá **`role`** cạnh `from`/`from_ref`: `khach` (khách của Sếp) · `nhan_vien` (nhân viên của Sếp) · `sep` (chính Sếp). Dùng nó để biết **ai nói**: khách than phiền/đòi/nhắc ≠ nhân viên báo "em đang xử lý" ≠ Sếp tự nhắc. Thiếu `role` thì không đoán vai từ giọng văn, và tin **không có `role`** không được dùng làm bằng chứng cho các trường của khách (code sẽ bỏ trường). Chỉ tin của **khách** (`role: khach`) mới làm bằng chứng cho `complaint_stage`, `asks_for_owner`, `nudge_message_id`; chỉ tin của **nhân viên** mới làm bằng chứng cho `status_hint: "dang_xu_ly"`.
 
 ## O. Trường `brain-out/2` — đọc sự việc theo thang hành vi (mọi trường tuỳ chọn; không chắc thì để mặc định)
 Mỗi trường mang mã tin chứng minh phải là **tin có trong `quotes` của chính đơn vị** và trích dẫn tin đó nguyên văn; thiếu mã tin ⇒ code bỏ trường.
