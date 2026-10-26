@@ -60,6 +60,18 @@ GH_APP_DB_PASSWORD = os.environ.setdefault("GH_APP_DB_PASSWORD", "gh-app-test-on
 APP_ROLE = os.environ.get("GH_TEST_APP_ROLE") == "1"
 APP_PG = os.environ.get("GH_TEST_APP_PG", f"postgresql://gh_app:{GH_APP_DB_PASSWORD}@localhost:5432")
 
+# v0.1.77: argon2id tham số thật (time_cost=3, 64 MiB, 4 luồng — gh/crypto.py) tốn ≈ 140 ms/lần và chiếm cả 4 vCPU
+# mỗi lần băm/xác minh. Gần như mọi test API băm mật khẩu + PIN của Sếp (do_setup) rồi đăng nhập/xác minh PIN ⇒ đo
+# py-spy lượt pytest: ≈ 43% thời gian luồng chính nằm trong argon2; hai lượt song song tranh CPU với nhau và với
+# Postgres ⇒ job `api` CI 57–105 phút, vượt bước 100' ngẫu nhiên. Test chỉ cần ĐÚNG thuật toán (argon2id, băm/xác minh
+# thật), không cần tốn kém ⇒ thay hasher của tiến trình test bằng tham số tối thiểu. Mã sản phẩm không đổi; chốt chặn
+# tham số thật: tests/test_crypto.py::test_production_hasher_keeps_strong_argon2_parameters (tiến trình con sạch).
+from argon2 import PasswordHasher  # noqa: E402
+
+from gh import crypto as _crypto  # noqa: E402
+
+_crypto._hasher = PasswordHasher(time_cost=1, memory_cost=8, parallelism=1)
+
 
 # v0.1.45 (F-49): mọi lời gọi MCP / nhà cung cấp AI ghim DNS qua `gh.chassis.mcp_client._getaddrinfo`. Test không
 # phụ thuộc DNS thật: tên máy (không phải IP literal) phân giải ra một IP công cộng giả cố định; `localhost` →
