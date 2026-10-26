@@ -334,6 +334,7 @@ def merge_level_input(old: levels.SignalIn, new: levels.SignalIn) -> levels.Sign
         "owner_unanswered_h": max(old.owner_unanswered_h, new.owner_unanswered_h),
         "subject_entity_id": new.subject_entity_id or old.subject_entity_id,
         "goal_priority1_match_valid": old.goal_priority1_match_valid or new.goal_priority1_match_valid,
+        "goods_risk": old.goods_risk or new.goods_risk,
         "mute": None, "case_prior": None})
 
 
@@ -451,10 +452,14 @@ async def upsert(db: AsyncSession, org_id: uuid.UUID, inp: UpsertIn, now: dateti
         SELECT id, case_key, evidence, fact_ids, raw_event_ids, privacy, level_input, case_state FROM biz.alerts
         WHERE org_id = :o AND kind = :k AND status IN ('open', 'acknowledged')
           AND (case_key = :ck OR (cardinality(CAST(:raw AS uuid[])) > 0 AND raw_event_ids && CAST(:raw AS uuid[])))
-        ORDER BY (case_key = :ck) DESC, created_at LIMIT 1 FOR UPDATE"""),
+        ORDER BY (case_key = :ck) DESC, COALESCE(case_state ->> 'red_pushed', '') = 'true' DESC, created_at LIMIT 1 FOR UPDATE"""),
         {"o": org_id, "k": inp.kind, "ck": inp.case_key, "raw": raw_ids})).one_or_none()
+    # Nhiều dòng khớp theo tin gốc ⇒ ưu tiên dòng ĐÃ ĐẨY 🔴 (sau khớp khoá): giữ thẻ đã đẩy ở dòng chính, dòng kia gộp vào (G-KB Đợt 2 P1).
     absorbed: list[Any] = []                               # dòng raw|/anon| cùng tin gốc bị gộp vào dòng chính (một vụ một 🔴)
-    if row is not None and not _weak_key(row.case_key):
+    rekey = row is not None and row.case_key != inp.case_key and _weak_key(row.case_key) and not _weak_key(inp.case_key)
+    if row is not None and (not _weak_key(row.case_key) or rekey):
+        # Kể cả khi dòng chính đang mang khoá yếu và sắp được NÂNG lên khoá mạnh: dòng yếu khác cùng tin gốc (vd raw|actor: của luật
+        # fraud đã đẩy) phải gộp theo, nếu không vụ nâng khoá không thấy thẻ đã đẩy ⇒ 🔴 lần hai.
         absorbed = await _open_weak_rows(db, org_id, inp.kind, row.id, raw_ids)
     for w in absorbed:
         ev = _merge_evidence(list(w.evidence or []), ev)
@@ -471,7 +476,7 @@ async def upsert(db: AsyncSession, org_id: uuid.UUID, inp: UpsertIn, now: dateti
         merged = _merge_evidence(list(row.evidence or []), ev)
         # Vụ đang mang khoá DỰ PHÒNG (raw|/anon| — đường nhanh) mà tin mới có khoá mạnh (STK, mạo danh…) ⇒ nâng khoá: tin sau cùng vụ
         # tìm thấy vụ theo khoá mạnh, không đẻ tín hiệu thứ hai/🔴 thứ hai (F2). Đã khoá trần ⇒ không ai chen INSERT cùng khoá mạnh.
-        new_ck = inp.case_key if (row.case_key != inp.case_key and _weak_key(row.case_key) and not _weak_key(inp.case_key)) else None
+        new_ck = inp.case_key if rekey else None
         sid = row.id
         try:
             async with db.begin_nested():                  # savepoint: va chạm khoá mạnh không làm hỏng cả transaction
@@ -553,7 +558,8 @@ def _merge_case_prior(states: list[dict[str, Any]]) -> levels.CasePrior | None:
         branch_rank=max(int(x.get("branch_rank") or 0) for x in states),
         victim_refs=sorted({str(v) for x in states for v in x.get("victim_refs") or []}),
         payee_refs=sorted({str(v) for x in states for v in x.get("payee_refs") or []}),
-        emergency=any(bool(x.get("emergency")) for x in states), said_will_leave=any(bool(x.get("said_will_leave")) for x in states))
+        emergency=any(bool(x.get("emergency")) for x in states), said_will_leave=any(bool(x.get("said_will_leave")) for x in states),
+        txn_reminded=any(bool(x.get("txn_reminded")) for x in states))
 
 
 LEVEL_RANK = {"off": 0, "grey": 1, "amber": 2, "red": 3}
@@ -574,6 +580,7 @@ async def _relane(db: AsyncSession, org_id: uuid.UUID, signal_id: uuid.UUID, now
         return None                                        # trần đang bị lượt khác giữ ⇒ để lượt sau
     r = (await db.execute(text(f"""
         SELECT id, kind, status, lane, level, gate, delivery, case_key, thread_key, group_id, detector, level_input, case_state, pushed_at,
+               raw_event_ids,
                would_push_at, capped_at, cap_day, suggested_action, facts, expires_at, ask_id
         FROM biz.alerts WHERE id = :i AND org_id = :o FOR UPDATE{" SKIP LOCKED" if skip_locked else ""}"""),  # noqa: S608
         {"i": signal_id, "o": org_id})).one_or_none()
@@ -591,10 +598,12 @@ async def _relane(db: AsyncSession, org_id: uuid.UUID, signal_id: uuid.UUID, now
     if mute and (s.mute is None or mute == "pin"):
         upd["mute"] = mute
     states = [r.case_state] if r.case_state else []
-    if r.case_key:
-        states += list((await db.execute(text("""
-            SELECT case_state FROM biz.alerts WHERE org_id = :o AND case_key = :ck AND id <> :i AND status IN ('open', 'acknowledged')
-              AND case_state IS NOT NULL"""), {"o": org_id, "ck": r.case_key, "i": r.id})).scalars().all())
+    # Hợp thẻ vụ của dòng còn mở cùng khoá (khác loại — F6) và — phòng thủ (G-KB Đợt 2 P1) — dòng còn mở CÙNG LOẠI chung tin gốc: hai khoá
+    # khác nhau cho cùng một sự việc (vd stk| và imp|) không được đẩy 🔴 hai lần.
+    states += list((await db.execute(text("""
+        SELECT case_state FROM biz.alerts WHERE org_id = :o AND id <> :i AND status IN ('open', 'acknowledged') AND case_state IS NOT NULL
+          AND (case_key = :ck OR (kind = :k AND cardinality(CAST(:raw AS uuid[])) > 0 AND raw_event_ids && CAST(:raw AS uuid[])))"""),
+        {"o": org_id, "ck": r.case_key, "i": r.id, "k": r.kind, "raw": [str(x) for x in r.raw_event_ids or []]})).scalars().all())
     prior = _merge_case_prior(states)
     if prior is not None:
         upd["case_prior"] = prior
@@ -616,7 +625,7 @@ async def _relane(db: AsyncSession, org_id: uuid.UUID, signal_id: uuid.UUID, now
         lv0 = levels.compute(s.model_copy(update={"mute": None}), prof, pol, st, now)
         if lv0.delivery == "none" and "closed" in lv0.reasons:
             status = "resolved"
-    esc = "escalation" in lv.reasons
+    esc = "escalation" in lv.reasons or "txn_day_reminder" in lv.reasons    # nhắc lại sáng ngày hẹn chuyển = một lần đẩy mới (D1)
     pushed_at = now if lv.delivery == "push_now" and (r.pushed_at is None or esc) else r.pushed_at
     would_push_at = r.would_push_at or (now if lv.would_push else None)
     capped_at = r.capped_at or (now if lv.capped else None)
@@ -635,6 +644,11 @@ async def _relane(db: AsyncSession, org_id: uuid.UUID, signal_id: uuid.UUID, now
                            "branch_rank": max(int(case_state.get("branch_rank") or 0), lv.branch_rank),
                            "emergency": bool(case_state.get("emergency")) or f.emergency or "emergency_115_chay_cap_cuu" in levels.hard_rules(s),
                            "said_will_leave": bool(case_state.get("said_will_leave")) or f.said_will_leave}
+        rem = levels.txn_remind_at(s)
+        if (lv.gate == levels.G1 and lv.delivery == "push_now" and rem is not None
+                and _aware(now).astimezone(levels.VN).date() >= rem.astimezone(levels.VN).date()):
+            # Lần đẩy này đã rơi vào (hoặc chính là) sáng ngày hẹn chuyển ⇒ không nhắc thêm lần nữa trong vụ (D1).
+            case_state["txn_reminded"] = True
     next_eval = levels.next_change_at(s, now) if status in OPEN else None
     # Mục đã lên bản tin (digest_at) mà nay leo lên nhóm đầu bản tin hoặc tăng mức ⇒ lên lại bản tin kế (F4)
     redigest = ((lv.delivery in TOP_DELIVERY and r.delivery not in TOP_DELIVERY)

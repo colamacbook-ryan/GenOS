@@ -229,3 +229,61 @@ async def bulk_group_contexts(body: BulkContextsIn, user: service.CurrentUser = 
                                target_type="group", target_id=str(g.id), target_label=g.name, detail={"labels": [x.context for x in body.labels], "bulk": True},
                                ip=user.ip)
     return {"ok": True, "updated": len(found)}
+
+
+# ─── Thiết lập Tình báo (Ryan chốt D3, 2026-10-25: "hỏi lúc cài") ──────────────
+
+MAX_SETUP_GROUPS = 300
+MAX_SETUP_PEOPLE = 200
+#: Loại cần biết khách / nhân sự của Sếp: chỉ chạy đầy đủ khi nhóm có nhãn bối cảnh và Sếp đã khai nhân viên. Lừa đảo, an toàn luôn chạy.
+SETUP_GATED_VI = ("lời hứa với khách", "câu hỏi chờ trả lời", "khách chê / doạ bỏ", "cơ hội", "thông tin thị trường", "quan hệ cần để ý")
+
+
+@router.get("/intel/setup")
+async def setup_state(user: service.CurrentUser = Depends(require_owner), db: AsyncSession = DB) -> dict[str, Any]:
+    """Trạng thái "sẵn sàng" của Tình báo đầy đủ: (1) mọi nhóm đã có nhãn bối cảnh do Sếp gán; (2) Sếp đã khai xong nhân viên (đánh dấu từng
+    người qua `PATCH /profile/{id}` `person_type=staff`, rồi bấm "Đã khai xong" — `POST /intel/setup/staff-confirmed`). Không chặn app: chưa
+    xong thì các loại cần biết khách/nhân sự vẫn thận trọng như hiện tại; lừa đảo/an toàn luôn chạy. Chỉ đọc, không cần PIN."""
+    org = user.org_id
+    s = await _intel(db, org)
+    groups = (await db.execute(text("""
+        SELECT g.id, g.name, g.member_count,
+               EXISTS (SELECT 1 FROM mem.group_contexts c WHERE c.org_id = g.org_id AND c.group_id = g.id AND c.source = 'owner') AS labeled
+        FROM core.groups g WHERE g.org_id = :o ORDER BY g.name, g.id LIMIT :n"""), {"o": org, "n": MAX_SETUP_GROUPS})).all()
+    unlabeled = [g for g in groups if not g.labeled]
+    people = (await db.execute(text("""
+        SELECT p.id, p.display_name, p.person_type FROM core.persons p
+        WHERE p.org_id = :o AND p.deleted_at IS NULL AND p.merged_into_id IS NULL
+          AND COALESCE(p.attrs ->> 'is_owner', '') <> 'true'
+          AND NOT EXISTS (SELECT 1 FROM core.users u WHERE u.org_id = p.org_id AND u.person_id = p.id)
+          AND (p.person_type = 'staff' OR EXISTS (SELECT 1 FROM core.group_members gm JOIN core.groups g ON g.id = gm.group_id
+                                                    WHERE gm.person_id = p.id AND gm.left_at IS NULL AND g.org_id = p.org_id))
+        ORDER BY p.display_name, p.id LIMIT :n"""), {"o": org, "n": MAX_SETUP_PEOPLE})).all()   # thứ tự ổn định: bật/tắt không làm dòng nhảy
+    staff_n = (await db.execute(text("""SELECT count(*) FROM core.persons WHERE org_id = :o AND person_type = 'staff'
+                                        AND deleted_at IS NULL AND merged_into_id IS NULL"""), {"o": org})).scalar_one()
+    confirmed_at = s.get("staff_confirmed_at") if isinstance(s.get("staff_confirmed_at"), str) else None
+    groups_done = not unlabeled
+    staff_done = confirmed_at is not None
+    return {
+        "ready": groups_done and staff_done,
+        "groups": {"done": groups_done, "total": len(groups), "unlabeled_count": len(unlabeled),
+                   "unlabeled": [{"id": str(g.id), "name": g.name, "member_count": g.member_count} for g in unlabeled]},
+        "staff": {"done": staff_done, "confirmed_at": confirmed_at, "staff_count": int(staff_n),
+                  "people": [{"id": str(p.id), "name": p.display_name, "person_type": p.person_type or "unknown"} for p in people]},
+        "contexts": list(contexts.CONTEXT_CODES),
+        "gated_kinds": list(SETUP_GATED_VI),
+    }
+
+
+@router.post("/intel/setup/staff-confirmed")
+async def setup_staff_confirmed(user: service.CurrentUser = Depends(require_owner), db: AsyncSession = DB) -> dict[str, Any]:
+    """Sếp xác nhận "đã khai xong nhân viên" (kể cả không có nhân viên nào). Ghi Nhật ký (số người đã đánh dấu, không tên). Không cần PIN —
+    việc này chỉ MỞ thêm suy luận thận trọng, không hạ phòng thủ."""
+    org = user.org_id
+    now = clock.now()
+    n = (await db.execute(text("""SELECT count(*) FROM core.persons WHERE org_id = :o AND person_type = 'staff'
+                                  AND deleted_at IS NULL AND merged_into_id IS NULL"""), {"o": org})).scalar_one()
+    await _set(db, org, {"staff_confirmed_at": now.isoformat()})
+    await actionlog.record(db, org_id=org, actor_type="user", actor_id=user.actor_id, action="intel.setup.staff_confirmed",
+                           target_type="org", target_id=str(org), result="ok", detail={"staff_count": int(n)}, ip=user.ip)
+    return {"ok": True, "confirmed_at": now.isoformat(), "staff_count": int(n)}

@@ -8,6 +8,7 @@ import { CardError, InlineError, Panel, SkeletonLines } from '../common';
 import {
   useBulkContexts,
   useIntelConsole,
+  useIntelSetup,
   useIntelSettings,
   useLockAssistant,
   useMuteKind,
@@ -16,7 +17,8 @@ import {
   useUnmute,
   useVerifyPayee,
 } from './intelQueries';
-import { DEFENSIVE_KINDS, contextLabel, vnTime, type IntelConsole, type IntelMode, type IntelRamp } from './intelModel';
+import { DEFENSIVE_KINDS, contextLabel, setupPendingText, vnTime, type IntelConsole, type IntelMode, type IntelRamp } from './intelModel';
+import { INTEL_SETUP_ANCHOR } from './IntelSetupCard';
 
 /**
  * v0.1.76 (T11, CNS-077): thẻ "Tình báo" tối thiểu — nơi DUY NHẤT trên Console làm các thao tác cần mã PIN của Tình báo: khoá / mở khoá
@@ -57,9 +59,30 @@ function Err({ e }: { e: unknown }) {
   return e ? <InlineError detail={errorDetail(e)}>{errorText(e)}</InlineError> : null;
 }
 
+/** v0.1.76 (T14, D3): nhắc khi "Thiết lập Tình báo" chưa xong — không chặn thẻ; lỗi đọc trạng thái thì im (thẻ Thiết lập tự báo lỗi). */
+function SetupBanner() {
+  const q = useIntelSetup(true);
+  if (!q.data || q.data.ready) return null;
+  return (
+    <div className="intel-setup-banner" role="status" data-testid="intel-setup-banner">
+      <span className="intel-setup-banner__text">
+        Tình báo đầy đủ chưa bật: {setupPendingText(q.data)}. Lừa đảo và an toàn vẫn báo bình thường.
+      </span>
+      <Button
+        variant="secondary"
+        size="sm"
+        onClick={() => document.getElementById(INTEL_SETUP_ANCHOR)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+      >
+        Thiết lập ngay
+      </Button>
+    </div>
+  );
+}
+
 function IntelBody({ s }: { s: IntelConsole }) {
   return (
     <>
+      <SetupBanner />
       <AssistantRow s={s} />
       <UnlockTodayRow s={s} />
       <ModeRow s={s} />

@@ -72,7 +72,8 @@ async def tail(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, limit: int
         li = levels.SignalIn(kind=kind, msg_at=r.occurred_at, event_at=r.occurred_at, hard_rule_hit=sorted({str(c["hard"]) for c in hard}),
                              flags=levels.Flags(**flags), source_class="rule", confidence_exist=1.0, confidence_content=1.0,
                              victims=victims, impact_base=3 if victims else 2,
-                             thread=levels.Thread(type="group" if r.group_id else "dm_agent", size=size, owner_in_thread=False,
+                             thread=levels.Thread(type="group" if r.group_id else "dm_agent", size=size,
+                                                  size_known=r.group_id is None or r.member_count is not None, owner_in_thread=False,
                                                   agent_in_thread=True),
                              txn_state="pending" if flags.get("money_request") else "none")
         ev = [signals.EvidenceIn(type="raw_event", id=r.id, received_at=r.received_at, source_field=str(c.get("field") or "body"),  # type: ignore[arg-type]

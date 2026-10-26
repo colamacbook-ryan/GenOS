@@ -40,7 +40,8 @@ DELIVERIES = ("push_now", "digest_top", "digest_morning", "digest", "digest_low"
 REASONS = ("window_expired", "done_cannot_stop", "remediated", "remediation_ignored_hard_rule", "closed", "closed_by_staff",
            "low_confidence", "no_harm", "harm_template", "d2_disagree", "gate_not_met", "ctx_off", "muted", "mute_chat_ignored",
            "shadow", "capped", "precision", "quiet", "escalation", "merged", "agent_probe", "event_time_unparsed",
-           "safety_wide_circle", "fraud_wide_circle", "impersonation_dm_agent", "impersonation_big_group", "name_match_unverified")
+           "safety_wide_circle", "fraud_wide_circle", "impersonation_dm_agent", "impersonation_big_group", "name_match_unverified",
+           "txn_day_reminder", "txn_pending", "big_opportunity_no_catalog")
 
 #: Luật cứng (regex luật (a) trên span `verified`) ⇒ cờ kéo theo (§4.2.1 (b)0).
 HARD_RULE_FLAGS: dict[str, tuple[str, ...]] = {
@@ -57,7 +58,9 @@ def hard_rules(s: SignalIn) -> list[str]:
 
 
 HARM_TEMPLATE = {G1: "có thể mất tiền trong tài khoản (luật cứng: {h})", G2: "nguy hiểm tính mạng/tài sản (luật cứng: {h})"}
-BRANCH_RANK = {"request": 1, "just_done": 2, "credentials_entered": 3, "account_takeover": 4}
+BRANCH_RANK = {"request": 1, "goods": 1, "just_done": 2, "credentials_entered": 3, "account_takeover": 4}
+#: Giờ bản tin sáng (giờ VN) — mốc nhắc lại 🔴 một lần vào sáng ngày hẹn chuyển tiền (Ryan chốt D1, 2026-10-25).
+TXN_REMIND_HHMM = "07:30"
 
 H_SAN = 336.0            # chân trời sàn lừa đảo/an toàn: 14 ngày từ event_at (CNS-129)
 N_NEAR_SMALL = 30        # nhóm gần theo cỡ
@@ -101,6 +104,9 @@ class D2(_M):
 class Thread(_M):
     type: Literal["group", "dm_owner", "dm_agent"] = "group"
     size: int = 0
+    #: False ⇒ cầu nối không báo cỡ nhóm (`core.groups.member_count` NULL): `size` là 0 giả, KHÔNG được coi là "nhóm nhỏ ⇒ gần"
+    #: (fail-open cho 🔴 — G-KB Đợt 2 P7); nhóm vẫn tính ≤ 200 và vẫn gần nếu Sếp đã xác nhận bối cảnh gần (gia_dinh/ban_be/nhan_vien).
+    size_known: bool = True
     owner_in_thread: bool = False
     agent_in_thread: bool = False
 
@@ -133,6 +139,8 @@ class CasePrior(_M):
     payee_refs: list[str] = Field(default_factory=list)
     emergency: bool = False
     said_will_leave: bool = False
+    #: Đã nhắc lại 🔴 sáng ngày hẹn chuyển tiền (hoặc lần đẩy đầu đã rơi vào sáng/trong ngày đó) — một vụ chỉ nhắc một lần (D1).
+    txn_reminded: bool = False
 
 
 class Promise(_M):
@@ -200,6 +208,9 @@ class SignalIn(_M):
     in_work_hours: bool = True
     subject_entity_id: uuid.UUID | None = None       # đối tượng chính (so `owner_key_relation` của Hồ sơ)
     goal_priority1_match_valid: bool = False         # verify.py: `owner_relevance` khớp `owner_goal` ưu tiên 1 (kiểm được)
+    #: Đặt hàng ghi nợ/công nợ hoặc đổi địa chỉ giao/người nhận hàng — CODE kiểm trên chữ đã kiểm (`fraud.goods_redirect`), không phải lời
+    #: model. Cùng người bị mạo danh đã biết ⇒ nhánh "mạo danh đặt hàng / đổi địa chỉ giao" của cổng 1 (Ryan chốt D2, 2026-10-25).
+    goods_risk: bool = False
 
 
 class QuietHours(_M):
@@ -269,6 +280,40 @@ def in_quiet(now: datetime, q: QuietHours) -> bool:
     return (m >= a or m < b) if a > b else (a <= m < b)
 
 
+def _vn_day_end(t: datetime) -> datetime:
+    d = _aware(t).astimezone(VN)
+    return d.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+
+
+def txn_due_at(s: SignalIn) -> datetime | None:
+    """Ngày hẹn chuyển tiền / hạn giao dịch của vụ lừa đảo còn chờ (D1): `deadline_at` hoặc `txn_at` mà tin nói tới một thời điểm SAU lúc
+    gửi tin (`txn_at` = giờ tin là cách model điền "chưa rõ" ⇒ bỏ). Không chờ giao dịch (`txn_state` ≠ pending) ⇒ None. Lấy mốc xa nhất."""
+    if s.txn_state != "pending":
+        return None
+    msg = _aware(s.msg_at)
+    c = [_aware(x) for x in (s.deadline_at, s.txn_at) if x is not None and _aware(x) > msg]
+    return max(c) if c else None
+
+
+def txn_hold_until(s: SignalIn) -> datetime | None:
+    """Giữ cửa sổ (i) của cổng 1 tới HẾT ngày hẹn chuyển (giờ VN), trần chân trời sàn `H_SAN` tính từ event_at (D1)."""
+    due = txn_due_at(s)
+    if due is None:
+        return None
+    return min(_vn_day_end(due), _aware(s.event_at or s.msg_at) + timedelta(hours=H_SAN))
+
+
+def txn_remind_at(s: SignalIn) -> datetime | None:
+    """Giờ bản tin sáng của ngày hẹn chuyển (giờ VN) — mốc nhắc lại 🔴 một lần (D1). Hẹn rơi trước giờ đó trong ngày ⇒ vẫn mốc giờ bản tin
+    sáng (nhắc ngay khi tới bản tin, còn trong ngày giao dịch). Ngoài cửa sổ giữ ⇒ None."""
+    due, hold = txn_due_at(s), txn_hold_until(s)
+    if due is None or hold is None:
+        return None
+    d = due.astimezone(VN)
+    at = d.replace(hour=_minutes(TXN_REMIND_HHMM) // 60, minute=_minutes(TXN_REMIND_HHMM) % 60, second=0, microsecond=0)
+    return at if at < hold else None
+
+
 def is_today_or_overnight(deadline_at: datetime | None, now: datetime) -> bool:
     """"Hôm nay" của cổng 4 và cổng 6 (§4.2.1 (a)): cùng ngày lịch VN với now (KỂ CẢ đã qua), hoặc 0 ≤ hạn − now < 12 giờ."""
     if deadline_at is None:
@@ -321,7 +366,7 @@ def owner_side(s: SignalIn, policy: Policy) -> OwnerSide:
     in_thread = th.owner_in_thread or th.agent_in_thread
     grp = th.type == "group" and in_thread
     small200 = grp and th.size <= N_WIDE_MAX
-    near = (th.type == "dm_owner" or (grp and th.size <= N_NEAR_SMALL)
+    near = (th.type == "dm_owner" or (grp and th.size_known and th.size <= N_NEAR_SMALL)
             or (grp and th.size <= N_NEAR_CTX and any(c in NEAR_CTX for c in contexts)))
     victim_core = any(_is_core(p) for p in s.victims)
     member_victim = any(p.thread_member and not p.is_agent for p in s.victims)
@@ -337,8 +382,9 @@ def owner_side(s: SignalIn, policy: Policy) -> OwnerSide:
     imp_unverified = others and bool(imp_owner) and not imp_present
     agent_only = (bool(s.victims) and all(p.is_agent for p in s.victims)) or th.type == "dm_agent"
     kin_ok = s.source_class not in ("outsider", "forwarded")      # vai thân tộc không áp cho người lạ/chuyển tiếp (L-87)
+    # Nhóm không rõ cỡ KHÔNG được coi là "≤ 50 khách" (fail-safe, cùng luật P7 — quyết định Gen T14).
     customer_core = (th.type == "dm_owner"
-                     or (grp and "kinh_doanh" in contexts and th.size <= N_KD_CUSTOMER)
+                     or (grp and "kinh_doanh" in contexts and th.size_known and th.size <= N_KD_CUSTOMER)
                      or (grp and "nhan_vien" in contexts and th.size <= N_WIDE_MAX))     # r6.6.1
     core_s = (any(p.is_owner or p.owner_key_relation or p.team for p in s.victims)
               or (customer_core and any(p.customer for p in s.victims)))
@@ -482,6 +528,10 @@ def compute(signal: SignalIn, profile: ProfileSnapshot, policy: Policy, state: D
     txn_age = min(ev_age, _age(now, _aware(s.txn_at))) if s.txn_at else ev_age            # CNS-142
     anchor = s.case_anchor_at or (case_anchor(s.case_history, event_at) if s.case_history else None)
     anchor_age = _age(now, _aware(anchor)) if anchor else ev_age
+    hold = txn_hold_until(s)
+    held = hold is not None and now < hold                   # D1: hẹn chuyển tiền còn chưa qua hết ngày ⇒ cửa sổ (i) chưa hết
+    # D2: người bị mạo danh là người ĐÃ BIẾT (khách/đối tác…), không phải Sếp/agent — mạo danh Sếp/agent đi đường (iii)/7e như cũ.
+    imp_known = any(not (p.is_owner or p.is_agent) for p in s.impersonated)
 
     def gates(window: bool = True, wide: bool = False) -> tuple[str | None, int | None]:
         if not window and ev_age >= H_SAN:
@@ -493,8 +543,10 @@ def compute(signal: SignalIn, profile: ProfileSnapshot, policy: Policy, state: D
             moved = s.txn_state in ("just_done", "done_cannot_stop")
             just_done = moved and (txn_age < 24 or not window)
             br: list[str] = []
-            if f.money_request and s.txn_state == "pending" and fresh48:
+            if f.money_request and s.txn_state == "pending" and (fresh48 or held):
                 br.append("request")
+            if s.goods_risk and imp_known and fresh48:
+                br.append("goods")
             if f.money_request and just_done and fresh48:
                 br.append("just_done")
             if f.credentials_entered and fresh168:
@@ -600,6 +652,11 @@ def compute(signal: SignalIn, profile: ProfileSnapshot, policy: Policy, state: D
             new_refs = bool(set(os_.esc_refs) - set(cp.victim_refs))
             if g == G1:
                 esc = (rank or 0) > cp.branch_rank or new_refs        # STK/domain mới một mình KHÔNG đẩy lại (L-87)
+                rem = txn_remind_at(s)
+                if not esc and not cp.txn_reminded and rem is not None and rem <= now and held:
+                    # D1: nhắc lại 🔴 MỘT lần sáng ngày hẹn chuyển (bypass như mọi 🔴 cổng 1; một vụ một lần ⇒ không vượt trần vô hạn).
+                    reasons.append("txn_day_reminder")
+                    return L("red", g, "push_now")
             elif g == G2:
                 esc = (f.emergency and not cp.emergency) or new_refs
             elif g == G3:
@@ -638,7 +695,19 @@ def compute(signal: SignalIn, profile: ProfileSnapshot, policy: Policy, state: D
         reasons.append("window_expired")
         if m_nw == G1 and s.txn_state in ("just_done", "done_cannot_stop") and f.money_request:
             reasons.append("done_cannot_stop")
+        if m_nw == G1 and s.txn_state == "pending" and f.money_request and txn_due_at(s) is None:
+            reasons.append("txn_pending")                    # D1: không biết ngày chuyển ⇒ bản tin không ghi "đã quá thời điểm"
         return L("amber", candidate=m_nw, delivery="digest_top")
+    # D5 (Ryan chốt 2026-10-25): cơ hội tiền lớn có hạn gần / gấp tường minh mà chưa khớp Nguồn lực ở nhóm CHƯA xác nhận ⇒ không tắt
+    # hẳn, tối thiểu 🟠 (bản tin). Nhóm Sếp đã xác nhận bối cảnh tắt loại này (vd gia_dinh) vẫn tắt; 🔴 cổng 5 vẫn cần catalog như cũ.
+    # "Lớn" ở đây = TIỀN lớn theo ngưỡng cổng 5 (`money_big_vnd`, tiền báo/đã có trong dữ liệu — tiền ước tính một mình không đủ), không phải
+    # impact 3 do điểm catalog (catalog chưa xác nhận ở nhóm chưa xác nhận vẫn không đủ — A19).
+    big_money = s.money_vnd is not None and s.money_basis in ("quoted", "db") and s.money_vnd >= st.money_big_vnd
+    big_opp = (kind == "co_hoi_ket_noi" and not policy.confirmed and big_money and not op.touches_value_limit
+               and ((dh is not None and 0 <= dh < 48) or (f.explicit_urgent and (dh is None or dh >= 0))))
+    if big_opp and not low:
+        reasons.append("big_opportunity_no_catalog")
+        return L("amber", candidate=G5)
     if _off_by_context(s, policy, key_rel, profile_match):   # 7b
         reasons.append("ctx_off")
         return L("off")
@@ -776,6 +845,8 @@ def next_change_at(s: SignalIn, now: datetime) -> datetime | None:
         cands.append(base + timedelta(hours=hours))
     if s.txn_at:
         cands.append(_aware(s.txn_at) + timedelta(hours=24))
+    hold, rem = txn_hold_until(s), txn_remind_at(s)
+    cands.extend(x for x in (hold, rem) if x is not None)
     anchor = s.case_anchor_at or (case_anchor(s.case_history, ev) if s.case_history else None)
     if anchor:
         cands.append(_aware(anchor) + timedelta(hours=24))
