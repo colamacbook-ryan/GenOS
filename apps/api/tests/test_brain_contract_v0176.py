@@ -13,9 +13,9 @@ from sqlalchemy import text
 from gh.biz.mem import contexts
 from gh.refinery import brain_contract as bc
 
-#: Vân tay JSON Schema. ĐỔI HỢP ĐỒNG ⇒ test này đỏ ⇒ phải tăng `CONTRACT_VERSION` ("brain-out/2"), cập nhật vân tay
+#: Vân tay JSON Schema. ĐỔI HỢP ĐỒNG ⇒ test này đỏ ⇒ phải tăng `CONTRACT_VERSION` ("brain-out/3"), cập nhật vân tay
 #: và chạy lại G-KB (spec §4F). Không sửa vân tay mà không tăng phiên bản.
-SCHEMA_SHA256 = "6c7cf48097c6e163d647428fe93afd4456a6d76841add8c2122991eb2a249983"
+SCHEMA_SHA256 = "cd7f18ff2ced3fb41ed692726320813be96e476bba4df34663c4422e4d8e48b4"
 
 FULL: dict = {
     "contract_version": "brain-out/1",
@@ -62,9 +62,11 @@ def _bad(mut) -> None:  # type: ignore[no-untyped-def]
 
 def test_brain_contract_full_example_roundtrips_exactly() -> None:
     out = bc.BrainOut.model_validate(FULL)
-    assert out.contract_version == "brain-out/1" == bc.CONTRACT_VERSION
+    assert out.contract_version == "brain-out/1" and bc.CONTRACT_VERSION == "brain-out/2"     # /1 vẫn parse được bằng schema /2
     back = json.loads(out.model_dump_json())
-    assert back == FULL                                     # khuôn đúng như spec §4F, không thêm/bớt khoá
+    v2_defaults = {"complaint_stage": None, "stage_message_id": None, "asks_for_owner": False, "asks_message_id": None, "public_venue": None,
+                   "need": None, "fixed_occasion": False, "occasion_message_id": None, "nudge_message_id": None, "owner_action": None}
+    assert back == {**FULL, "units": [{**FULL["units"][0], **v2_defaults}]}      # khuôn §4F + §4F.2: chỉ thêm khoá mặc định, không bớt
     assert bc.validate_json(json.dumps(FULL)).units[0].kind == "nghia_vu_loi_hua"
 
 
@@ -73,7 +75,10 @@ def test_brain_contract_unit_keys_and_flags_exactly_as_spec() -> None:
                                          "amount_text", "condition", "status_hint", "evidence", "owner_relevance", "owner_basis",
                                          "gate_candidate", "level_hint", "competing_hypothesis", "action", "status_message_id",
                                          "ongoing_message_ids", "event_time", "delivery_form_hint", "txn",
-                                         "normalization_notes"}
+                                         "normalization_notes",
+                                         # brain-out/2 (§4F.2)
+                                         "complaint_stage", "stage_message_id", "asks_for_owner", "asks_message_id", "public_venue", "need",
+                                         "fixed_occasion", "occasion_message_id", "nudge_message_id", "owner_action"}
     assert list(bc.Flags.model_fields) == ["public", "nudged", "repeat_n", "explicit_urgent", "needs_owner", "blocks_work",
                                            "is_template", "conditional", "said_will_leave", "money_request", "credentials_entered",
                                            "account_takeover", "emergency", "ongoing"]
@@ -114,7 +119,7 @@ def test_brain_contract_rejects_schema_violations() -> None:
     _bad(lambda d: d["units"][0]["people"][0].update(role="boss"))
     _bad(lambda d: d.update(thread_ref="group:1"))                                    # thread_key: g:<id> | dm:<…>:<…>
     _bad(lambda d: d.update(thread_ref="dm:onlyone"))
-    _bad(lambda d: d.update(contract_version="brain-out/2"))
+    _bad(lambda d: d.update(contract_version="brain-out/3"))
     _bad(lambda d: d["facts_proposed"][0].update(quote_refs=[]))
     _bad(lambda d: d["facts_proposed"][0].update(source_hint="owner"))
     _bad(lambda d: d["memory_updates"][0].update(type="forget"))
@@ -182,14 +187,14 @@ async def test_brain_contract_gate_candidate_matches_meaning_units_check(fresh_d
 
 def test_brain_contract_json_schema_is_stable_and_complete() -> None:
     s = bc.json_schema()
-    assert s["$id"] == "urn:genos:brain-out/1" and s["title"] == "BrainOut"
-    assert s["properties"]["contract_version"]["const"] == "brain-out/1"
+    assert s["$id"] == "urn:genos:brain-out/2" and s["title"] == "BrainOut"
+    assert s["properties"]["contract_version"]["enum"] == ["brain-out/1", "brain-out/2"]
     assert s["additionalProperties"] is False and "thread_ref" in s["required"]
     assert {"Unit", "Quote", "Flags", "FactProposed", "Action"} <= set(s["$defs"])
     assert s["$defs"]["Quote"]["properties"]["text"]["maxLength"] == 120
     canon = json.dumps(s, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     assert hashlib.sha256(canon.encode()).hexdigest() == SCHEMA_SHA256, (
-        "Hợp đồng brain-out/1 đã đổi: tăng CONTRACT_VERSION + chạy lại G-KB rồi mới cập nhật vân tay (spec §4F)")
+        "Hợp đồng brain-out đã đổi: tăng CONTRACT_VERSION + chạy lại G-KB rồi mới cập nhật vân tay (spec §4F)")
     json.dumps(s)                                                                # xuất được ra JSON
 
 
