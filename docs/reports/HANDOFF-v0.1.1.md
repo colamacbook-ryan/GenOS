@@ -1,4 +1,4 @@
-# Bàn giao GenOS — hiện trạng + việc dở (cập nhật 23/10/2026, bản v0.1.75 — GenOS bản đầu, rồi v0.1.74 — bản tính năng trên v0.1.73, rồi v0.1.73 — bản tính năng trên v0.1.72, rồi v0.1.72 trên v0.1.71 (bản vá trên v0.1.70), gộp v0.1.69 + v0.1.70, bản gộp v0.1.68, bản vá v0.1.66 và bản gộp v0.1.65)
+# Bàn giao GenOS — hiện trạng + việc dở (cập nhật 26/10/2026, bản NHÁP v0.1.76 chưa phát hành; bản đã phát hành mới nhất v0.1.75 — GenOS bản đầu, rồi v0.1.74 — bản tính năng trên v0.1.73, rồi v0.1.73 — bản tính năng trên v0.1.72, rồi v0.1.72 trên v0.1.71 (bản vá trên v0.1.70), gộp v0.1.69 + v0.1.70, bản gộp v0.1.68, bản vá v0.1.66 và bản gộp v0.1.65)
 
 File này nay chỉ ghi **hiện trạng + việc dở** (tên cũ `HANDOFF-v0.1.1.md` giữ nguyên vì mã nguồn có chú thích trỏ tới).
 Lịch sử từng bản nằm ở [CHANGELOG.md](../../CHANGELOG.md) (3–5 dòng/bản) và `docs/releases/vX.Y.Z.md` (chi tiết, chuyển nguyên từ HANDOFF cũ):
@@ -6,6 +6,13 @@ mục "Lỗi cần sửa", "Chia việc", "Kiểm tra tích hợp" của v0.1.1/
 chú thích trong mã trỏ "HANDOFF mục vX.Y.Z" thì đọc tệp `docs/releases/vX.Y.Z.md` tương ứng.
 Tiến độ, bản phản ứng (hotfix) và **mục Nợ**: [ROADMAP](../ROADMAP.md). Vận hành hằng ngày: [runbook](../runbook.md).
 Ghi chú vận hành riêng của Sếp (máy, tài khoản, địa chỉ, việc riêng) nằm ở repo Brain › Project/gen-harness (riêng tư) — không ghi vào repo công khai này.
+
+## v0.1.76 — NHÁP, chưa phát hành (nhánh `claude/wip/v0176/dot2`, main sau PR #12 + #13; `VERSION` vẫn v0.1.75)
+
+- **Làm gì**: Bước 1 Tình báo — Đợt 1 (L1–L6, PR #1–#10: trí nhớ 5 lớp, đa phương tiện, trích xuất 4 tầng, lượt theo luồng, G-KB, Hồ sơ Sếp) + Đợt 2 (T1 tín hiệu/migration `0044`, T2–T12, T13; PR #11–#13). Chi tiết: [v0.1.76.md](../releases/v0.1.76.md).
+- **Trạng thái**: đã vào main, CI xanh; **chưa tăng `VERSION`**, chưa tag. Chưa kiểm voice thật và chưa nghiệm thu bằng tài khoản Zalo/WhatsApp/Telegram thật.
+- **Còn dở**: T14 đã gộp (trừ ý «đổi nhân viên cần PIN», đang thi công); v0.1.76 chỉ phát hành phần chắc (🔴 ngay chỉ lừa đảo + an toàn; bốn cổng thường lên đầu bản tin) — quy cách phân loại mới làm ở v0.1.77. G-KB còn yếu: lượt đồng hồ (hạn tới/im lặng), đóng/hạ đơn vị khi có xác nhận (kb3). Nợ mới **#73–#93** ở [ROADMAP](../ROADMAP.md); chờ Sếp quyết Nợ #82 (Hồ sơ Sếp vào prompt mọi nhóm), #88 (khoá trợ lý có chặn Telegram không), #90.
+- **Boss cần làm**: xem «Việc Boss phải làm» ở [v0.1.76.md](../releases/v0.1.76.md#việc-boss-phải-làm) (thiết lập Tình báo, bốn cổng thường chưa nhắn ngay, mã PIN mở khoá, kênh phụ Telegram, đợt mục cũ trong bản tin).
 
 ## Hợp đồng chung
 
