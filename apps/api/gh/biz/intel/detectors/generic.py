@@ -59,11 +59,30 @@ class OrgSets:
     staff: frozenset[uuid.UUID] = frozenset()
     customers: frozenset[uuid.UUID] = frozenset()
     key_relations: frozenset[uuid.UUID] = frozenset()
+    #: MỌI thực thể là Sếp: thực thể `is_owner` (tài khoản Console) + thực thể của hồ sơ người đã ghép mã ở chế độ tài khoản bot
+    #: (`core.persons.attrs.is_owner`, nhận theo ID tài khoản — G-KB Đợt 2 P3). Rỗng ⇒ chỉ `owner` (dựng tay trong test cũ).
+    owners: frozenset[uuid.UUID] = frozenset()
+
+    def __post_init__(self) -> None:
+        if self.owner is not None and self.owner not in self.owners:
+            self.owners = self.owners | {self.owner}
+
+    def is_owner(self, ent: uuid.UUID | None) -> bool:
+        return ent is not None and ent in self.owners
+
+
+async def paired_owner_person_ids(db: AsyncSession, org_id: uuid.UUID) -> list[uuid.UUID]:
+    """Hồ sơ người của Sếp do ghép mã / nhận theo ID tài khoản ở chế độ tài khoản bot (`attrs.is_owner`, chỉ code đặt — ingest/pairing)."""
+    return list((await db.execute(text("""SELECT id FROM core.persons WHERE org_id = :o AND attrs ->> 'is_owner' = 'true'
+                                            AND deleted_at IS NULL"""), {"o": org_id})).scalars().all())
 
 
 async def org_sets(db: AsyncSession, org_id: uuid.UUID) -> OrgSets:
     owner = (await db.execute(text("SELECT id FROM mem.entities WHERE org_id = :o AND is_owner AND merged_into IS NULL"),
                               {"o": org_id})).scalar_one_or_none()
+    paired = frozenset((await db.execute(text("""
+        SELECT DISTINCT COALESCE(e.merged_into, e.id) FROM core.persons p JOIN mem.entities e ON e.person_id = p.id AND e.org_id = p.org_id
+        WHERE p.org_id = :o AND p.attrs ->> 'is_owner' = 'true' AND p.deleted_at IS NULL"""), {"o": org_id})).scalars().all())
 
     async def subj(pred: str) -> frozenset[uuid.UUID]:
         rows = (await db.execute(text("""SELECT DISTINCT COALESCE(e.merged_into, e.id) FROM mem.facts f JOIN mem.entities e ON e.id = f.subject_id
@@ -72,7 +91,7 @@ async def org_sets(db: AsyncSession, org_id: uuid.UUID) -> OrgSets:
         return frozenset(rows)
 
     prof = await profile_read.snapshot(db, org_id)
-    return OrgSets(owner, await subj("staff_of"), await subj("customer_of"), prof.key_relation_entity_ids())
+    return OrgSets(owner, await subj("staff_of"), await subj("customer_of"), prof.key_relation_entity_ids(), paired)
 
 
 async def canonical(db: AsyncSession, entity_id: uuid.UUID | None) -> uuid.UUID | None:
@@ -129,7 +148,7 @@ def hard_customer(w: Who | None, sets: OrgSets) -> bool:
 
 def hard_owner_side(w: Who | None, sets: OrgSets) -> bool:
     """Sếp / người của Sếp theo DỮ LIỆU (chủ, fact `staff_of`, `person_type = staff`)."""
-    return w is not None and (w.entity_id == sets.owner or w.entity_id in sets.staff or w.person_type == "staff")
+    return w is not None and (sets.is_owner(w.entity_id) or w.entity_id in sets.staff or w.person_type == "staff")
 
 
 async def business_group(db: AsyncSession, org_id: uuid.UUID, group_id: uuid.UUID | None) -> bool:
@@ -150,21 +169,24 @@ def cold_customer(w: Who | None, sets: OrgSets, *, biz_group: bool) -> bool:
 
 
 def person_rel(ent: uuid.UUID, sets: OrgSets, *, ref: str, thread_member: bool = False, kin_of_member: bool = False) -> levels.PersonRel:
-    return levels.PersonRel(ref=ref, is_owner=ent == sets.owner, owner_key_relation=ent in sets.key_relations, customer=ent in sets.customers,
+    return levels.PersonRel(ref=ref, is_owner=sets.is_owner(ent), owner_key_relation=ent in sets.key_relations, customer=ent in sets.customers,
                             team=ent in sets.staff, thread_member=thread_member, kin_of_member=kin_of_member, present_in_thread=thread_member)
 
 
-async def raw_group(db: AsyncSession, raw_id: uuid.UUID | None) -> tuple[uuid.UUID | None, int]:
-    """(group_id, cỡ nhóm) của tin gốc; tin riêng / không rõ ⇒ (None, 0)."""
+async def raw_group(db: AsyncSession, raw_id: uuid.UUID | None) -> tuple[uuid.UUID | None, int | None]:
+    """(group_id, cỡ nhóm) của tin gốc; tin riêng / không rõ ⇒ (None, 0); nhóm không rõ cỡ (`member_count` NULL) ⇒ cỡ None."""
     if raw_id is None:
         return None, 0
     r = (await db.execute(text("""SELECT e.group_id, g.member_count FROM raw.events e LEFT JOIN core.groups g ON g.id = e.group_id
                                   WHERE e.id = :i LIMIT 1"""), {"i": raw_id})).one_or_none()
-    return (r.group_id, int(r.member_count or 0)) if r else (None, 0)
+    if r is None:
+        return None, 0
+    return r.group_id, (None if r.group_id is not None and r.member_count is None else int(r.member_count or 0))
 
 
-def thread_of(group_id: uuid.UUID | None, size: int) -> levels.Thread:
-    return levels.Thread(type="group" if group_id else "dm_agent", size=size, owner_in_thread=False, agent_in_thread=True)
+def thread_of(group_id: uuid.UUID | None, size: int | None) -> levels.Thread:
+    return levels.Thread(type="group" if group_id else "dm_agent", size=size or 0, size_known=size is not None, owner_in_thread=False,
+                         agent_in_thread=True)
 
 
 def flags_of(raw: dict[str, Any] | None) -> levels.Flags:
@@ -268,7 +290,7 @@ async def _unit_ctx(db: AsyncSession, org_id: uuid.UUID, u: Any, sets: OrgSets, 
     return UnitCtx(kind=u.kind_hint, unit_id=u.id, observed_at=u.observed_at, conclusion=u.conclusion or "", flags=dict(u.flags or {}),
                    harm_what=harm or "", gate_candidate=u.gate_candidate, confidence_exist=float(u.confidence or 0.8),
                    source_class="insider" if insider else "member", forwarded=forwarded, victims=victims,
-                   thread=thread_of(group_id, size), hard_rules=hard, owner_work=(sender in sets.staff or sender == sets.owner) if sender else False,
+                   thread=thread_of(group_id, size), hard_rules=hard, owner_work=(sender in sets.staff or sets.is_owner(sender)) if sender else False,
                    victim_entity=victim_ents[0] if victim_ents else None)
 
 
@@ -364,7 +386,7 @@ async def project_events(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, 
             continue                                         # không rõ ngày / đã qua / còn xa: chưa phải tín hiệu
         subj = await canonical(db, f.subject_id)
         to = await canonical(db, uuid.UUID(v["to_entity_id"])) if v.get("to_entity_id") else None
-        related = (f.source_class == "owner" or any(e is not None and (e == sets.owner or e in sets.key_relations) for e in (subj, to)))
+        related = (f.source_class == "owner" or any(e is not None and (sets.is_owner(e) or e in sets.key_relations) for e in (subj, to)))
         gid, size = await raw_group(db, f.source_raw_event_id)
         c = EventCtx(text=str(v.get("text") or ""), valid_from=f.valid_from, at=at, related=related, source_class=f.source_class,
                      agreement=float(f.agreement) if f.agreement is not None else None, confidence_exist=float(f.confidence_exist),

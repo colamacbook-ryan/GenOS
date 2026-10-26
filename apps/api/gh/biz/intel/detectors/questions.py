@@ -222,13 +222,24 @@ async def scan_units(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> list
             AND o2.received_at >= c.received_at AND o2.occurred_at > c.occurred_at
             AND CASE WHEN c.group_id IS NOT NULL THEN o2.group_id = c.group_id
                      ELSE o2.group_id IS NULL AND {outbound_to_sql("o2", "c.ids", "c.ext")} END)
+          -- Chế độ tài khoản bot: Sếp/nhân viên trả lời bằng tài khoản riêng ⇒ tin ĐẾN (inbound). Tin của người phía Sếp (đã ghép mã
+          -- attrs.is_owner, staff, fact staff_of, thực thể Sếp) trong CÙNG nhóm, sau câu hỏi ⇒ đã có người trả lời (G-KB Đợt 2 P4).
+          AND NOT (c.group_id IS NOT NULL AND EXISTS (
+            SELECT 1 FROM raw.events i2 JOIN core.person_identities pi2 ON pi2.id = i2.sender_identity_id
+              JOIN core.persons p2 ON p2.id = pi2.person_id
+              LEFT JOIN mem.entities e2 ON e2.person_id = p2.id AND e2.org_id = i2.org_id
+            WHERE i2.org_id = :o AND i2.group_id = c.group_id AND i2.direction = 'inbound' AND i2.received_at >= c.received_at
+              AND i2.occurred_at > c.occurred_at AND p2.id <> c.person_id
+              AND (p2.person_type = 'staff' OR p2.attrs ->> 'is_owner' = 'true'
+                   OR COALESCE(e2.merged_into, e2.id) = ANY(CAST(:side AS uuid[])))))
           AND NOT EXISTS (SELECT 1 FROM biz.alerts a WHERE a.org_id = :o AND a.alert_type = 'slow_response' AND a.evidence @> jsonb_build_array(jsonb_build_object('type', 'raw', 'id', c.raw_id::text)))
           AND NOT EXISTS (SELECT 1 FROM biz.alerts a WHERE a.org_id = :o AND a.raw_event_ids @> ARRAY[c.raw_id])   -- tin đã có tín hiệu
           AND NOT EXISTS (SELECT 1 FROM biz.alerts a WHERE a.org_id = :o AND a.subject_id = c.person_id AND a.status IN ('open', 'acknowledged')
                           AND (a.alert_type = 'slow_response' OR (a.kind = 'cau_hoi_cho_xu_ly' AND a.detector = 'questions')))   -- một người một dòng
         ORDER BY c.occurred_at DESC LIMIT :lim"""),  # noqa: S608 — outbound_to_sql là hằng nội bộ
                             {"o": org_id, "now": now, "sla": SCAN_SLA_MIN, "win": SCAN_WINDOW_H, "lim": SCAN_LIMIT * 4,
-                             "nokind": list(NO_REPLY_KINDS), "need": list(NEEDS_REPLY), "key": list(key_rel), "biz": biz})).all()
+                             "nokind": list(NO_REPLY_KINDS), "need": list(NEEDS_REPLY), "key": list(key_rel), "biz": biz,
+                             "side": [*sets.owners, *sets.staff]})).all()
     out: list[signals.Signal] = []
     seen: set[uuid.UUID] = set()
     for r in rows:
@@ -255,6 +266,7 @@ async def scan_units(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> list
         q = QuestionIn(asked_at=r.occurred_at, raw_event_id=r.raw_id, span_end=min(len(body), 80), quote=body[:80], asker=asker,
                        asker_person_id=r.person_id, blocks_work=uf.get("blocks_work") is True, needs_owner=uf.get("needs_owner") is True,
                        explicit_urgent=uf.get("explicit_urgent") is True, thread=levels.Thread(type="group" if r.group_id else "dm_owner", size=int(r.member_count or 0),
+                                                                           size_known=r.group_id is None or r.member_count is not None,
                                                                            owner_in_thread=True, agent_in_thread=True),
                        thread_key=f"g:{r.group_id}" if r.group_id else None, group_id=r.group_id)
         try:
