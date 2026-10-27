@@ -7,6 +7,13 @@ Ngày = ngày Release trên GitHub theo giờ Việt Nam; tiêu đề trong `doc
 (v0.1.32–v0.1.34, v0.1.40, v0.1.46) hoặc vài ngày (v0.1.47, v0.1.48: làm 03/10, phát hành 09/10).
 Việc sửa nóng không đổi số bản (PR #46, #48, #53, #55, #58, #59) ghi ở [ROADMAP › Bản phản ứng](docs/ROADMAP.md).
 
+## v0.1.77 — (26/10/2026) Bước 1 Tình báo: bảng ưu tiên mới cho bốn cổng thường, chạy thử 14 ngày
+- **Migration `0045`, trên v0.1.76.** Mức 🔴🟠⚪ của bốn loại thường (khách chê công khai/doạ bỏ, lời hứa khách sắp vỡ, cơ hội lớn sắp trôi, sự cố gấp) tính theo bảng ưu tiên: ảnh hưởng × độ gấp, qua cửa «bằng chứng» và «thẩm quyền» (nhân viên đang lo, khách đòi gặp chủ, khách chủ chốt, giờ làm). Lừa đảo/an toàn **không đổi**.
+- **Sửa lỗi từ v0.1.76:** tin 🔴 lừa đảo/an toàn có thể không tới Zalo khi hai job đánh giá cùng tin trong một phút — nay luôn gửi đúng một tin.
+- **Chạy thử 14 ngày**: bốn loại thường chỉ lên đầu bản tin (kèm nút Đúng/Sai + 3 lý do); lừa đảo/an toàn vẫn báo ngay. Qua 14 ngày và đủ độ chính xác mới tự đẩy thật.
+- Thiết lập Tình báo thêm bước 3 khai **khách chủ chốt** (cần mã PIN); giờ làm mặc định 08:00–17:30 (đổi qua chat). Câu hỏi chờ nay tính theo giờ làm.
+- Chi tiết + việc Boss phải làm: [docs/releases/v0.1.77.md](docs/releases/v0.1.77.md).
+
 ## v0.1.76 — (26/10/2026) Bước 1 Tình báo: trí nhớ 5 lớp, tín hiệu 🔴🟠🟡, lừa đảo/lời hứa/tranh chấp, khoá trợ lý
 - **Bản tính năng lớn trên v0.1.75, migration `0043` + `0044`.** Trí nhớ 5 lớp + Hồ sơ Sếp, trích xuất 4 tầng, đa phương tiện (voice/ảnh); tin thành **tín hiệu có mức** (một vụ một 🔴, tính lại theo đồng hồ), bản tin theo mức.
 - Lừa đảo/OTP, lời hứa, tranh chấp, câu hỏi chưa trả lời, giải thích + độ tin cậy; **khoá trợ lý** (khoá khẩn không cần mã PIN, mở khoá cần mã PIN), thẻ «Tình báo» trên Console, kênh phụ Telegram.

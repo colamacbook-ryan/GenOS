@@ -43,7 +43,7 @@ async def test_fraud_impersonated_supplier_changes_account_is_red(db: AsyncSessi
     assert len(out) == 1
     s = out[0]
     assert (s.level, s.gate, s.delivery) == ("red", levels.G1, "push_now")
-    li = levels.SignalIn.model_validate((await _alerts(db, w.org))[0].level_input)
+    li = signals.load_level_input((await _alerts(db, w.org))[0].level_input)
     assert fraud.H_IMP in li.hard_rule_hit and li.flags.account_takeover and li.flags.money_request
     assert li.impersonated and any(v.is_owner for v in li.victims)
 

@@ -460,13 +460,13 @@ def test_p3b_build_input_uses_work_hours() -> None:
 
 async def test_p3b_questions_read_org_work_hours_settings(db: AsyncSession) -> None:
     org = await mk_org(db)
-    assert await questions.work_hours_of(db, org) == levels.WorkHours(start="08:00", end="17:30")        # mặc định (không settings)
+    assert await signals.org_work_hours(db, org) == levels.WorkHours(start="08:00", end="17:30")        # mặc định (không settings)
     await db.execute(text("UPDATE core.organizations SET settings = settings || CAST(:s AS jsonb) WHERE id = :o"),
                      {"s": orjson.dumps({"intel": {"work_start": "07:30", "work_end": "16:00"}}).decode(), "o": org})
-    assert await questions.work_hours_of(db, org) == levels.WorkHours(start="07:30", end="16:00")
+    assert await signals.org_work_hours(db, org) == levels.WorkHours(start="07:30", end="16:00")
     await db.execute(text("UPDATE core.organizations SET settings = settings || CAST(:s AS jsonb) WHERE id = :o"),
                      {"s": orjson.dumps({"intel": {"work_start": "25:99", "work_end": "17:30"}}).decode(), "o": org})
-    assert (await questions.work_hours_of(db, org)).start == "08:00"                                      # sai định dạng ⇒ mặc định
+    assert (await signals.org_work_hours(db, org)).start == "08:00"                                      # sai định dạng ⇒ mặc định
 
 
 async def test_p3b_questions_emit_and_refresh_use_work_hours(db: AsyncSession) -> None:
