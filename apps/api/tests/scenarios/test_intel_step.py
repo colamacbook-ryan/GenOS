@@ -1,7 +1,7 @@
 # ruff: noqa: E501
 """Bộ chạy G-KB TỪNG BƯỚC (`scripts/intel-eval/step.py`): vòng `init → next → submit → … → DONE → export` chạy PIPELINE THẬT (replay + ingest +
 GroupTurns + extract + verify) với một "agent giả" thay chỗ model: câu trả lời cố định hợp lệ; một lượt cố ý trả chuỗi hỏng để chứng minh đường
-thử lại MỘT lần kèm lỗi (lượt `_c2`). Tiến trình nền dùng DB `gh_step_*` + Redis DB riêng (mặc định 9, đổi bằng GH_STEP_TEST_REDIS)."""
+thử lại MỘT lần kèm lỗi (lượt `_c2`). Tiến trình nền dùng DB `gh_step_*` + Redis DB riêng (mặc định 9, lượt gh_app 8; đổi bằng GH_STEP_TEST_REDIS)."""
 
 import json
 import os
@@ -18,7 +18,10 @@ from tests.scenarios import intel_helpers as h
 
 STEP = h.REPO / "scripts" / "intel-eval" / "step.py"
 PG = os.environ.get("GH_TEST_PG", "postgresql://postgres:postgres@localhost:5432")
-REDIS = os.environ.get("GH_STEP_TEST_REDIS", "redis://localhost:6379/9")
+# Hai lượt pytest song song của CI (superuser + gh_app) cùng chạy file này ở đầu bộ test: `step init --force` FLUSHDB Redis
+# của lần chạy ⇒ mỗi lượt một DB riêng (9 / 8), không lượt này xoá Redis của tiến trình nền lượt kia.
+REDIS = os.environ.get("GH_STEP_TEST_REDIS") or (
+    "redis://localhost:6379/8" if os.environ.get("GH_TEST_APP_ROLE") == "1" else "redis://localhost:6379/9")
 PHONE = "0901234567"
 
 
