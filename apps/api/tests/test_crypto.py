@@ -1,5 +1,8 @@
 import base64
 import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 from cryptography.exceptions import InvalidTag
@@ -58,3 +61,17 @@ def test_password_and_pin_hashing() -> None:
     assert h.startswith("$argon2id$")
     assert crypto.verify_secret(h, "246810") and not crypto.verify_secret(h, "246811")
     assert not crypto.verify_secret(None, "246810")
+
+
+def test_production_hasher_keeps_strong_argon2_parameters() -> None:
+    """tests/conftest.py thay `crypto._hasher` bằng tham số tối thiểu cho nhanh — chốt rằng mã sản phẩm (nạp trong một
+    tiến trình con sạch, không qua conftest) vẫn băm argon2id tham số mạnh và xác minh được hash tham số thấp cũ."""
+    code = ("from gh import crypto; h = crypto._hasher; s = crypto.hash_secret('246810'); "
+            "print(h.time_cost, h.memory_cost, h.parallelism, s.split('$')[3], crypto.verify_secret(s, '246810'))")
+    out = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[1], check=True,
+                         capture_output=True, text=True, timeout=60).stdout.split()
+    t, m, p, params, ok = out
+    assert int(t) >= 3 and int(m) >= 64 * 1024 and int(p) >= 1, out
+    assert params == f"m={m},t={t},p={p}" and ok == "True"
+    # Test chạy hasher rẻ (cùng thuật toán argon2id) — override của conftest đang có hiệu lực.
+    assert crypto._hasher.time_cost == 1 and crypto.hash_secret("x").startswith("$argon2id$v=19$m=8,t=1,p=1$")
