@@ -50,6 +50,7 @@ NON_INTEL_KINDS = ("system", "legacy")
 SOURCE_RELIABILITY = {"owner": 1.0, "rule": 1.0, "insider": 0.90, "member": 0.75, "outsider": 0.50, "forwarded": 0.40}
 PRIORITY_OF = {"red": "P1", "amber": "P2", "grey": "P3", "off": "P3"}
 MAX_QUOTE_DISPLAY = 80
+FEEDBACK_REASONS = ("still_buying", "not_urgent", "staff_handled")     # nút Sai 3 lý do (r7, CNS-168; CHECK ở migration 0045)
 DEFAULT_TTL = {"nghia_vu_loi_hua": 7, "viec_han": 7, "cau_hoi_cho_xu_ly": 3, "su_kien_dip": 14, "suc_khoe_an_toan": 14,
                "xung_dot_khieu_nai": 7, "quan_he_nong_nguoi": 14, "co_hoi_ket_noi": 7, "rui_ro_lua_dao": 14, "thi_truong_thong_tin": 7}
 
@@ -206,6 +207,31 @@ async def cap_lock(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, wait: 
     return day if got else None
 
 
+def work_hours_of(s: dict[str, Any], org_id: uuid.UUID) -> levels.WorkHours:
+    """Giờ làm việc từ settings `intel.work_start` / `intel.work_end` (mặc định 08:00–17:30; sai định dạng ⇒ mặc định + log).
+    Cùng cách đọc với `detectors/questions.work_hours_of` của P3b — P6 gộp về một hàm chung."""
+    return levels.WorkHours(start=_hhmm(s, "work_start", "08:00", org_id), end=_hhmm(s, "work_end", "17:30", org_id))
+
+
+def ramp_start(s: dict[str, Any], installed: datetime, org_id: uuid.UUID | None = None) -> datetime | None:
+    """Mốc bắt đầu chạy thử hiệu lực = muộn hơn của (cài, `ramp_started_at`). `ramp_started_at` có giá trị mà sai định dạng ⇒ None (bên gọi coi như
+    chưa qua ngày nào, ghi log — fail-safe: không bao giờ tự đẩy thật vì cấu hình hỏng)."""
+    raw = s.get("ramp_started_at")
+    ramp = profile_read.parse_when(raw)
+    if ramp is None:
+        if raw not in (None, ""):
+            log.warning("intel settings: ramp_started_at sai định dạng ở tổ chức %s, coi như vừa bắt đầu chạy thử", org_id)
+            return None
+        return _aware(installed)
+    return max(_aware(installed), _aware(ramp))
+
+
+def ramp_days(s: dict[str, Any], installed: datetime, now: datetime, org_id: uuid.UUID | None = None) -> float:
+    """R4: `days_since_install` = min(ngày từ cài, ngày từ `intel.ramp_started_at`). Thiếu ramp ⇒ ngày từ cài; ramp sai định dạng ⇒ 0 + log."""
+    start = ramp_start(s, installed, org_id)
+    return 0.0 if start is None else max(0.0, (_aware(now) - start).total_seconds() / 86400.0)
+
+
 async def delivery_state(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, exclude: uuid.UUID | None = None) -> levels.DeliveryState:
     s, installed = await intel_settings(db, org_id)
     quiet = _quiet_of(s, org_id)
@@ -220,11 +246,13 @@ async def delivery_state(db: AsyncSession, org_id: uuid.UUID, now: datetime, *, 
     return levels.DeliveryState(
         intel_mode="shadow" if s.get("mode") == "shadow" else "live",
         red_cap_per_day=_int_setting(s, "red_cap_per_day", 3, org_id), reds_pushed_today=int(reds),
-        days_since_install=max(0.0, (_aware(now) - _aware(installed)).total_seconds() / 86400.0),
-        # v0.1.76: cổng thường chưa được đẩy ngay ở bản này ⇒ không ramp, không M1 ⇒ `compute` ra 🔴 bóng (digest_top + would_push)
+        # v0.1.77 (R4): chạy thử 14 ngày tính từ `ramp_started_at` (migration 0045 đặt lúc lên bản này) — trong chạy thử `compute` ra 🔴 bóng
+        # (digest_top + would_push) cho bốn cổng thường; qua 14 ngày VÀ mã ∈ `m1_passed_gates` (job đêm, M1 gộp n ≥ 10) mới đẩy thật.
+        days_since_install=ramp_days(s, installed, now, org_id),
         ramp_early_enable=levels.REGULAR_PUSH_ENABLED and s.get("ramp_gates") == "push",
         m1_passed_gates=gates("m1_passed_gates") if levels.REGULAR_PUSH_ENABLED else [], low_precision_gates=gates("low_precision_gates"), quiet_hours=quiet,
-        money_small_vnd=int(s.get("money_small_vnd") or 5_000_000), money_big_vnd=int(s.get("money_big_vnd") or 50_000_000))
+        money_small_vnd=int(s.get("money_small_vnd") or 5_000_000), money_big_vnd=int(s.get("money_big_vnd") or 50_000_000),
+        work_hours=work_hours_of(s, org_id))
 
 
 # ─── bằng chứng ───────────────────────────────────────────────────────────────
@@ -277,6 +305,27 @@ def _raw_ids(evidence: list[dict[str, Any]], extra: uuid.UUID | None) -> list[st
 
 
 TXN_ORDER = ("none", "pending", "just_done", "done_cannot_stop")
+#: Khoá phụ NGOÀI `SignalIn` (extra=forbid) trong `biz.alerts.level_input` — bên ghi (upsert) thêm, bên đọc lại tách ra trước khi validate.
+#: `stage_eff` = bậc hành vi khách TRƯỚC θ1 (`complaint_stage` hoặc đường tương thích `said_will_leave`), để P2 đếm `prior_threat_no_exit_n` (§4.2.1 (h)).
+LEVEL_INPUT_EXTRA = ("stage_eff",)
+RULE_PROJECTION = 2          # `biz.alerts.projection_version` của thẻ tạo dưới luật r7; thẻ cũ (1) chấm Đúng/Sai vẫn tính là r6 (M1 R4 chỉ đếm r7)
+
+
+def load_level_input(raw: Any) -> levels.SignalIn:
+    """`biz.alerts.level_input` (jsonb) → `SignalIn`: bỏ khoá phụ `LEVEL_INPUT_EXTRA` (không thuộc hợp đồng `levels`)."""
+    d = {k: v for k, v in dict(raw).items() if k not in LEVEL_INPUT_EXTRA}
+    return levels.SignalIn.model_validate(d)
+
+
+def stage_eff_pre(s: levels.SignalIn) -> str | None:
+    """Bậc hành vi TRƯỚC θ1 cho hai loại khiếu nại/quan hệ (null ⇒ đường tương thích); loại khác ⇒ None."""
+    if s.kind not in ("xung_dot_khieu_nai", "quan_he_nong_nguoi"):
+        return None
+    return s.complaint_stage or ("ultimatum" if s.flags.said_will_leave else "voice")
+
+
+def rule_version_of(projection_version: int | None) -> str:
+    return "r7" if (projection_version or 1) >= RULE_PROJECTION else "r6"
 
 
 def _union_people(a: list[levels.PersonRel], b: list[levels.PersonRel]) -> list[levels.PersonRel]:
@@ -288,6 +337,17 @@ def _union_people(a: list[levels.PersonRel], b: list[levels.PersonRel]) -> list[
         else:
             out[p.ref] = p
     return list(out.values())
+
+
+STAGE_RANK = {"vent": 0, "voice": 1, "ultimatum": 2, "third_party": 2, "exit_pending": 3, "exit_done": 4}
+
+
+def _merge_stage(old: str | None, new: str | None) -> str | None:
+    """Bậc hành vi gộp = bậc CAO nhất (vent < voice < ultimatum ≈ third_party < exit_pending < exit_done); hoà ⇒ bản mới. Đã có exit_* thì không
+    bao giờ bị bản sau (voice/third_party…) kéo xuống."""
+    if old is None or new is None:
+        return new or old
+    return new if STAGE_RANK[new] >= STAGE_RANK[old] else old
 
 
 def merge_level_input(old: levels.SignalIn, new: levels.SignalIn) -> levels.SignalIn:
@@ -304,6 +364,17 @@ def merge_level_input(old: levels.SignalIn, new: levels.SignalIn) -> levels.Sign
     d2 = levels.D2(verdict="agree", error=False, flags_confirmed=sorted(set(old.d2.flags_confirmed) | set(new.d2.flags_confirmed)),
                    harm_what=new.d2.harm_what or old.d2.harm_what) if agree else (new.d2 if (new.d2.verdict or new.d2.error) else old.d2)
     money_new = (new.money_vnd or 0) >= (old.money_vnd or 0)
+    # r7 (c′): trường vắng ở bản mới KHÔNG làm rơi bản cũ. `asks_for_owner` gộp OR và THẮNG `staff_owned` (CNS-179: ai đòi gặp chủ thì
+    # không còn "NV đang lo"); `prior_threat_no_exit_n` lấy max; nested (Promise/Opportunity/Thread) chỉ giữ phần "đã có nguồn" của bản cũ.
+    asks = old.asks_for_owner or new.asks_for_owner
+    staff_owned = new.staff_owned and not asks                 # detector tính lại mỗi lượt: khách nhắn sau NV ⇒ false (CNS-179)
+    staff_ref = new.staff_ref if staff_owned else None
+    promise = new.promise.model_copy(update={"nudged_by_customer": old.promise.nudged_by_customer or new.promise.nudged_by_customer,
+                                             "fixed_occasion": old.promise.fixed_occasion or new.promise.fixed_occasion})
+    opportunity = new.opportunity.model_copy(update={"need_fields_n": new.opportunity.need_fields_n if new.opportunity.need_fields_n is not None
+                                                     else old.opportunity.need_fields_n})
+    thread = new.thread.model_copy(update={"customer_audience_n": new.thread.customer_audience_n if new.thread.customer_audience_n is not None
+                                           else old.thread.customer_audience_n})
 
     def latest(a: datetime | None, b: datetime | None) -> datetime | None:
         return max((x for x in (a, b) if x is not None), default=None, key=_aware)
@@ -336,10 +407,26 @@ def merge_level_input(old: levels.SignalIn, new: levels.SignalIn) -> levels.Sign
         "subject_entity_id": new.subject_entity_id or old.subject_entity_id,
         "goal_priority1_match_valid": old.goal_priority1_match_valid or new.goal_priority1_match_valid,
         "goods_risk": old.goods_risk or new.goods_risk,
+        "complaint_stage": _merge_stage(old.complaint_stage, new.complaint_stage), "asks_for_owner": asks,
+        "public_venue": new.public_venue or old.public_venue,
+        "prior_threat_no_exit_n": max(old.prior_threat_no_exit_n, new.prior_threat_no_exit_n),
+        "staff_owned": staff_owned, "staff_ref": staff_ref,
+        "deadline_granularity": new.deadline_granularity or old.deadline_granularity,
+        "same_customer_day_red": old.same_customer_day_red or new.same_customer_day_red,
+        "promise": promise, "opportunity": opportunity, "thread": thread,
         "mute": None, "case_prior": None})
 
 
 # ─── upsert ───────────────────────────────────────────────────────────────────
+
+def _stored_level_input(li: levels.SignalIn) -> dict[str, Any]:
+    """Dạng lưu của `level_input`: `SignalIn` + khoá phụ `stage_eff` (chỉ hai loại khiếu nại/quan hệ)."""
+    d = li.model_dump(mode="json")
+    st = stage_eff_pre(li)
+    if st is not None:
+        d["stage_eff"] = st
+    return d
+
 
 def _weak_key(ck: str | None) -> bool:
     """Khoá dự phòng của `levels.case_key` (không đủ dữ kiện ⇒ theo tin gốc `raw|` hoặc băm `anon|`)."""
@@ -351,7 +438,7 @@ def _weak_key(ck: str | None) -> bool:
 def _merge_row_input(row: Any, li: levels.SignalIn) -> levels.SignalIn:
     """Hợp đầu vào mức của dòng đã có (fail-high) và giữ riêng tư DÍNH."""
     if row is not None and row.level_input is not None:
-        li = merge_level_input(levels.SignalIn.model_validate(row.level_input), li)   # HỢP, không thay thế (fail-high)
+        li = merge_level_input(load_level_input(row.level_input), li)   # HỢP, không thay thế (fail-high)
     if row is not None and row.privacy == "console_pin":
         li = li.model_copy(update={"privacy": "console_pin"})   # riêng tư DÍNH: chặt nhất thắng, gộp không bao giờ hạ (§8.1)
     return li
@@ -467,7 +554,7 @@ async def upsert(db: AsyncSession, org_id: uuid.UUID, inp: UpsertIn, now: dateti
         raw_ids = list(dict.fromkeys([*raw_ids, *(str(x) for x in w.raw_event_ids)]))
         li = _merge_row_input(w, li)
     li = _merge_row_input(row, li)
-    level_input = li.model_dump(mode="json")
+    level_input = _stored_level_input(li)
     expires = inp.expires_at or (now + timedelta(days=DEFAULT_TTL.get(inp.kind, 7)))
     common = {"su": inp.summary, "sa": inp.suggested_action, "li": orjson.dumps(level_input).decode(),
               "of": owner_fact_ids, "fx": orjson.dumps({**inp.facts, "action_executable": inp.action_executable}).decode(),
@@ -496,7 +583,7 @@ async def upsert(db: AsyncSession, org_id: uuid.UUID, inp: UpsertIn, now: dateti
             merged = _merge_evidence(list(strong.evidence or []), merged)
             raw_ids = list(dict.fromkeys([*raw_ids, *(str(x) for x in strong.raw_event_ids)]))
             sid = strong.id
-            common = {**common, "li": orjson.dumps(li.model_dump(mode="json")).decode()}
+            common = {**common, "li": orjson.dumps(_stored_level_input(li)).decode()}
             await _update_row(db, strong.id, common, merged, li, inp, raw_ids, None)
         for w in absorbed:
             if w.id != sid:
@@ -510,15 +597,15 @@ async def upsert(db: AsyncSession, org_id: uuid.UUID, inp: UpsertIn, now: dateti
             INSERT INTO biz.alerts (org_id, code, alert_type, priority, recipient_user_id, subject_type, subject_id, title, summary,
                                     suggested_action, evidence, evidence_n, personnel_related, kind, privacy, case_key, dedupe_key,
                                     raw_event_id, raw_event_ids, thread_key, group_id, detector, detector_version, fact_ids,
-                                    owner_fact_ids, facts, level_input, due_at, expires_at)
+                                    owner_fact_ids, facts, level_input, due_at, expires_at, projection_version)
             VALUES (:o, :c, :at, 'P3', :u, :st, :si, :ti, :su, :sa, CAST(:ev AS jsonb), :n, :pr, :k, :pv, :ck, :ck, :re,
                     CAST(:raw AS uuid[]), :tk, :g, :d, :dv, CAST(:fi AS uuid[]), CAST(:of AS uuid[]), CAST(:fx AS jsonb),
-                    CAST(:li AS jsonb), :due, :ex)
+                    CAST(:li AS jsonb), :due, :ex, :pvn)
             RETURNING id"""),
             {**common, "o": org_id, "c": code, "at": inp.alert_type, "u": owner, "st": inp.subject_type, "si": inp.subject_id,
              "ti": inp.title, "ev": orjson.dumps(ev).decode(), "n": len(ev), "pr": li.privacy == "console_pin", "k": inp.kind,
              "pv": li.privacy, "ck": inp.case_key, "re": raw_ids[0] if raw_ids else None, "raw": raw_ids, "tk": inp.thread_key,
-             "g": inp.group_id, "d": inp.detector, "fi": inp.fact_ids})).scalar_one()
+             "g": inp.group_id, "d": inp.detector, "fi": inp.fact_ids, "pvn": RULE_PROJECTION})).scalar_one()
         created = True
     if inp.person_ids:
         await db.execute(text("UPDATE biz.alerts SET facts = facts || jsonb_build_object('person_ids', CAST(:p AS jsonb)) WHERE id = :i"),
@@ -529,14 +616,15 @@ async def upsert(db: AsyncSession, org_id: uuid.UUID, inp: UpsertIn, now: dateti
 
 # ─── relane: một nơi tính mức + ngăn + phân phối ─────────────────────────────
 
-def _lane(status: str, level: str, has_task: bool, has_open_ask: bool, prev_lane: str) -> str:
+def _lane(status: str, level: str, has_task: bool, has_open_ask: bool, prev_lane: str, staff_owned: bool = False) -> str:
     """Luật ngăn r4 §4.3: kết thúc ⇒ giữ ngăn cuối; giao việc ⇒ delegated; acknowledged ⇒ handling; có ask ⇒ decide;
-    open ≥ 🟠 ⇒ decide; còn lại ⇒ fyi."""
+    open ≥ 🟠 ⇒ decide; còn lại ⇒ fyi. r7.1 (CNS-186): NV đã nhận (`staff_owned`) ⇒ handling "Đang xử lý" (không phải `delegated`: ở code
+    `delegated` nghĩa là Sếp giao việc)."""
     if status in TERMINAL:
         return prev_lane
     if has_task:
         return "delegated"
-    if status == "acknowledged":
+    if status == "acknowledged" or staff_owned:
         return "handling"
     if has_open_ask or level in ("red", "amber"):
         return "decide"
@@ -568,20 +656,40 @@ TOP_DELIVERY = ("digest_top", "digest_morning")
 
 
 async def relane(db: AsyncSession, org_id: uuid.UUID, signal_id: uuid.UUID, now: datetime) -> Signal:
-    sig = await _relane(db, org_id, signal_id, now, skip_locked=False)
+    sig = await _relane(db, org_id, signal_id, now, skip_locked=False, by_clock=False)
     if sig is None:                                        # không xảy ra khi skip_locked=False
         raise SignalError("không tìm thấy tín hiệu")
     return sig
 
 
-async def _relane(db: AsyncSession, org_id: uuid.UUID, signal_id: uuid.UUID, now: datetime, *, skip_locked: bool) -> Signal | None:
-    """`skip_locked` (job đồng hồ): dòng đang bị lượt khác khoá ⇒ bỏ qua (trả None), lượt đó tự relane khi xong."""
+async def same_customer_day_red(db: AsyncSession, org_id: uuid.UUID, signal_id: uuid.UUID, subject_id: uuid.UUID | None,
+                                entity_id: uuid.UUID | None, now: datetime) -> bool:
+    """(c′) r7.1: cùng khách đã có thẻ G4 🔴 `push_now` / `digest_morning` / `merge` trong cùng ngày VN (CNS-170/191). Thẻ bóng (`digest_top` +
+    `would_push`) và thẻ bị trần (🟠 `digest_top`) KHÔNG tính để không mất mẫu M1. Khách = `subject_id` (người) hoặc `subject_entity_id` của
+    đầu vào mức; không biết khách ⇒ False (không suy). Chỉ đọc ở N10 D-T5, Bước 0 không đọc (B2)."""
+    if subject_id is None and entity_id is None:
+        return False
+    return bool((await db.execute(text("""
+        SELECT EXISTS (SELECT 1 FROM biz.alerts WHERE org_id = :o AND id <> :i AND status IN ('open', 'acknowledged', 'resolved')
+          AND gate = :g4 AND level = 'red' AND delivery IN ('push_now', 'digest_morning', 'merge')
+          AND ((CAST(:sj AS uuid) IS NOT NULL AND subject_type = 'person' AND subject_id = :sj)
+               OR (CAST(:en AS text) IS NOT NULL AND level_input ->> 'subject_entity_id' = :en))
+          AND (COALESCE(pushed_at, level_at, created_at) AT TIME ZONE 'Asia/Ho_Chi_Minh')::date
+              = (CAST(:now AS timestamptz) AT TIME ZONE 'Asia/Ho_Chi_Minh')::date)"""),
+        {"o": org_id, "i": signal_id, "g4": levels.G4, "sj": subject_id, "en": str(entity_id) if entity_id else None, "now": now})).scalar_one())
+
+
+async def _relane(db: AsyncSession, org_id: uuid.UUID, signal_id: uuid.UUID, now: datetime, *, skip_locked: bool,
+                  by_clock: bool = False) -> Signal | None:
+    """`skip_locked` (job đồng hồ): dòng đang bị lượt khác khoá ⇒ bỏ qua (trả None), lượt đó tự relane khi xong. `by_clock` (job `intel_reeval`):
+    tính lại THEO ĐỒNG HỒ — mục đang `digest_top` chưa vào bản tin nào mà ra `digest`/`digest_low` thì GIỮ đầu bản tin tới bản tin kế
+    (`held_for_digest`, (e) CNS-177)."""
     day = await cap_lock(db, org_id, now, wait=not skip_locked)   # khoá trần TRƯỚC khoá dòng (F1); job đồng hồ không chờ
     if day is None:
         return None                                        # trần đang bị lượt khác giữ ⇒ để lượt sau
     r = (await db.execute(text(f"""
         SELECT id, kind, status, lane, level, gate, delivery, case_key, thread_key, group_id, detector, level_input, case_state, pushed_at,
-               raw_event_ids,
+               raw_event_ids, subject_type, subject_id, digest_at,
                would_push_at, capped_at, cap_day, suggested_action, facts, expires_at, ask_id
         FROM biz.alerts WHERE id = :i AND org_id = :o FOR UPDATE{" SKIP LOCKED" if skip_locked else ""}"""),  # noqa: S608
         {"i": signal_id, "o": org_id})).one_or_none()
@@ -591,7 +699,7 @@ async def _relane(db: AsyncSession, org_id: uuid.UUID, signal_id: uuid.UUID, now
         raise SignalError("không tìm thấy tín hiệu")
     if r.status in TERMINAL or r.level_input is None or r.kind not in INTEL_KINDS:
         return await _finish_lane(db, org_id, r, r.level, r.status)
-    s = levels.SignalIn.model_validate(r.level_input)
+    s = load_level_input(r.level_input)
     facts = r.facts if isinstance(r.facts, dict) else {}
     mute = await mutes.active(db, org_id, kind=r.kind, group_id=r.group_id, person_ids=facts.get("person_ids") or [], detector=r.detector,
                               now=now)
@@ -608,11 +716,17 @@ async def _relane(db: AsyncSession, org_id: uuid.UUID, signal_id: uuid.UUID, now
     prior = _merge_case_prior(states)
     if prior is not None:
         upd["case_prior"] = prior
+    day_red = await same_customer_day_red(db, org_id, r.id, r.subject_id if r.subject_type == "person" else None, s.subject_entity_id, now)
+    if day_red != s.same_customer_day_red:
+        upd["same_customer_day_red"] = day_red
     s = s.model_copy(update=upd)
     st = await delivery_state(db, org_id, now, exclude=r.id)
     pol = await contexts.policy(db, org_id, r.thread_key or "")
     prof = await profile_read.snapshot(db, org_id)
     lv = levels.compute(s, prof, pol, st, now)
+    if (by_clock and r.delivery in TOP_DELIVERY and r.digest_at is None and r.status in OPEN
+            and lv.delivery in ("digest", "digest_low") and lv.level != "off"):
+        lv = lv.model_copy(update={"delivery": r.delivery, "reasons": [*lv.reasons, "held_for_digest"]})   # chưa lên bản tin nào ⇒ giữ đầu bản tin
     imp, urg = levels.axes(s, prof, st, now)
     axis = s.confidence_exist if (r.kind in ("rui_ro_lua_dao", "suc_khoe_an_toan") or lv.gate in levels.BYPASS_GATES
                                   or lv.candidate in levels.BYPASS_GATES) else s.confidence_content
@@ -672,10 +786,10 @@ async def _relane(db: AsyncSession, org_id: uuid.UUID, signal_id: uuid.UUID, now
                                target_type="signal", target_id=str(r.id), result="ok",
                                detail={"level": lv.level, "gate": lv.gate, "candidate": lv.candidate, "delivery": lv.delivery,
                                        "reasons": lv.reasons})
-    return await _finish_lane(db, org_id, r, lv.level, status)
+    return await _finish_lane(db, org_id, r, lv.level, status, staff_owned="staff_owned" in lv.reasons)
 
 
-async def _finish_lane(db: AsyncSession, org_id: uuid.UUID, r: Any, level: str, status: str) -> Signal:
+async def _finish_lane(db: AsyncSession, org_id: uuid.UUID, r: Any, level: str, status: str, *, staff_owned: bool = False) -> Signal:
     facts = r.facts if isinstance(r.facts, dict) else {}
     ask_id = r.ask_id
     if status in TERMINAL:
@@ -688,7 +802,7 @@ async def _finish_lane(db: AsyncSession, org_id: uuid.UUID, r: Any, level: str, 
                                  {"i": r.id})).first() is not None
     has_ask = ask_id is not None and (await db.execute(text("SELECT 1 FROM ops.asks WHERE id = :a AND state = 'open'"),
                                                        {"a": ask_id})).first() is not None
-    lane = _lane(status, level, has_task, has_ask, r.lane)
+    lane = _lane(status, level, has_task, has_ask, r.lane, staff_owned)
     out = (await db.execute(text(f"UPDATE biz.alerts SET lane = :l, ask_id = :a WHERE id = :i RETURNING {_COLS}"),  # noqa: S608
                             {"l": lane, "a": ask_id, "i": r.id})).one()
     return _sig(out)
@@ -732,22 +846,27 @@ async def resolve_by_owner(db: AsyncSession, org_id: uuid.UUID, signal_id: uuid.
 
 
 async def feedback(db: AsyncSession, org_id: uuid.UUID, signal_id: uuid.UUID, *, verdict: str, verdict_by: str, now: datetime,
-                   user_id: uuid.UUID | None = None, note: str | None = None) -> Signal:
-    """Đúng/Sai (chỉ-thêm ở `biz.signal_feedback`). "Sai" ⇒ `dismissed`, TRỪ khi máy bác (`system`) một tín hiệu Sếp đã bấm "đúng"."""
+                   user_id: uuid.UUID | None = None, note: str | None = None, reason: str | None = None) -> Signal:
+    """Đúng/Sai (chỉ-thêm ở `biz.signal_feedback`). "Sai" ⇒ `dismissed`, TRỪ khi máy bác (`system`) một tín hiệu Sếp đã bấm "đúng".
+    `reason` (r7, nút Sai 3 lý do): chỉ đi với "Sai" — `still_buying` | `not_urgent` | `staff_handled`. `rule_version` gán RÕ theo thẻ được chấm
+    (`projection_version`), không theo lúc chấm và không dựa DEFAULT của cột (M1 R4 chỉ đếm 'r7')."""
     if verdict not in ("correct", "wrong", "unimportant", "missed"):
         raise SignalError("verdict không hợp lệ")
     if verdict_by not in ("owner", "system"):
         raise SignalError("verdict_by không hợp lệ")
+    if reason is not None and (reason not in FEEDBACK_REASONS or verdict != "wrong"):
+        raise SignalError("lý do chỉ dùng cho \"Sai\" và phải là một trong 3 lý do")
     await cap_lock(db, org_id, now)                        # khoá trần TRƯỚC khoá dòng (F1)
-    r = (await db.execute(text("""SELECT id, status, gate, candidate, would_push_at, feedback_verdict, verdict_by FROM biz.alerts
+    r = (await db.execute(text("""SELECT id, status, gate, candidate, would_push_at, feedback_verdict, verdict_by, projection_version FROM biz.alerts
                                   WHERE id = :i AND org_id = :o FOR UPDATE"""), {"i": signal_id, "o": org_id})).one_or_none()
     if r is None:
         raise SignalError("không tìm thấy tín hiệu")
     owner_said_correct = r.feedback_verdict == "correct" and r.verdict_by == "owner"
-    await db.execute(text("""INSERT INTO biz.signal_feedback (org_id, signal_id, verdict, verdict_by, user_id, gate, shadow, note, at)
-                             VALUES (:o, :s, :v, :b, :u, :g, :sh, :n, :at)"""),
+    await db.execute(text("""INSERT INTO biz.signal_feedback (org_id, signal_id, verdict, verdict_by, user_id, gate, shadow, note, at, reason, rule_version)
+                             VALUES (:o, :s, :v, :b, :u, :g, :sh, :n, :at, :rs, :rv)"""),
                      {"o": org_id, "s": r.id, "v": verdict, "b": verdict_by, "u": user_id, "g": r.gate or r.candidate,
-                      "sh": r.would_push_at is not None, "n": (note or None) and note[:500], "at": now})
+                      "sh": r.would_push_at is not None, "n": (note or None) and note[:500], "at": now, "rs": reason,
+                      "rv": rule_version_of(r.projection_version)})
     if verdict_by == "system" and owner_said_correct:
         return await relane(db, org_id, r.id, now)        # Sếp "đúng" thắng "máy bác" (CNS-060)
     await db.execute(text("UPDATE biz.alerts SET feedback_verdict = :v, verdict_by = :b, updated_at = now() WHERE id = :i"),
@@ -808,7 +927,7 @@ async def reevaluate_due(db: AsyncSession, now: datetime, *, org_id: uuid.UUID |
     changed: list[Signal] = []
     for r in rows:
         try:
-            sig = await _relane(db, r.org_id, r.id, now, skip_locked=True)
+            sig = await _relane(db, r.org_id, r.id, now, skip_locked=True, by_clock=True)
             await db.commit()
         except Exception as e:                              # noqa: BLE001 — một dòng lỗi không chặn dòng/tổ chức khác
             await db.rollback()

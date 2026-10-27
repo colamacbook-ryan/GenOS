@@ -1,0 +1,11 @@
+/* v0.1.77 (P4): banner chạy thử R4 + dòng bóng chờ chấm Đúng/Sai (nút Sai hỏi 1 trong 3 lý do). Dùng token sẵn có của system.css. */
+.intel-ramp-banner { display: flex; align-items: flex-start; gap: 10px; margin: 12px 0 0; padding: 10px 12px; border-left: 3px solid var(--color-warn); background: color-mix(in srgb, var(--color-warn) 8%, transparent); }
+.intel-ramp-banner__text { flex: 1 1 220px; min-width: 0; font-size: 12.5px; line-height: 1.5; color: var(--color-text); max-width: 72ch; }
+.intel-ramp-banner + .intel-row { border-top: 0; }
+.intel-shadow__item { align-items: flex-start; }
+.intel-shadow__kind { font-weight: 600; }
+.intel-shadow__why { display: block; margin-top: 2px; }
+.intel-shadow__verdict, .intel-shadow__why-pick { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; flex: none; }
+@media (max-width: 480px) {
+  .intel-shadow__item > .intel-shadow__verdict, .intel-shadow__item > .intel-shadow__why-pick { width: 100%; }
+}

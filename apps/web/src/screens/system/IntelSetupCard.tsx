@@ -5,7 +5,7 @@ import { useMe } from '../../lib/queries';
 import { toast } from '../../lib/toast';
 import { personTypeLabel } from '../people/peopleModel';
 import { CardError, InlineError, Panel, SkeletonLines } from '../common';
-import { useBulkContexts, useConfirmStaff, useIntelSetup, useSetStaff } from './intelQueries';
+import { useBulkContexts, useConfirmKeyCustomers, useConfirmStaff, useIntelSetup, useSetKeyCustomer, useSetStaff } from './intelQueries';
 import { contextLabel, vnTime, type IntelSetup } from './intelModel';
 
 /** Số dòng hiện sẵn mỗi bước; còn lại mở bằng nút "Xem thêm". */
@@ -13,8 +13,9 @@ const SHOW = 8;
 export const INTEL_SETUP_ANCHOR = 'intel-setup';
 
 /**
- * v0.1.76 (T14, Ryan chốt D3 2026-10-25 "hỏi lúc cài"): thẻ "Thiết lập Tình báo" — hai bước để Tình báo đầy đủ chạy đúng: (1) gán bối cảnh
+ * v0.1.76 (T14, Ryan chốt D3 2026-10-25 "hỏi lúc cài"): thẻ "Thiết lập Tình báo" — các bước để Tình báo đầy đủ chạy đúng: (1) gán bối cảnh
  * cho từng nhóm (API hàng loạt sẵn có), (2) đánh dấu ai là nhân viên (đường "Đánh dấu là nhân viên" của hồ sơ) rồi bấm "Đã khai xong".
+ * v0.1.77 (R2): (3) "Khách chủ chốt" — Sếp tích (trợ lý chỉ gợi ý tên), ghi `owner_key_relation` qua API Hồ sơ (Owner + mã PIN như bước 2).
  * Không chặn app: chưa xong thì các loại cần biết khách/nhân sự vẫn thận trọng; lừa đảo và an toàn luôn chạy. Chỉ Owner thấy.
  */
 export function IntelSetupCard() {
@@ -27,7 +28,7 @@ export function IntelSetupCard() {
     <div id={INTEL_SETUP_ANCHOR} className="intel-setup-anchor">
       <Panel
         title="Thiết lập Tình báo"
-        kicker={s?.ready ? 'Đã thiết lập xong' : 'Hai bước để Gen hiểu đúng nhóm và người của Sếp'}
+        kicker={s?.ready ? 'Đã thiết lập xong' : s?.key_customers ? 'Ba bước để Gen hiểu đúng nhóm, nhân viên và khách chủ chốt của Sếp' : 'Hai bước để Gen hiểu đúng nhóm và người của Sếp'}
         aside={s ? <StepRail s={s} /> : undefined}
         label="Thiết lập Tình báo"
         bodyClass="intel-setup"
@@ -45,12 +46,14 @@ export function IntelSetupCard() {
 }
 
 function StepRail({ s }: { s: IntelSetup }) {
-  const n = Number(s.groups.done) + Number(s.staff.done);
+  const total = s.key_customers ? 3 : 2;
+  const n = Number(s.groups.done) + Number(s.staff.done) + Number(s.key_customers?.done ?? 0);
   return (
-    <div className="intel-setup__rail" role="img" aria-label={`Đã xong ${n} trên 2 bước`}>
+    <div className="intel-setup__rail" role="img" aria-label={`Đã xong ${n} trên ${total} bước`}>
       <span className="intel-setup__seg" data-done={s.groups.done || undefined} />
       <span className="intel-setup__seg" data-done={s.staff.done || undefined} />
-      <span className="intel-setup__rail-text">{n}/2</span>
+      {s.key_customers ? <span className="intel-setup__seg" data-done={s.key_customers.done || undefined} /> : null}
+      <span className="intel-setup__rail-text">{n}/{total}</span>
     </div>
   );
 }
@@ -64,13 +67,19 @@ function SetupBody({ s }: { s: IntelSetup }) {
     return (
       <>
         <p className="intel-setup__lead" data-testid="intel-setup-ready">
-          Đã gán bối cảnh cho cả {s.groups.total} nhóm và khai {s.staff.staff_count} nhân viên. Gen dùng các nhãn này để nhận ra khách, lời hứa và việc của
-          Sếp.
+          Đã gán bối cảnh cho cả {s.groups.total} nhóm và khai {s.staff.staff_count} nhân viên
+          {s.key_customers ? `, ${s.key_customers.key_count} khách chủ chốt` : ''}. Gen dùng các nhãn này để nhận ra khách, lời hứa và việc của Sếp.
         </p>
         <details className="intel-setup__more">
           <summary>Sửa danh sách nhân viên</summary>
           <StaffStep s={s} />
         </details>
+        {s.key_customers ? (
+          <details className="intel-setup__more">
+            <summary>Sửa danh sách khách chủ chốt</summary>
+            <KeyCustomersStep s={s} />
+          </details>
+        ) : null}
       </>
     );
   }
@@ -79,10 +88,12 @@ function SetupBody({ s }: { s: IntelSetup }) {
       <ol className="intel-setup__steps">
         <GroupsStep s={s} />
         <StaffStep s={s} asStep />
+        {s.key_customers ? <KeyCustomersStep s={s} asStep /> : null}
       </ol>
       <p className="muted-note intel-setup__foot">
         Những loại theo bối cảnh nhóm ({s.gated_kinds.join(', ')}) chỉ chạy ở nhóm đã gán bối cảnh; nhóm chưa gán được xử lý thận trọng (ít báo).
-        Danh sách nhân viên giúp Gen phân biệt khách và nhân viên chính xác hơn. Lừa đảo và an toàn luôn báo, không phụ thuộc hai bước này.
+        Danh sách nhân viên giúp Gen phân biệt khách và nhân viên chính xác hơn; khách chủ chốt do Sếp khai quyết định ai được báo ngay khi doạ bỏ.
+        Lừa đảo và an toàn luôn báo, không phụ thuộc các bước này.
       </p>
     </>
   );
@@ -238,6 +249,71 @@ function StaffStep({ s, asStep }: { s: IntelSetup; asStep?: boolean }) {
   return (
     <li className="intel-setup__step" data-testid="intel-setup-staff">
       <StepHead n={2} title="Khai nhân viên" done={s.staff.done} state={s.staff.done ? 'Xong' : s.staff.staff_count ? `${s.staff.staff_count} người, chưa xác nhận` : 'Chưa khai'} />
+      {body}
+    </li>
+  );
+}
+
+function KeyCustomersStep({ s, asStep }: { s: IntelSetup; asStep?: boolean }) {
+  const set = useSetKeyCustomer();
+  const confirm = useConfirmKeyCustomers();
+  const [all, setAll] = useState(false);
+  const k = s.key_customers;
+  if (!k) return null;
+  const rows = k.customers;
+  const shown = all ? rows : rows.slice(0, SHOW);
+  const body = (
+    <>
+      <p className="muted-note">
+        Khách chủ chốt do Sếp khai — Gen chỉ gợi ý tên, không tự chấm điểm. Bật hoặc tắt cần mã PIN. Khách chủ chốt chê hoặc doạ bỏ sẽ được ưu tiên
+        báo ngay (sau giai đoạn chạy thử); khách thường chỉ lên đầu bản tin.
+      </p>
+      {rows.length === 0 ? (
+        <p className="muted-note">Chưa có khách nào được đánh dấu là khách hàng. Không có khách chủ chốt thì bấm “Đã khai xong” luôn.</p>
+      ) : (
+        <ul className="intel-setup__list">
+          {shown.map((c) => {
+            const on = c.key_fact_id !== null;
+            return (
+              <li key={c.id} className="intel-setup__row">
+                <span className="intel-setup__name">
+                  {c.name}
+                  {c.suggested && !on ? <span className="intel-setup__meta">Trợ lý gợi ý — chờ Sếp xác nhận</span> : null}
+                </span>
+                <Switch
+                  checked={on}
+                  label={`${c.name} là khách chủ chốt`}
+                  disabled={set.isPending}
+                  onChange={(v) =>
+                    set.mutate({ entityId: c.entity_id, factId: v ? null : c.key_fact_id }, { onSuccess: () => toast(v ? `Đã đánh dấu ${c.name} là khách chủ chốt` : `Đã bỏ đánh dấu ${c.name}`) })
+                  }
+                />
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {rows.length > SHOW ? (
+        <Button variant="ghost" size="sm" onClick={() => setAll((x) => !x)}>
+          {all ? 'Thu gọn' : `Xem thêm ${rows.length - SHOW} khách`}
+        </Button>
+      ) : null}
+      {k.done ? (
+        <p className="muted-note" role="status">
+          Đã khai xong{k.confirmed_at ? ` lúc ${vnTime(k.confirmed_at)}` : ''} — {k.key_count} khách chủ chốt. Bật/tắt ở trên vẫn có hiệu lực ngay.
+        </p>
+      ) : (
+        <Button variant="primary" size="sm" loading={confirm.isPending} onClick={() => confirm.mutate(undefined, { onSuccess: () => toast('Đã ghi nhận danh sách khách chủ chốt') })}>
+          {k.key_count ? `Đã khai xong (${k.key_count} khách chủ chốt)` : 'Đã khai xong — chưa có khách chủ chốt'}
+        </Button>
+      )}
+      <Err e={set.error ?? confirm.error} />
+    </>
+  );
+  if (!asStep) return <div className="intel-setup__step">{body}</div>;
+  return (
+    <li className="intel-setup__step" data-testid="intel-setup-key-customers">
+      <StepHead n={3} title="Khách chủ chốt" done={k.done} state={k.done ? 'Xong' : k.key_count ? `${k.key_count} khách, chưa xác nhận` : 'Chưa khai'} />
       {body}
     </li>
   );

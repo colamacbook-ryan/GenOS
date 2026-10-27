@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gh.auth import rbac, service
 from gh.auth.deps import current_user, require, require_owner
 from gh.biz.intel import access, catalog, digest, levels, mutes, signals
+from gh.biz.intel.pipes import metrics
 from gh.chassis import actionlog
 from gh.db import DB
 from gh.errors import ApiError, not_found, pin_required
@@ -103,16 +104,21 @@ async def get_signal(signal_id: uuid.UUID, user: service.CurrentUser = Depends(r
 class FeedbackIn(BaseModel):
     verdict: Literal["correct", "wrong", "unimportant", "missed"]
     note: str | None = Field(default=None, max_length=500)
+    #: r7 (nút Sai 3 lý do, CNS-168): chỉ đi với `verdict="wrong"` — "khách vẫn mua" · "không gấp" · "NV lo rồi" ⇒ `biz.signal_feedback.reason`.
+    reason: Literal["still_buying", "not_urgent", "staff_handled"] | None = None
 
 
 @router.post("/signals/{signal_id}/feedback")
 async def signal_feedback(signal_id: uuid.UUID, body: FeedbackIn, user: service.CurrentUser = Depends(require_owner),
                           db: AsyncSession = DB) -> dict[str, Any]:
     await _load(db, user, signal_id)
-    sig = await signals.feedback(db, user.org_id, signal_id, verdict=body.verdict, verdict_by="owner", now=clock.now(), user_id=user.id,
-                                 note=body.note)
+    try:
+        sig = await signals.feedback(db, user.org_id, signal_id, verdict=body.verdict, verdict_by="owner", now=clock.now(), user_id=user.id,
+                                     note=body.note, reason=body.reason)
+    except signals.SignalError as e:
+        raise ApiError(422, "VALIDATION", "Lý do chỉ dùng khi bấm “Sai”", detail=str(e)) from None
     await actionlog.record(db, org_id=user.org_id, actor_type="user", actor_id=user.actor_id, action="intel.signal.feedback",
-                           target_type="signal", target_id=str(signal_id), result="ok", detail={"verdict": body.verdict})
+                           target_type="signal", target_id=str(signal_id), result="ok", detail={"verdict": body.verdict, "reason": body.reason})
     return {"ok": True, "status": sig.status, "level": sig.level}
 
 
@@ -197,7 +203,8 @@ async def intel_metrics(user: service.CurrentUser = Depends(require_owner), db: 
     would = int((await db.execute(text("SELECT count(*) FROM biz.alerts WHERE org_id = :o AND would_push_at IS NOT NULL"),
                                   {"o": user.org_id})).scalar_one())
     gates = [await signals.precision(db, user.org_id, g) for g in levels.GATES]
-    return {"open_by_level": {k: int(v) for k, v in counts.items()}, "precision_ci": gates, "shadow": {"would_push_n": would}}
+    return {"open_by_level": {k: int(v) for k, v in counts.items()}, "precision_ci": gates, "shadow": {"would_push_n": would},
+            "m1": await metrics.m1_ramp(db, user.org_id)}
 
 
 @router.get("/intel/digest/preview")

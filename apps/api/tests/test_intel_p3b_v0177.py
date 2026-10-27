@@ -116,7 +116,7 @@ async def _li_of_unit(db: AsyncSession, w: Any) -> levels.SignalIn:
     out = await promises.project_units(db, w.org, NOW)
     await db.commit()
     assert len(out) == 1
-    return levels.SignalIn.model_validate((await _rows(db, w.org, "nghia_vu_loi_hua"))[0].level_input)
+    return signals.load_level_input((await _rows(db, w.org, "nghia_vu_loi_hua"))[0].level_input)
 
 
 async def test_p3b_unit_v2_nudge_by_promisee_verified_sets_flag(db: AsyncSession) -> None:
@@ -233,7 +233,7 @@ async def test_p3b_unit_ptt2_source_class_insider_vs_member(db: AsyncSession) ->
                 v={"deadline_at": (NOW + timedelta(hours=3)).isoformat()}, gate=levels.G4, at=NOW - timedelta(hours=2))
     await promises.project_units(db, w2.org, NOW)
     await db.commit()
-    assert levels.SignalIn.model_validate((await _rows(db, w2.org, "nghia_vu_loi_hua"))[0].level_input).source_class == "member"   # người khác kể lại
+    assert signals.load_level_input((await _rows(db, w2.org, "nghia_vu_loi_hua"))[0].level_input).source_class == "member"   # người khác kể lại
 
 
 # ─── promises: đường sự thật (DB) ────────────────────────────────────────────
@@ -255,7 +255,7 @@ async def test_p3b_fact_path_ptt2_nudge_and_granularity(db: AsyncSession) -> Non
     out = await promises.project(db, w.org, NOW)
     await db.commit()
     assert len(out) == 1
-    li = levels.SignalIn.model_validate((await _rows(db, w.org, "nghia_vu_loi_hua"))[0].level_input)
+    li = signals.load_level_input((await _rows(db, w.org, "nghia_vu_loi_hua"))[0].level_input)
     assert li.promise.nudged_by_customer is True and li.deadline_granularity == "day"
     assert li.source_class == "insider"                                                # P-T2: tin gốc do chính NV (người hứa) gửi
 
@@ -269,7 +269,7 @@ async def test_p3b_fact_path_member_when_somebody_else_recounts(db: AsyncSession
     await db.commit()
     await promises.project(db, w.org, NOW)
     await db.commit()
-    assert levels.SignalIn.model_validate((await _rows(db, w.org, "nghia_vu_loi_hua"))[0].level_input).source_class == "member"
+    assert signals.load_level_input((await _rows(db, w.org, "nghia_vu_loi_hua"))[0].level_input).source_class == "member"
 
 
 # ─── promises: NV hẹn giờ ⇒ lời hứa với khách ────────────────────────────────
@@ -298,7 +298,7 @@ async def test_p3b_staff_deadline_commitment_becomes_promise_to_customer(db: Asy
     await db.commit()
     assert len(out) == 1
     r = (await _rows(db, w.org, "nghia_vu_loi_hua"))[0]
-    li = levels.SignalIn.model_validate(r.level_input)
+    li = signals.load_level_input(r.level_input)
     assert li.promise.to_customer is True and li.gate_candidate == levels.G4 and li.source_class == "insider"
     assert li.deadline_at == datetime(2026, 10, 23, 15, 0, tzinfo=VN) and li.deadline_granularity == "minute"
     assert r.facts["staff_unit_id"] == str(uid) and "unit_id" not in r.facts                  # KHÔNG `unit_id` (không chặn đường khiếu nại của đơn vị)
@@ -331,7 +331,7 @@ async def test_p3b_staff_commitment_customer_spoke_after_staff_is_nudged_not_blo
     out = await promises.project_staff_commitments(db, w.org, NOW)
     await db.commit()
     assert len(out) == 1
-    li = levels.SignalIn.model_validate((await _rows(db, w.org, "nghia_vu_loi_hua"))[0].level_input)
+    li = signals.load_level_input((await _rows(db, w.org, "nghia_vu_loi_hua"))[0].level_input)
     assert li.promise.nudged_by_customer is True and li.promise.to_customer is True
 
 
@@ -339,13 +339,13 @@ async def test_p3b_staff_commitment_refresh_sets_nudged_when_customer_messages_l
     w, _ = await _staff_commit_world(db)
     out = await promises.project_staff_commitments(db, w.org, NOW)
     await db.commit()
-    assert levels.SignalIn.model_validate((await _rows(db, w.org, "nghia_vu_loi_hua"))[0].level_input).promise.nudged_by_customer is False
+    assert signals.load_level_input((await _rows(db, w.org, "nghia_vu_loi_hua"))[0].level_input).promise.nudged_by_customer is False
     await promises.refresh_staff_commitments(db, w.org, NOW)                     # chưa có tin khách sau ⇒ không đổi
-    assert levels.SignalIn.model_validate((await _rows(db, w.org, "nghia_vu_loi_hua"))[0].level_input).promise.nudged_by_customer is False
+    assert signals.load_level_input((await _rows(db, w.org, "nghia_vu_loi_hua"))[0].level_input).promise.nudged_by_customer is False
     await mk_raw(db, w.org, w.channel, identity=w.ciid, body="15h30 rồi mà chưa thấy", group=w.group, at=NOW + timedelta(minutes=90))
     await promises.refresh_staff_commitments(db, w.org, NOW + timedelta(minutes=95))
     await db.commit()
-    li = levels.SignalIn.model_validate((await _rows(db, w.org, "nghia_vu_loi_hua"))[0].level_input)
+    li = signals.load_level_input((await _rows(db, w.org, "nghia_vu_loi_hua"))[0].level_input)
     assert li.promise.nudged_by_customer is True and li.flags.nudged is True and len(out) == 1
     assert await promises.refresh_staff_commitments(db, w.org, NOW + timedelta(minutes=96)) == []          # đã bật ⇒ không chọn lại
 
@@ -477,20 +477,20 @@ async def test_p3b_questions_emit_and_refresh_use_work_hours(db: AsyncSession) -
     q = questions.QuestionIn(asked_at=asked, raw_event_id=raw, asker="customer", asker_person_id=cpid, blocks_work=True, thread_key=f"g:{w.group}", group_id=w.group)
     sig = await questions.emit(db, w.org, q, datetime(2026, 10, 24, 8, 30, tzinfo=VN))
     await db.commit()
-    li = levels.SignalIn.model_validate((await _rows(db, w.org, "cau_hoi_cho_xu_ly"))[0].level_input)
+    li = signals.load_level_input((await _rows(db, w.org, "cau_hoi_cho_xu_ly"))[0].level_input)
     assert li.owner_unanswered_h == pytest.approx(1.0) and li.in_work_hours is True
     nxt = (await db.execute(text("SELECT next_eval_at FROM biz.alerts WHERE id = :i"), {"i": sig.id})).scalar_one()
     assert nxt is not None and nxt <= datetime(2026, 10, 24, 9, 30, tzinfo=VN)                           # đồng hồ thức dậy khi đủ 2 giờ trong giờ làm
     # 09:35 sáng hôm sau: đủ > 2 giờ chờ trong giờ làm ⇒ làm mới ghi owner_unanswered_h > 2
     changed = await questions.refresh_waiting(db, w.org, datetime(2026, 10, 24, 9, 35, tzinfo=VN))
     await db.commit()
-    li2 = levels.SignalIn.model_validate((await _rows(db, w.org, "cau_hoi_cho_xu_ly"))[0].level_input)
+    li2 = signals.load_level_input((await _rows(db, w.org, "cau_hoi_cho_xu_ly"))[0].level_input)
     assert li2.owner_unanswered_h > 2 and li2.in_work_hours is True
     assert isinstance(changed, list)
     # 03:00 đêm: chờ trong giờ làm không đổi, nhưng đã ra ngoài giờ làm ⇒ cờ in_work_hours cập nhật
     await questions.refresh_waiting(db, w.org, datetime(2026, 10, 25, 3, 0, tzinfo=VN))
     await db.commit()
-    li3 = levels.SignalIn.model_validate((await _rows(db, w.org, "cau_hoi_cho_xu_ly"))[0].level_input)
+    li3 = signals.load_level_input((await _rows(db, w.org, "cau_hoi_cho_xu_ly"))[0].level_input)
     assert li3.in_work_hours is False
 
 
@@ -562,7 +562,7 @@ async def test_p3b_catalog_demand_fills_need_fields_n_and_explicit_urgent(db: As
     uid, _ = await _demand(db, w)
     sid = (await db.execute(text("SELECT id FROM biz.market_signals WHERE meaning_unit_id = :u"), {"u": uid})).scalar_one()
     a = (await _cat_alerts(db, w.org))[0]
-    li = levels.SignalIn.model_validate(a.level_input)
+    li = signals.load_level_input(a.level_input)
     assert li.opportunity.need_fields_n is None and li.flags.explicit_urgent is True              # không nguồn ⇒ None; "Cần gấp" trong trích dẫn verified
     await db.execute(text("""UPDATE clean.meaning_units SET entities = entities || CAST(:v AS jsonb) WHERE id = :u"""),
                      {"v": orjson.dumps({"v": {"need_fields_n": 2, "contract_version": "brain-out/2"}}).decode(), "u": uid})
@@ -571,7 +571,7 @@ async def test_p3b_catalog_demand_fills_need_fields_n_and_explicit_urgent(db: As
 
     await catalog_match.process_demand(db, w.org, sid, clock.now())
     await db.commit()
-    li2 = levels.SignalIn.model_validate((await _cat_alerts(db, w.org))[0].level_input)
+    li2 = signals.load_level_input((await _cat_alerts(db, w.org))[0].level_input)
     assert li2.opportunity.need_fields_n == 2
 
 
@@ -632,7 +632,7 @@ async def test_p3b_conflict_route_public_follows_public_eff(db: AsyncSession) ->
         out = await U.project(db, w.org, NOW)
         await db.commit()
         assert out
-        results[eff] = levels.SignalIn.model_validate((await _rows(db, w.org, "xung_dot_khieu_nai"))[0].level_input).flags.public
+        results[eff] = signals.load_level_input((await _rows(db, w.org, "xung_dot_khieu_nai"))[0].level_input).flags.public
     assert results == {False: False, True: True}
 
 

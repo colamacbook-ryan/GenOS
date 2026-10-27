@@ -497,8 +497,9 @@ CLOCK_JOBS = ("intel_reeval", "intel_project_disputes", "intel_fraud", "intel_ge
               "intel_questions_scan", "intel_units", "intel_outcomes", "intel_heat_scan", "matches_recompute", "mem_heat_weekly")
 #: Job `intel_*` của production CỐ Ý không chạy (lý do bên dưới). Mọi job `intel_*` khác PHẢI nằm trong CLOCK_JOBS — test canh
 #: (`test_every_intel_job_is_run_or_explicitly_skipped`) để job mới (vd `intel_units` của T12) không bị bỏ sót im lặng.
-SKIPPED_INTEL_JOBS = ("intel_delivery", "intel_weekly")
-#: Không chạy (lý do): intel_delivery/shadow_pack/intel_weekly — chỉ xếp tin ra kênh/đo lường, không đổi mức (🔴 đã đẩy đọc ở `pushed_at`);
+SKIPPED_INTEL_JOBS = ("intel_delivery", "intel_weekly", "intel_m1_nightly")
+#: Không chạy (lý do): intel_delivery/shadow_pack/intel_weekly — chỉ xếp tin ra kênh/đo lường, không đổi mức; intel_m1_nightly (v0.1.77, P4) — ghi
+#: m1_passed_gates theo Đúng/Sai thật của Sếp, harness không có ⇒ không chạy (đo G-KB luôn ở chạy thử, không tự bật đẩy thật); (🔴 đã đẩy đọc ở `pushed_at`);
 #: watchdog_tick/backup_flush — giám sát bridge thật (harness không có nhịp tim ⇒ báo động giả); duty — agent trực kênh (gọi model, ngoài Tình báo);
 #: mem_consolidate — cửa sổ giờ + `now()` của SQL theo giờ thật. Hook sau sàng lọc: chỉ `market_signal_capture` (cầu → `catalog_match`).
 POST_TURN_HOOKS = ("market_signal_capture",)

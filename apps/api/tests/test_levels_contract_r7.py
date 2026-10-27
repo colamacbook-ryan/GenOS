@@ -34,6 +34,6 @@ def test_r7_fields_validate_ranges_and_still_forbid_unknown():
 
 def test_r7_constants_and_pure_functions_exposed():
     assert (L.THETA_THREAT_NO_EXIT, L.THETA_NEED_FIELDS) == (1, 3)
-    assert L.REGULAR_PUSH_ENABLED is False  # P4 bật
+    assert L.REGULAR_PUSH_ENABLED is True  # P4 bật cùng ramp R4
     for name in ("prio", "red_type", "act_by", "public_ok", "deadline_eff", "next_change_at", "compute"):
         assert callable(getattr(L, name))

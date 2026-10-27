@@ -39,6 +39,7 @@ log = logging.getLogger("gh.intel.delivery")
 
 JOB = "intel.digest_zalo"
 MAX_LINES, MAX_CHARS, MAX_ITEMS, QUOTE_MAX = 10, reports.TEXT_MAX, 6, 80
+ACTION_MAX = 100
 HINT = "Trả lời: «1 ok» · «2 sai» · «3 không cần báo» · «em sót: …»"
 QUIET_DAY = "Hôm nay yên, không có gì cần Sếp ra tay."
 URGENT_HEAD = "Điểm gấp trong ngày"
@@ -167,6 +168,8 @@ def _item_line(it: digest_mod.DigestItem) -> str:
         head += " " + _one_line(" · ".join(it.line_facts), 60)
     if it.quote:
         head += f" «{_one_line(it.quote, QUOTE_MAX)}»"
+    if it.action:                                       # "Việc Sếp cần làm" (Q18): dòng riêng cuối mục; `render` che số như phần còn lại
+        head += f"\n   Việc Sếp cần làm: {_one_line(it.action, ACTION_MAX)}"
     return head
 
 
@@ -200,7 +203,7 @@ def render(d: digest_mod.Digest, *, label: str, shadow: bool, hidden_console: in
         return display_mask("\n".join(lines + tail))
 
     out = build(k)
-    while len(out) > MAX_CHARS and k > 0:
+    while (len(out) > MAX_CHARS or len(out.splitlines()) > MAX_LINES) and k > 0:      # mỗi mục có thể 2 dòng (kèm "Việc Sếp cần làm")
         k -= 1
         out = build(k)
     return out[:MAX_CHARS], d.items[:k]
@@ -288,19 +291,27 @@ async def deliver_digest(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> 
 
 # ─── 🔴 tức thì ──────────────────────────────────────────────────────────────
 
+MERGE_CATCHUP_H = 24                                         # [Gen chọn] dòng `merge` còn nợ tin 🔴 trong 24 giờ qua thì vẫn gửi bù
+
+
 async def push_alerts(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> int:
     """Xếp tin 🔴 cho tín hiệu `push_now` chưa gửi (mỗi lần đẩy/leo thang một khoá riêng). `chat_ok` ⇒ tin 3 dòng; `console_pin` ⇒ tin 🔴 KHÔNG nội dung (mở Console); khoá trợ lý ⇒ 0. Trả số tin đã xếp."""
     ch = await _channel(db, org_id)
     if ch is None or await backup.is_locked(db, org_id):
         return 0
     # Chỉ lấy dòng CHƯA có tin (khoá `signal:{id}:{pushed_at}`), mới nhất trước: không bị ≥ 10 tín hiệu cũ chiếm chỗ (bỏ đói).
+    # Ý định đẩy = `pushed_at` (chỉ relane đặt, chỉ khi push_now), KHÔNG phải `delivery` hiện tại: lượt đánh giá sau trên CHÍNH dòng đó (tin mới
+    # của vụ, intel_reeval cùng phút với intel_fraud) ghi `delivery='merge'` theo spec "một vụ một 🔴" — nếu lọc `delivery='push_now'`, lần đẩy
+    # chưa kịp xếp sẽ mất hẳn (P4 v0.1.77, có từ v0.1.76). `merge` + `pushed_at` ⇒ chính dòng này đã đẩy; khoá dedupe giữ đúng một tin mỗi lần
+    # đẩy. Trần MERGE_CATCHUP_H: bản cũ để lại dòng mất tin lâu rồi thì không gửi muộn ồ ạt sau nâng cấp.
     rows = (await db.execute(text("""
         SELECT a.id, a.title, a.summary, a.suggested_action, a.evidence, a.pushed_at, a.privacy, a.reasons FROM biz.alerts a
-        WHERE a.org_id = :o AND a.delivery = 'push_now' AND a.pushed_at IS NOT NULL
+        WHERE a.org_id = :o AND a.pushed_at IS NOT NULL
+          AND (a.delivery = 'push_now' OR (a.delivery = 'merge' AND a.pushed_at > CAST(:now AS timestamptz) - make_interval(hours => :ch)))
           AND a.status IN ('open', 'acknowledged') AND a.kind NOT IN ('system', 'legacy')
           AND NOT EXISTS (SELECT 1 FROM ops.owner_outbox x WHERE x.org_id = a.org_id AND x.channel_type = :c
                             AND x.dedupe_key = 'signal:' || a.id::text || ':' || floor(extract(epoch FROM a.pushed_at))::bigint::text)
-        ORDER BY a.pushed_at DESC LIMIT 10"""), {"o": org_id, "c": ch})).all()
+        ORDER BY a.pushed_at DESC LIMIT 10"""), {"o": org_id, "c": ch, "now": now, "ch": MERGE_CATCHUP_H})).all()
     n = 0
     for r in rows:
         code = new_code()
