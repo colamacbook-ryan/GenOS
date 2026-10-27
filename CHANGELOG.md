@@ -9,6 +9,7 @@ Việc sửa nóng không đổi số bản (PR #46, #48, #53, #55, #58, #59) gh
 
 ## v0.1.77 — (26/10/2026) Bước 1 Tình báo: bảng ưu tiên mới cho bốn cổng thường, chạy thử 14 ngày
 - **Migration `0045`, trên v0.1.76.** Mức 🔴🟠⚪ của bốn loại thường (khách chê công khai/doạ bỏ, lời hứa khách sắp vỡ, cơ hội lớn sắp trôi, sự cố gấp) tính theo bảng ưu tiên: ảnh hưởng × độ gấp, qua cửa «bằng chứng» và «thẩm quyền» (nhân viên đang lo, khách đòi gặp chủ, khách chủ chốt, giờ làm). Lừa đảo/an toàn **không đổi**.
+- **Sửa lỗi từ v0.1.76:** tin 🔴 lừa đảo/an toàn có thể không tới Zalo khi hai job đánh giá cùng tin trong một phút — nay luôn gửi đúng một tin.
 - **Chạy thử 14 ngày**: bốn loại thường chỉ lên đầu bản tin (kèm nút Đúng/Sai + 3 lý do); lừa đảo/an toàn vẫn báo ngay. Qua 14 ngày và đủ độ chính xác mới tự đẩy thật.
 - Thiết lập Tình báo thêm bước 3 khai **khách chủ chốt** (cần mã PIN); giờ làm mặc định 08:00–17:30 (đổi qua chat). Câu hỏi chờ nay tính theo giờ làm.
 - Chi tiết + việc Boss phải làm: [docs/releases/v0.1.77.md](docs/releases/v0.1.77.md).
