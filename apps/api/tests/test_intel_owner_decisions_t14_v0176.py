@@ -94,9 +94,9 @@ def test_d1_reminder_once_on_morning_of_due_day() -> None:
 def test_d1_next_change_includes_reminder_and_hold_end() -> None:
     now = datetime(2026, 10, 20, 12, 0, tzinfo=VN)
     s = _fr(now=now)
-    assert levels.next_change_at(s, now) <= datetime(2026, 10, 21, 7, 30, tzinfo=VN)
+    assert levels.next_change_at(s, H.state(), now) <= datetime(2026, 10, 21, 7, 30, tzinfo=VN)
     after_rem = datetime(2026, 10, 21, 12, 0, tzinfo=VN)
-    assert levels.next_change_at(s, after_rem) <= datetime(2026, 10, 22, 0, 0, tzinfo=VN)
+    assert levels.next_change_at(s, H.state(), after_rem) <= datetime(2026, 10, 22, 0, 0, tzinfo=VN)
 
 
 def test_d1_digest_line_never_says_window_passed_while_txn_pending() -> None:
@@ -352,7 +352,10 @@ def test_d5_floor_needs_big_quoted_money_and_near_deadline() -> None:
 def test_d5_red_gate5_still_needs_catalog() -> None:
     assert H.compute(_opp(), ctx=None).level != "red"
     assert H.compute(_opp(), ctx="kinh_doanh").level != "red"
+    # r7: hạn 24–72 giờ ⇒ I3 × U2 = P2 🟠 đầu bản tin; dưới 24 giờ ⇒ U3 ⇒ 🔴.
     lv = H.compute(_opp(opportunity={"catalog_score": 90}), ctx="kinh_doanh")
+    assert (lv.level, lv.gate, lv.candidate, lv.delivery) == ("amber", None, levels.G5, "digest_top")
+    lv = H.compute(_opp(opportunity={"catalog_score": 90}, due_in_h=10), ctx="kinh_doanh")
     assert (lv.level, lv.gate) == ("red", levels.G5)
 
 

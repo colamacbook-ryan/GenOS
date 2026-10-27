@@ -52,8 +52,8 @@ async def _sig(db: AsyncSession, org: uuid.UUID, kind: str, ck: str, *, privacy:
 async def test_intel_digest_executes_delivery_order_and_refs(db: AsyncSession) -> None:
     org = await mk_org(db)
     await _install(db, org)
-    red_push = await _sig(db, org, "xung_dot_khieu_nai", "c-red", customer_of_owner=True, flags={"public": True})
-    expired = await _sig(db, org, "xung_dot_khieu_nai", "c-q15", msg_at=NOW - timedelta(hours=30), customer_of_owner=True,
+    red_push = await _sig(db, org, "xung_dot_khieu_nai", "c-red", customer_of_owner=True, impact_base=2, flags={"public": True})
+    expired = await _sig(db, org, "xung_dot_khieu_nai", "c-q15", msg_at=NOW - timedelta(hours=30), customer_of_owner=True, impact_base=2,
                          flags={"public": True})
     fraud_floor = await _sig(db, org, "rui_ro_lua_dao", "fr-floor", flags={"credentials_entered": True}, confidence_exist=0.5,
                              d2={"verdict": "disagree"})

@@ -129,9 +129,10 @@ async def test_non_customer_complaint_is_not_routed_and_leave_threat_adds_relati
     raw2 = await mk_raw(db, w2.org, w2.channel, identity=iid2, body="thôi khỏi, lần sau lấy chỗ khác", at=NOW - timedelta(hours=1))
     sigs = await conflicts.emit(db, w2.org, _complaint(raw2, pid, public=False, said_will_leave=True, quote="lần sau lấy chỗ khác", span_end=20), NOW)
     assert len(sigs) == 2
-    rows = (await db.execute(text("SELECT kind, level, gate, case_key FROM biz.alerts WHERE org_id = :o ORDER BY kind"), {"o": w2.org})).all()
+    rows = (await db.execute(text("SELECT kind, level, gate, candidate, delivery, case_key FROM biz.alerts WHERE org_id = :o ORDER BY kind"), {"o": w2.org})).all()
     assert [r.kind for r in rows] == ["quan_he_nong_nguoi", "xung_dot_khieu_nai"] and rows[0].case_key == rows[1].case_key
-    assert rows[1].level == "red" and rows[1].gate == "khach_che_cong_khai_doa_bo"
+    # r7 (B12, T01): khách thường doạ bỏ mà chưa chốt bỏ (`ultimatum` theo đường tương thích) ⇒ tối đa 🟠 đầu bản tin, KHÔNG 🔴
+    assert (rows[1].level, rows[1].gate, rows[1].candidate, rows[1].delivery) == ("amber", None, "khach_che_cong_khai_doa_bo", "digest_top")
 
 
 async def test_closure_by_owner_staff_customer(db) -> None:  # type: ignore[no-untyped-def]
@@ -430,13 +431,14 @@ async def test_from_rule_finds_leave_threat_in_later_customer_message(db) -> Non
 
 
 @pytest.mark.usefixtures("regular_push_on")
-async def test_leave_threat_pushes_only_one_red_per_case(db) -> None:  # type: ignore[no-untyped-def]
+async def test_leave_threat_regular_customer_is_amber_top_not_red(db) -> None:  # type: ignore[no-untyped-def]
     w, pid, iid, _ = await _customer(db, "Anh Bình")
     raw = await mk_raw(db, w.org, w.channel, identity=iid, body="thôi khỏi, lần sau lấy chỗ khác", at=NOW - timedelta(hours=1))
     await conflicts.emit(db, w.org, _complaint(raw, pid, public=False, said_will_leave=True, quote="lần sau lấy chỗ khác", span_end=20), NOW)
     rows = (await db.execute(text("SELECT kind, level, delivery FROM biz.alerts WHERE org_id = :o"), {"o": w.org})).all()
-    assert [(r.kind, r.delivery == "push_now") for r in sorted(rows, key=lambda r: r.kind)] == [("quan_he_nong_nguoi", False), ("xung_dot_khieu_nai", True)]
-    assert all(r.level != "red" for r in rows if r.kind == "quan_he_nong_nguoi")
+    # r7 (B12): doạ bỏ của khách thường (chưa `exit_pending`, chưa công khai) không bao giờ đẩy 🔴; vẫn một dòng 🟠 đầu bản tin cho cả vụ
+    assert all(r.delivery != "push_now" and r.level != "red" for r in rows)
+    assert [(r.kind, r.level, r.delivery) for r in sorted(rows, key=lambda r: r.kind) if r.kind == "xung_dot_khieu_nai"] == [("xung_dot_khieu_nai", "amber", "digest_top")]
 
 
 async def _two_questions(db: AsyncSession) -> tuple[Any, datetime]:

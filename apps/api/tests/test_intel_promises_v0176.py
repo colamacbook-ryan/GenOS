@@ -138,7 +138,8 @@ async def test_t4_promise_to_customer_due_in_3h_is_red_gate4(db: AsyncSession) -
     await _fact(db, w, "promised_to", w.staff, "giao 50 tấm MDF cho chị Tư chiều nay", at=NOW - timedelta(hours=20), due=due, to=w.cust)
     out = await promises.project(db, w.org, NOW)
     await db.commit()
-    assert out[0].level == "red" and out[0].gate == levels.G4
+    # r7 (R1): bỏ vế "còn ≤ 4 giờ tự thành 🔴" — còn 3 giờ, không trở ngại, khách chưa nhắc ⇒ đang chạy (⚪, P4 `milestone_running`)
+    assert (out[0].level, out[0].gate) == ("grey", None) and "milestone_running" in out[0].reasons
     [p] = await _promise_rows(db, w.org)
     assert p.state == "open" and p.to_customer is True and p.fact_id is not None and p.signal_id == out[0].id
     assert p.promiser_person_id == w.staff_person and p.to_person_id == w.cust_person
@@ -148,22 +149,29 @@ async def test_t4_promise_to_customer_5h_left_without_obstacle_is_not_red_but_ob
     w = await _world(db)
     await _fact(db, w, "promised_to", w.staff, "giao hàng cho chị Tư", at=NOW - timedelta(hours=20), due=NOW + timedelta(hours=5), to=w.cust)
     out = await promises.project(db, w.org, NOW)
-    assert out[0].level == "amber" and out[0].gate is None and out[0].candidate == levels.G4
+    assert (out[0].level, out[0].gate) == ("grey", None)
     s = _pure(due_in_h=5, obstacle=True)
-    assert H.compute(s).gate == levels.G4                          # "máy hỏng / kẹt xe": có tin trở ngại ⇒ 🔴 dù còn 5 giờ
+    lv = H.compute(s)                                              # "máy hỏng / kẹt xe": trở ngại ⇒ cửa đạt, khách chưa nhắc ⇒ P2 🟠 đầu bản tin
+    assert (lv.level, lv.gate, lv.candidate, lv.delivery) == ("amber", None, levels.G4, "digest_top")
+    assert H.compute(_nudged(s)).gate == levels.G4                 # Q16: trở ngại + khách đã nhắc ⇒ 🔴
 
 
 async def test_t4_promise_overdue_today_is_red_a17_but_overdue_yesterday_is_not_a_gate(db: AsyncSession) -> None:
-    assert H.compute(_pure(due_in_h=-1)).gate == levels.G4         # A17: đã trễ trong hôm nay, chưa có tin hoàn thành
+    lv = H.compute(_pure(due_in_h=-1))                             # A17 + r7: đã trễ trong hôm nay, khách CHƯA nhắc ⇒ 🟠 đầu bản tin
+    assert (lv.level, lv.gate, lv.candidate) == ("amber", None, levels.G4)
+    assert H.compute(_nudged(_pure(due_in_h=-1))).gate == levels.G4   # khách đã nhắc ⇒ 🔴 (Q16)
     lv = H.compute(_pure(due_in_h=-20))                            # hạn từ hôm qua = đã vỡ, không cổng
     assert lv.gate is None and lv.level != "red"
-    assert H.compute(_pure(due_in_h=4.0)).gate == levels.G4        # đúng 4,0 giờ vẫn tính
-    assert H.compute(_pure(due_in_h=4.2)).gate is None
+    assert H.compute(_pure(due_in_h=4.0)).gate is None             # r7: không còn mốc "≤ 4 giờ" tự thành 🔴
 
 
 async def test_t4_promise_completed_is_closed_a16() -> None:
     lv = H.compute(_pure(due_in_h=1, completed=True))
     assert lv.level == "grey" and lv.delivery == "none" and "closed" in lv.reasons
+
+
+def _nudged(s: levels.SignalIn) -> levels.SignalIn:
+    return s.model_copy(update={"promise": s.promise.model_copy(update={"nudged_by_customer": True})})
 
 
 def _pure(*, due_in_h: float, obstacle: bool = False, completed: bool = False, cond: str | None = None, to_customer: bool = True) -> levels.SignalIn:
@@ -197,9 +205,9 @@ async def test_t4_conditional_promise_never_gate_and_never_broken_until_conditio
     assert (await _promise_rows(db, w.org))[0].state == "conditional"
     assert all(a.gate is None for a in await _alert(db, w.org))
     # điều kiện đạt ⇒ hạn tính lại, cổng 4 mở
-    assert H.compute(_pure(due_in_h=3, cond="yes")).gate == levels.G4
+    assert H.compute(_nudged(_pure(due_in_h=-1, cond="yes"))).gate == levels.G4
+    assert H.compute(_nudged(_pure(due_in_h=-1, cond="no"))).gate is None
     assert H.compute(_pure(due_in_h=3, cond="no")).gate is None
-    assert H.compute(_pure(due_in_h=-1, cond="no")).gate is None
 
 
 # ─── (b) lời hứa đã giữ ⇒ đóng nghĩa vụ + tín hiệu ────────────────────────────
@@ -219,7 +227,7 @@ async def test_t4_kept_promise_closes_obligation_and_signal(db: AsyncSession) ->
     raw_src = (await db.execute(text("SELECT source_raw_event_id FROM mem.facts WHERE id = :i"), {"i": f.id})).scalar_one()
     await promises.project(db, w.org, NOW)
     await db.commit()
-    assert (await _alert(db, w.org))[0].level == "red"
+    assert (await _alert(db, w.org))[0].level == "grey"                # r7: còn 3 giờ, chưa nhắc ⇒ đang chạy
     res = await _kept_flow(db, w, f, raw_src, t0 + timedelta(hours=1))
     assert res.closed == [f.id]                                    # cổng tin cậy của L1 đã đóng fact
     n = await promises.sync_kept(db, w.org, NOW)
@@ -320,7 +328,7 @@ async def test_t4_two_promises_in_same_message_stay_two_signals(db: AsyncSession
         await db.commit()
     al = await _alert(db, w.org)
     assert len(al) == 2
-    assert sorted(a.level for a in al) == ["amber", "red"]
+    assert sorted(a.level for a in al) == ["grey", "grey"]               # r7: cả hai đang chạy (P4), vẫn hai tín hiệu riêng
     assert {r.signal_id for r in await _promise_rows(db, w.org)} == {a.id for a in al}
 
 
@@ -330,7 +338,7 @@ async def test_t4_old_facts_do_not_starve_new_promise(db: AsyncSession) -> None:
         await _fact(db, w, "promised_to", w.staff, f"việc cũ {i}", at=NOW - timedelta(days=40 + i), due=NOW - timedelta(days=30), to=w.cust)
     await _fact(db, w, "promised_to", w.staff, "giao hàng chiều nay", at=NOW - timedelta(hours=2), due=NOW + timedelta(hours=3), to=w.cust)
     out = await promises.project(db, w.org, NOW, limit=5)
-    assert out[0].gate == levels.G4                                  # lời hứa gần hạn nhất xử lý ĐẦU TIÊN dù có fact cũ (lần đầu gặp vẫn được xử lý)
+    assert "milestone_running" in out[0].reasons                     # lời hứa gần hạn nhất xử lý ĐẦU TIÊN dù có fact cũ (lần đầu gặp vẫn được xử lý)
 
 
 async def test_t4_group_deadline_is_not_owner_work(db: AsyncSession) -> None:
@@ -356,7 +364,7 @@ async def test_t4_owner_without_person_kept_closes_signal_and_deadline_close_and
     f2 = await _fact(db, w, "promised_to", w.staff, "gửi báo giá", at=NOW - timedelta(hours=20), due=NOW + timedelta(hours=3), to=w.cust)
     await promises.project(db, w.org, NOW)
     await db.commit()
-    assert {a.level for a in await _alert(db, w.org)} == {"red"}
+    assert {a.level for a in await _alert(db, w.org)} == {"grey", "red"}      # r7: hai lời hứa đang chạy (⚪), nộp hồ sơ hôm nay (G6 🔴)
     await db.execute(text("UPDATE mem.facts SET valid_to = :t WHERE id = ANY(:i)"), {"t": NOW - timedelta(hours=1), "i": [f.id, d.id]})
     await db.execute(text("UPDATE biz.promises SET kept_at = :t WHERE fact_id = :f"), {"t": NOW, "f": f2.id})
     await db.commit()
@@ -386,7 +394,7 @@ async def test_t4_obstacle_only_from_the_promiser(db: AsyncSession) -> None:
     other = await mk_person_row(db, w.org, "Người khác")
     await _unit_flag(db, w, grp, other, NOW - timedelta(hours=1))
     out = await promises.project(db, w.org, NOW)
-    assert out[0].level == "amber"                                  # trở ngại của người khác trong nhóm không tính
+    assert out[0].level == "grey"                                   # trở ngại của người khác trong nhóm không tính (vẫn đang chạy)
     await _unit_flag(db, w, grp, w.staff_person, NOW - timedelta(minutes=30))
     out = await promises.project(db, w.org, NOW + timedelta(minutes=1))
-    assert out and out[0].gate == levels.G4
+    assert out and (out[0].level, out[0].candidate) == ("amber", levels.G4)       # trở ngại của chính người hứa ⇒ cửa đạt, P2 🟠

@@ -30,3 +30,10 @@ def test_r7_fields_validate_ranges_and_still_forbid_unknown():
         L.SignalIn(msg_at=T0, prior_threat_no_exit_n=-1)
     with pytest.raises(ValidationError):
         L.SignalIn(msg_at=T0, not_a_field=True)
+
+
+def test_r7_constants_and_pure_functions_exposed():
+    assert (L.THETA_THREAT_NO_EXIT, L.THETA_NEED_FIELDS) == (1, 3)
+    assert L.REGULAR_PUSH_ENABLED is False  # P4 bật
+    for name in ("prio", "red_type", "act_by", "public_ok", "deadline_eff", "next_change_at", "compute"):
+        assert callable(getattr(L, name))

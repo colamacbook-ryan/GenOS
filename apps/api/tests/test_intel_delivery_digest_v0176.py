@@ -30,7 +30,7 @@ async def world(db: Any, *, pin: bool = False) -> tuple[uuid.UUID, dict[str, Any
     org = await mk_org(db)
     await _install(db, org)
     sig = {
-        "red_top": await _sig(db, org, "xung_dot_khieu_nai", "c-q15", msg_at=NOW - timedelta(hours=30), customer_of_owner=True, flags={"public": True}),
+        "red_top": await _sig(db, org, "xung_dot_khieu_nai", "c-q15", msg_at=NOW - timedelta(hours=30), customer_of_owner=True, impact_base=2, flags={"public": True}),
         "amber": await _sig(db, org, "cau_hoi_cho_xu_ly", "q1", impact_base=2, deadline_at=NOW + timedelta(hours=10)),
     }
     if pin:
@@ -163,8 +163,8 @@ async def test_locked_assistant_sends_nothing_and_keeps_items(db: Any) -> None:
 async def test_push_alerts_sends_push_now_chat_ok_only_and_dedupes(db: Any) -> None:
     org = await mk_org(db)
     await _install(db, org)
-    red = await _sig(db, org, "xung_dot_khieu_nai", "c-red", customer_of_owner=True, flags={"public": True})
-    priv = await _sig(db, org, "xung_dot_khieu_nai", "c-red-priv", privacy="console_pin", customer_of_owner=True, flags={"public": True})
+    red = await _sig(db, org, "xung_dot_khieu_nai", "c-red", customer_of_owner=True, impact_base=2, flags={"public": True})
+    priv = await _sig(db, org, "xung_dot_khieu_nai", "c-red-priv", privacy="console_pin", customer_of_owner=True, impact_base=2, flags={"public": True})
     amber = await _sig(db, org, "cau_hoi_cho_xu_ly", "q1", impact_base=2, deadline_at=NOW + timedelta(hours=10))
     assert red.delivery == "push_now"
     await bot_world(db, org)
@@ -184,7 +184,7 @@ async def test_push_alerts_sends_push_now_chat_ok_only_and_dedupes(db: Any) -> N
 async def test_push_alerts_locked_sends_nothing(db: Any) -> None:
     org = await mk_org(db)
     await _install(db, org)
-    await _sig(db, org, "xung_dot_khieu_nai", "c-red", customer_of_owner=True, flags={"public": True})
+    await _sig(db, org, "xung_dot_khieu_nai", "c-red", customer_of_owner=True, impact_base=2, flags={"public": True})
     await bot_world(db, org)
     await _lock(db, org)
     async with SM()() as s:
@@ -274,7 +274,7 @@ async def test_push_alerts_not_starved_beyond_ten_open_signals(db: Any) -> None:
     await _install(db, org)
     ids = []
     for i in range(12):
-        s = await _sig(db, org, "xung_dot_khieu_nai", f"c{i}", customer_of_owner=True, flags={"public": True})
+        s = await _sig(db, org, "xung_dot_khieu_nai", f"c{i}", customer_of_owner=True, impact_base=2, flags={"public": True})
         ids.append(s.id)
         await db.execute(text("UPDATE biz.alerts SET delivery = 'push_now', pushed_at = now() - make_interval(secs => :k) WHERE id = :i"), {"k": 100 - i, "i": s.id})
     await db.commit()
@@ -293,7 +293,7 @@ async def test_push_now_console_pin_sends_content_free_alert_and_digest_counts_i
     """M3: 🔴 push_now riêng tư không được im: tin 🔴 KHÔNG nội dung; `_hidden_console` đếm cả push_now."""
     org = await mk_org(db)
     await _install(db, org)
-    s = await _sig(db, org, "xung_dot_khieu_nai", "cp", privacy="console_pin", customer_of_owner=True, flags={"public": True})
+    s = await _sig(db, org, "xung_dot_khieu_nai", "cp", privacy="console_pin", customer_of_owner=True, impact_base=2, flags={"public": True})
     await db.execute(text("UPDATE biz.alerts SET title = 'Hùng BÍ MẬT nhân sự', delivery = 'push_now', pushed_at = now() WHERE id = :i"), {"i": s.id})
     await db.commit()
     await bot_world(db, org)
@@ -370,7 +370,7 @@ async def test_push_alerts_newest_first_order(db: Any) -> None:
     await _install(db, org)
     ids = []
     for i in range(12):
-        s = await _sig(db, org, "xung_dot_khieu_nai", f"c{i}", customer_of_owner=True, flags={"public": True})
+        s = await _sig(db, org, "xung_dot_khieu_nai", f"c{i}", customer_of_owner=True, impact_base=2, flags={"public": True})
         ids.append(s.id)
         await db.execute(text("UPDATE biz.alerts SET delivery = 'push_now', pushed_at = now() - make_interval(secs => :k) WHERE id = :i"), {"k": 100 - i, "i": s.id})
     await db.commit()
@@ -385,7 +385,7 @@ async def test_push_alerts_newest_first_order(db: Any) -> None:
 async def test_console_pin_push_alert_has_console_only_ref(db: Any) -> None:
     org = await mk_org(db)
     await _install(db, org)
-    s = await _sig(db, org, "xung_dot_khieu_nai", "cp", privacy="console_pin", customer_of_owner=True, flags={"public": True})
+    s = await _sig(db, org, "xung_dot_khieu_nai", "cp", privacy="console_pin", customer_of_owner=True, impact_base=2, flags={"public": True})
     await db.execute(text("UPDATE biz.alerts SET delivery = 'push_now', pushed_at = now() WHERE id = :i"), {"i": s.id})
     await db.commit()
     await bot_world(db, org)
@@ -424,3 +424,10 @@ def test_display_mask_date_lookalike_stk_and_sentinel_injection() -> None:
         assert "ZQ" in out                                              # nguyên văn, không bị thay
     for keep in ("25/10/2026", "17:35", "2026-10-23 17:35", "25.000.000đ", "23.10.2026, 17:35", "2026-10-23T17:35:10"):
         assert m(keep) == keep, keep
+
+
+def test_digest_code_never_all_digits_so_masking_cannot_eat_it() -> None:
+    """Mã toàn số cạnh ngày bị bộ che số dài che mất (CI đỏ ngẫu nhiên ~1/256) — ký tự đầu luôn là chữ."""
+    for _ in range(2000):
+        c = delivery.new_code()
+        assert len(c) == 4 and c[0].isalpha() and set(c) <= set(delivery.CODE_ALPHABET)

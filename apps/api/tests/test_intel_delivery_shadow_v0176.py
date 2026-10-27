@@ -11,6 +11,7 @@ from typing import Any
 from sqlalchemy import text
 
 from gh.biz.intel.pipes import shadow
+from gh.biz.intel.pipes.shadow import delivery_tz
 from gh.db import sessionmaker
 from tests.mem_helpers import mk_org
 from tests.owner_helpers import bot_world
@@ -84,8 +85,12 @@ async def test_pack_is_stable_within_a_day(db: Any) -> None:
     org = await seeded(db)
     now = (await db.execute(text("SELECT now()"))).scalar_one()
     async with SM()() as s:
+        # +1 giờ nhưng không vượt nửa đêm giờ VN (hạt giống theo ngày VN; chạy test lúc 23:xx VN từng làm đỏ giả)
+        local = now.astimezone(delivery_tz())
+        midnight = (local + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        later = min(now + timedelta(hours=1), midnight - timedelta(seconds=1))
         a = await shadow.build_pack(s, org, now)
-        b = await shadow.build_pack(s, org, now + timedelta(hours=1))
+        b = await shadow.build_pack(s, org, later)
     assert [(x["tier"], x["raw_event_id"]) for x in a] == [(x["tier"], x["raw_event_id"]) for x in b]
 
 

@@ -180,11 +180,11 @@ async def test_reevaluate_due_skips_row_when_cap_lock_busy(db: AsyncSession) -> 
 async def test_mark_sent_skips_item_whose_delivery_changed_after_build(db: AsyncSession) -> None:
     org = await mk_org(db)
     await _install(db, org)
-    li = _li("nghia_vu_loi_hua", due_in_h=11, impact_base=2, promise={"to_customer": True}, flags={"nudged": True})
+    li = _li("nghia_vu_loi_hua", due_in_h=11, impact_base=2, promise={"to_customer": True})        # r7: đang chạy (⚪) cho tới `deadline − 2 giờ`
     s = await signals.upsert(db, org, _up("nghia_vu_loi_hua", li, await _raw(db, org), "nghia_vu_loi_hua:promise|p1"), NOW)
     d1 = await digest.build(db, org, NOW + timedelta(hours=1))
     assert str(s.id) in [it.signal_id for it in d1.items]
-    t = NOW + timedelta(hours=8, minutes=30)
+    t = NOW + timedelta(hours=9)
     await signals.reevaluate_due(db, t)                    # leo lên nhóm đầu bản tin trước khi gửi xong
     cur = (await db.execute(text("SELECT delivery FROM biz.alerts WHERE id = :i"), {"i": s.id})).scalar_one()
     assert cur != s.delivery

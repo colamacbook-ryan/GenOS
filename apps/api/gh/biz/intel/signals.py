@@ -650,7 +650,7 @@ async def _relane(db: AsyncSession, org_id: uuid.UUID, signal_id: uuid.UUID, now
                 and _aware(now).astimezone(levels.VN).date() >= rem.astimezone(levels.VN).date()):
             # Lần đẩy này đã rơi vào (hoặc chính là) sáng ngày hẹn chuyển ⇒ không nhắc thêm lần nữa trong vụ (D1).
             case_state["txn_reminded"] = True
-    next_eval = levels.next_change_at(s, now) if status in OPEN else None
+    next_eval = levels.next_change_at(s, st, now) if status in OPEN else None
     # Mục đã lên bản tin (digest_at) mà nay leo lên nhóm đầu bản tin hoặc tăng mức ⇒ lên lại bản tin kế (F4)
     redigest = ((lv.delivery in TOP_DELIVERY and r.delivery not in TOP_DELIVERY)
                 or LEVEL_RANK.get(lv.level, 0) > LEVEL_RANK.get(r.level or "off", 0))

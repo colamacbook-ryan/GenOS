@@ -52,7 +52,9 @@ testpaths = ["tests"]
 markers = [
   "slow: chịu lỗi thật (dừng/khởi động lại Postgres, Redis) hoặc benchmark nặng (10 triệu dòng) — không chạy trong pytest -q mặc định; chạy riêng bằng pytest -m slow",
 ]
-addopts = "-m 'not slow'"
+addopts = "-m 'not slow' --durations=30"
+# Một test chạy quá 10 phút ⇒ in stack mọi luồng (không dừng test) — để CI chỉ ra chỗ treo thay vì hết giờ im lặng.
+faulthandler_timeout = 600
 
 [tool.ruff]
 line-length = 120
