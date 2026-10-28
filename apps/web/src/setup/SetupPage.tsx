@@ -77,7 +77,7 @@ export function SetupPage() {
   const me = useQuery({ queryKey: qk.me, queryFn: ({ signal }) => api.auth.me(signal), enabled: reopenAi, retry: false });
 
   useEffect(() => {
-    document.title = 'Thiết lập Owner · Gen-Harness';
+    document.title = 'Thiết lập Owner · GenOS';
   }, []);
   useEffect(() => {
     if (urlToken) {
@@ -214,7 +214,7 @@ function SetupBrand() {
       <span className="setup-one__brand-tile" aria-hidden>
         <PigMark size={20} />
       </span>
-      <span className="setup-one__brand-name">Gen-Harness</span>
+      <span className="setup-one__brand-name">GenOS</span>
     </div>
   );
 }

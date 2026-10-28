@@ -37,7 +37,7 @@ export function AccountPage() {
   const q = useQuery({ queryKey: accountKey, queryFn: ({ signal }) => api.account.get(signal) });
 
   useEffect(() => {
-    document.title = 'Tài khoản của tôi · Gen-Harness';
+    document.title = 'Tài khoản của tôi · GenOS';
   }, []);
 
   return (

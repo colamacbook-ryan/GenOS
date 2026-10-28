@@ -36,7 +36,7 @@ export function HelpPage() {
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    document.title = 'Trợ giúp · Gen-Harness';
+    document.title = 'Trợ giúp · GenOS';
   }, []);
 
   const canGuide = can(me.data, 'system.manage');
@@ -60,7 +60,7 @@ export function HelpPage() {
     <div className="screen help">
       <ScreenTitle title="Trợ giúp" description={isOwner ? "Phiên bản đang chạy, cách hỏi Gen, các lệnh genh hay dùng và cách báo lỗi." : "Phiên bản đang chạy, cách nhờ Owner khi cần và cách báo lỗi."} maxWidth={640} />
       <div className="acct-grid">
-        <Card title="Giới thiệu" kicker="Gen-Harness · Genesis Harness OS" data-gen-target="help.version">
+        <Card title="Giới thiệu" kicker="GenOS" data-gen-target="help.version">
           {about.isPending ? (
             <SkeletonLines rows={3} />
           ) : about.isError ? (
@@ -143,7 +143,7 @@ export function HelpPage() {
         ) : null}
 
         {isOwner ? (
-          <Card title="Lệnh genh hay dùng" kicker="Chạy trên máy chủ cài Gen-Harness" data-gen-target="help.genh" padded={false}>
+          <Card title="Lệnh genh hay dùng" kicker="Chạy trên máy chủ cài GenOS" data-gen-target="help.genh" padded={false}>
             <ul className="help-cmds">
               {GENH_COMMANDS.map((c) => (
                 <li key={c.cmd}>

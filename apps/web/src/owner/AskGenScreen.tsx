@@ -121,7 +121,7 @@ export function AskGenDrawer({ userId, genOn }: { userId: string; genOn: boolean
 export function AskGenScreen() {
   const me = useMe();
   useEffect(() => {
-    document.title = 'Hỏi Gen · Gen-Harness';
+    document.title = 'Hỏi Gen · GenOS';
   }, []);
 
   if (me.isPending) {

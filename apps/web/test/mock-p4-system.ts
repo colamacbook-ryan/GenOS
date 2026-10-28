@@ -604,7 +604,7 @@ export function createMock(opts: P4SystemOptions) {
         return reply(200, {
           key: OFFSITE_KEY_MOCK, key_id: offsite.key_id, created_hint: '2026-10-01',
           steps: [
-            'Cài Gen-Harness trên máy mới theo hướng dẫn cài đặt (chưa cần tạo dữ liệu gì).',
+            'Cài GenOS trên máy mới theo hướng dẫn cài đặt (chưa cần tạo dữ liệu gì).',
             'Cắm ổ USB (hoặc mở thư mục NAS) chứa bản sao ngoài máy, chọn tệp .ghbundle mới nhất.',
             'Chạy trên máy mới: genh import --yes <tệp .ghbundle>',
             "Khi được hỏi mật khẩu gói, nhập Khoá khôi phục này (gõ đủ cả dấu '-').",

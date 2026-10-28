@@ -240,7 +240,7 @@ describe('<Sidebar>', () => {
     const user = userEvent.setup();
     renderSidebar(NAV, '/intel');
     expect(screen.queryByText('Việc hằng ngày')).not.toBeInTheDocument();
-    expect(screen.queryByText('GEN‑HARNESS')).not.toBeInTheDocument();
+    expect(document.querySelector('.sb-logo__name')).toBeNull();
     const adm = screen.getByRole('button', { name: 'Quản trị' });
     expect(screen.queryByRole('link', { name: 'Sao lưu & cập nhật' })).not.toBeInTheDocument();
     await user.click(adm);

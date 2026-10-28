@@ -281,7 +281,7 @@ describe('Bản sao ngoài máy — thẻ', () => {
       if (c.url.endsWith('/system/offsite')) return json(200, state());
       if (c.url.endsWith('/system/offsite/recovery-kit')) {
         if (!pinOk) return PIN_REQUIRED();
-        return json(200, { key: KEY, key_id: 'a1b2c3d4', created_hint: '2026-09-28', steps: ['Cài Gen-Harness trên máy mới.', 'Nhập Khoá khôi phục khi được hỏi.'], warning: 'Ai có khoá này và ổ USB là mở được dữ liệu.' });
+        return json(200, { key: KEY, key_id: 'a1b2c3d4', created_hint: '2026-09-28', steps: ['Cài GenOS trên máy mới.', 'Nhập Khoá khôi phục khi được hỏi.'], warning: 'Ai có khoá này và ổ USB là mở được dữ liệu.' });
       }
       if (c.url.endsWith('/auth/pin/verify')) {
         pinOk = true;

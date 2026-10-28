@@ -53,7 +53,7 @@ export function pinLimitsFor(me: Pick<Me, 'role' | 'permissions'> | undefined | 
 export function diagnosticText(about: AboutInfo | undefined, me: Me | undefined, now = new Date()): string {
   const w = typeof window !== 'undefined' ? window : undefined;
   return [
-    'Gen-Harness — thông tin báo lỗi',
+    'GenOS — thông tin báo lỗi',
     `Phiên bản: ${about?.version ?? 'bản phát triển (không rõ)'}`,
     `Tổ chức: ${about?.org_name ?? me?.org.name ?? '—'} · múi giờ ${about?.timezone ?? me?.org.timezone ?? '—'}`,
     `Vai trò: ${me?.role.name ?? about?.role.name ?? '—'}`,

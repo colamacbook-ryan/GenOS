@@ -305,7 +305,7 @@ export function channelsConnected(...sources: unknown[]): number | undefined {
 
 export function IntelScreen(): JSX.Element {
   useEffect(() => {
-    document.title = 'Tình báo · Gen-Harness';
+    document.title = 'Tình báo · GenOS';
   }, []);
   const tz = useOrgTimezone() || DEFAULT_TZ;
   const wide = useMediaQuery('(min-width: 760px)');

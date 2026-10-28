@@ -24,7 +24,7 @@ export function GuidePage() {
   const boss = useQuery({ queryKey: BOSS_CHECKS_KEY, queryFn: ({ signal }) => api.bossChecks.list(signal), enabled: !!me.data && !nonOwner });
 
   useEffect(() => {
-    document.title = 'Hướng dẫn thiết lập · Gen-Harness';
+    document.title = 'Hướng dẫn thiết lập · GenOS';
   }, []);
 
   const doneOf = new Map((q.data ?? []).map((i) => [i.n, i.done]));

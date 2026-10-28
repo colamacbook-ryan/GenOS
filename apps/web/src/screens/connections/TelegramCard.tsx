@@ -528,7 +528,7 @@ function DisableDialog({ onClose }: { onClose: () => void }) {
       }
     >
       <p className="help-text">
-        Gen-Harness sẽ xoá token bot đã lưu và ngừng gửi báo động sự cố, bản tin, nhắc việc qua Telegram. Muốn bật lại phải dán token và chọn chat từ đầu.
+        GenOS sẽ xoá token bot đã lưu và ngừng gửi báo động sự cố, bản tin, nhắc việc qua Telegram. Muốn bật lại phải dán token và chọn chat từ đầu.
       </p>
       {del.isError ? <InlineError detail={errorDetail(del.error)}>{errorText(del.error)}</InlineError> : null}
     </Dialog>

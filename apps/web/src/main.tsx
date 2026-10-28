@@ -47,14 +47,14 @@ window.addEventListener('error', (ev) => {
   const error: unknown = ev.error ?? ev.message;
   window.setTimeout(() => {
     const errorId = newErrorId();
-    if (reportClientError({ errorId, error })) console.error(`[Gen-Harness] ${errorId} — lỗi chưa bắt`, error);
+    if (reportClientError({ errorId, error })) console.error(`[GenOS] ${errorId} — lỗi chưa bắt`, error);
   }, 0);
 });
 window.addEventListener('unhandledrejection', (ev) => {
   const error: unknown = ev.reason;
   window.setTimeout(() => {
     const errorId = newErrorId();
-    if (reportClientError({ errorId, error })) console.error(`[Gen-Harness] ${errorId} — promise bị từ chối chưa bắt`, error);
+    if (reportClientError({ errorId, error })) console.error(`[GenOS] ${errorId} — promise bị từ chối chưa bắt`, error);
   }, 0);
 });
 

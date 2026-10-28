@@ -65,7 +65,7 @@ export function FeedScreen(): JSX.Element {
   const feed = useOwnerFeed(view);
 
   useEffect(() => {
-    document.title = 'Thông tin · Gen-Harness';
+    document.title = 'Thông tin · GenOS';
   }, []);
   useEffect(() => {
     if (!note) return;

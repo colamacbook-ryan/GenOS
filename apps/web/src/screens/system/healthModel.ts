@@ -306,7 +306,7 @@ export function healthTips(h: SystemHealth): HealthTip[] {
       title: 'Cách giải phóng chỗ trống',
       steps: [
         { text: 'Trên máy chủ, xem dịch vụ và dung lượng đang dùng:', cmd: 'genh status' },
-        { text: 'Xoá container đã dừng, ảnh Docker không gắn tên và bộ nhớ đệm build không còn dùng (không đụng dữ liệu Gen-Harness):', cmd: 'docker system prune' },
+        { text: 'Xoá container đã dừng, ảnh Docker không gắn tên và bộ nhớ đệm build không còn dùng (không đụng dữ liệu GenOS):', cmd: 'docker system prune' },
         { text: 'Chép bản sao lưu cũ, video, tệp tải về… sang ổ khác rồi xoá khỏi máy chủ.' },
         // Ổ đĩa chỉ được đo lại khi genh cập nhật (apps/genh/internal/ops/update.go ensureDiskSpace), không phải mỗi phút.
         {
@@ -314,7 +314,7 @@ export function healthTips(h: SystemHealth): HealthTip[] {
           cmd: 'genh update',
         },
       ],
-      warning: 'Không xoá thư mục cài Gen-Harness hay volume Docker (không dùng "docker volume prune" hoặc cờ --volumes) — đó là dữ liệu của Sếp.',
+      warning: 'Không xoá thư mục cài GenOS hay volume Docker (không dùng "docker volume prune" hoặc cờ --volumes) — đó là dữ liệu của Sếp.',
     });
   }
   if (h.worker.state === 'silent') {
@@ -385,7 +385,7 @@ export function healthTips(h: SystemHealth): HealthTip[] {
       title: 'Sếp đã tắt tự cập nhật đêm nhưng lịch vẫn bật',
       steps: [
         { text: 'Trên máy chủ, xem tình trạng lịch:', cmd: 'genh auto-update status' },
-        { text: 'Muốn tắt hẳn (chạy bằng đúng tài khoản đã cài Gen-Harness):', cmd: 'genh auto-update disable' },
+        { text: 'Muốn tắt hẳn (chạy bằng đúng tài khoản đã cài GenOS):', cmd: 'genh auto-update disable' },
         { text: 'Hoặc muốn giữ tự cập nhật mỗi đêm:', cmd: 'genh auto-update enable' },
       ],
     });

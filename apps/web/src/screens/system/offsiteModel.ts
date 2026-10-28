@@ -23,7 +23,7 @@ export const OFFSITE_ERROR_TEXT: Record<string, string> = {
   'GH-EB03': 'Gói vừa ghi không đọc lại được nên chưa tính là bản sao — thử lại, nếu vẫn lỗi hãy đổi ổ khác.',
   'GH-EB04': 'Không ghi được vào ổ ngoài — ổ có thể đầy, chỉ đọc hoặc bị rút ra giữa chừng.',
   'GH-EB05': 'Máy chủ đang cập nhật hoặc khôi phục — bản sao ngoài máy sẽ chạy lại sau.',
-  'GH-EB06': 'Dịch vụ Gen-Harness chưa chạy nên chưa xuất được bản sao.',
+  'GH-EB06': 'Dịch vụ GenOS chưa chạy nên chưa xuất được bản sao.',
   'GH-EB07': 'Nơi lưu không hợp lệ — phải là ổ USB/NAS khác ổ chính của máy chủ.',
   // v0.1.53 (F-97): genh không xoá được tệp yêu cầu trong run/request nên KHÔNG làm (tránh chạy lặp) — cắm ổ/thử lại
   // không chữa được, phải sửa quyền thư mục.

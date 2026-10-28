@@ -97,7 +97,7 @@ describe('Việc Sếp cần làm — dòng 9 Gen ghi Kho', () => {
     expect(within(row).getByTestId('boss-result')).toHaveTextContent('Chưa kiểm');
     const steps = within(row).getAllByRole('listitem');
     expect(steps).toHaveLength(2);
-    expect(steps[0].textContent).toContain('tick quyền ghi Kho (tạo và sửa bản ghi — tên trong Gen-hub: kho_create, kho_update) cho token của Gen-Harness');
+    expect(steps[0].textContent).toContain('tick quyền ghi Kho (tạo và sửa bản ghi — tên trong Gen-hub: kho_create, kho_update) cho token của GenOS');
     expect(steps[0].textContent).toContain('bấm Kiểm tra');
     expect(steps[1].textContent).toContain('đề xuất ghi Phiên đầu tiên');
     expect(steps[1].textContent).toContain('Xác nhận và ghi Kho');
@@ -165,7 +165,7 @@ describe('Việc Sếp cần làm — dòng 9 Gen ghi Kho', () => {
     const second = renderPage();
     const no = await within(await screen.findByRole('region', { name: 'Nối Gen-hub' })).findByTestId('boss-hub-write-scopes');
     expect(no).toHaveTextContent('Quyền ghi Kho (không bắt buộc): Chưa');
-    expect(no).toHaveTextContent('tick quyền ghi Kho (tạo và sửa bản ghi — tên trong Gen-hub: kho_create, kho_update) cho token của Gen-Harness rồi bấm Kiểm tra lại');
+    expect(no).toHaveTextContent('tick quyền ghi Kho (tạo và sửa bản ghi — tên trong Gen-hub: kho_create, kho_update) cho token của GenOS rồi bấm Kiểm tra lại');
     expect(no).toHaveTextContent('Không tick cũng được');
     second.unmount();
     vi.unstubAllGlobals();

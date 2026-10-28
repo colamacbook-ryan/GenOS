@@ -37,7 +37,7 @@ export function ComingSoonStep({ meta, status, onBack, onSkip, skipping, onNext,
         description={
           settled
             ? `Bước này đã ${status === 'skipped' ? 'được để sau' : 'hoàn tất'}. Chỉnh lại được sau ở màn tương ứng của Console.`
-            : 'Bước này được dựng ở giai đoạn sau của Gen-Harness. Bấm Tiếp tục để sang bước kế — làm lại được ở màn tương ứng khi có.'
+            : 'Bước này được dựng ở giai đoạn sau của GenOS. Bấm Tiếp tục để sang bước kế — làm lại được ở màn tương ứng khi có.'
         }
       />
       <div className="setup-when">

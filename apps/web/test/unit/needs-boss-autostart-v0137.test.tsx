@@ -19,7 +19,7 @@ const json = (status: number, body: unknown) =>
 
 const AUTOSTART: HealthIssue = {
   key: 'host.autostart', kind: 'host.autostart', severity: 'warn',
-  title: 'Máy chủ có thể không tự chạy lại Gen-Harness khi bật lại máy',
+  title: 'Máy chủ có thể không tự chạy lại GenOS khi bật lại máy',
   body: 'Docker chưa bật tự chạy khi mở máy — chạy một lần trên máy chủ: sudo systemctl enable docker · Chạy xong thì chạy genh status để cảnh báo tự hết',
   link: '/system?tab=storage', action: 'Xem cách bật', raised_at: '2026-10-02T01:00:00Z',
 };
@@ -61,7 +61,7 @@ describe('v0.1.37 — host.autostart', () => {
     const strip = await screen.findByTestId('needs-boss');
     const [row] = within(strip).getAllByTestId('needs-boss-row');
     expect(row).toHaveAttribute('data-severity', 'warn');
-    expect(row).toHaveTextContent('Máy chủ có thể không tự chạy lại Gen-Harness khi bật lại máy');
+    expect(row).toHaveTextContent('Máy chủ có thể không tự chạy lại GenOS khi bật lại máy');
     expect(row).toHaveTextContent('sudo systemctl enable docker');
     expect(row).toHaveTextContent('genh status');
     expect(within(row).getByRole('link', { name: /Xem cách bật/ })).toHaveAttribute('href', '/system?tab=storage');

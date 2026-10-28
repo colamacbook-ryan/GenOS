@@ -138,7 +138,7 @@ test.describe('v0.1.36 — Cần Sếp xử lý & Sức khoẻ hệ thống', ()
     const tip = page.getByRole('region', { name: 'Sức khoẻ hệ thống' }).getByTestId('health-tip-disk');
     await expect(tip).toContainText('Cách giải phóng chỗ trống');
     await expect(tip.getByText('docker system prune')).toBeVisible();
-    await expect(tip).toContainText('Không xoá thư mục cài Gen-Harness');
+    await expect(tip).toContainText('Không xoá thư mục cài GenOS');
     // Ổ đĩa chỉ được đo khi genh cập nhật (không phải mỗi phút) ⇒ hiện giờ đo và chỉ cách đo lại.
     await expect(tip).toContainText('genh update');
     await expect(tip).not.toContainText('mỗi phút');
