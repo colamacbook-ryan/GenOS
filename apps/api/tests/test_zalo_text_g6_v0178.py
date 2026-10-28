@@ -129,3 +129,11 @@ async def test_person_name_goes_into_alert_and_digest_title_and_stk_still_masked
     [dig] = await outbox(db)
     assert "Anh Nam: cau_hoi_cho_xu_ly q-name" in dig.text
     _ = EVENING
+
+
+def test_cut_title_drops_partial_number_g6() -> None:
+    """Review v0.1.78: cắt giữa SĐT để lại 7 chữ số (dưới ngưỡng che ≥ 8 của `display_mask`) ⇒ bỏ cả dãy số dở."""
+    out = otext.cut_title("Khách gửi số người nhà 0912 345 678 nhờ chuyển gấp", 30)
+    assert out == "Khách gửi số người nhà…"
+    assert not any(c.isdigit() for c in out)
+    assert otext.cut_title("Có 1234 khách mới hôm nay và nhiều việc khác", 12) == "Có 1234…"

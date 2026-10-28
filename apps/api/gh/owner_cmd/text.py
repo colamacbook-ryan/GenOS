@@ -19,6 +19,8 @@ def line(s: str, limit: int = 160) -> str:
 
 
 _TAIL_JUNK = re.compile(r"[\s,;:\-–—(\[{“\"«]+$")
+#: Dãy số (STK/SĐT) dở dang ở cuối đoạn cắt: chữ số xen khoảng trắng/chấm/gạch.
+_TAIL_DIGITS = re.compile(r"\d[\d\s.\-]*$")
 
 
 def cut_title(s: str, limit: int) -> str:
@@ -34,6 +36,9 @@ def cut_title(s: str, limit: int) -> str:
     for op, cl in (("(", ")"), ("[", "]"), ("“", "”"), ("«", "»")):
         if cut.count(op) > cut.count(cl):                  # ngoặc/trích còn mở ⇒ bỏ từ chỗ mở
             cut = cut[:cut.rindex(op)]
+    if s[len(cut):len(cut) + 2].strip()[:1].isdigit():
+        # cắt chạm giữa một dãy số ⇒ bỏ cả dãy: nửa số (vd 7 chữ số của SĐT) lọt dưới ngưỡng che của `display_mask`
+        cut = _TAIL_DIGITS.sub("", cut)
     return _TAIL_JUNK.sub("", cut) + "…"
 
 

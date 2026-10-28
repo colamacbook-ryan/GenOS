@@ -88,7 +88,7 @@ describe('gen targets registry', () => {
     expect(resolveTarget('connections.brain')).toMatchObject({ screen: 'connections' });
     for (const id of ['mcp.hub_link', 'mcp.hub_link.token', 'mcp.hub_link.test']) expect(resolveTarget(id)?.screen, id).toBe('connections');
     for (const id of ['system.users.list', 'system.users.invite', 'system.users.temp_password']) {
-      expect(resolveTarget(id)?.screen, id).toBe('team');
+      expect(resolveTarget(id)?.screen, id).toBe('access')  // v0.1.78: Quản trị › Người & quyền;
       expect(resolveTarget(id)?.params, id).toBeUndefined();
     }
     expect(resolveTarget('system.tab.channels')).toBeNull();

@@ -652,7 +652,7 @@
     },
     {
       "id": "system.users.list",
-      "screen": "team",
+      "screen": "access",
       "label": "Danh sách người dùng",
       "description": "Tên, email, vai trò, trạng thái, lần đăng nhập gần nhất; nút đặt lại mật khẩu, khoá/mở khoá",
       "dynamic": null,
@@ -663,7 +663,7 @@
     },
     {
       "id": "system.users.invite",
-      "screen": "team",
+      "screen": "access",
       "label": "Nút \"Mời người dùng\"",
       "description": "Tạo tài khoản mới với mật khẩu tạm (cần mã PIN)",
       "dynamic": null,
@@ -672,7 +672,7 @@
     },
     {
       "id": "system.users.temp_password",
-      "screen": "team",
+      "screen": "access",
       "label": "Mật khẩu tạm vừa tạo",
       "description": "Hộp hiện mật khẩu tạm một lần sau khi mời / đặt lại mật khẩu",
       "dynamic": null,

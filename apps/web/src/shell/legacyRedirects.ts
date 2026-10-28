@@ -30,7 +30,7 @@ export const LEGACY_REDIRECTS: Readonly<Record<string, LegacyTarget>> = {
   '/owner/gen': { to: '/intel' },
   '/owner/them': { to: '/admin/start' },
   // ── Console theo khoá màn (v0.1.42): Việc hằng ngày ──
-  '/overview': { to: '/intel' },
+  '/overview': { to: '/intel', tab: 'overview' },
   '/inbox': { to: '/intel/inbox', keepTab: true },
   '/workbench': { to: '/decide', tab: 'drafts' },
   '/tasks': { to: '/work' },
@@ -111,7 +111,7 @@ export function resolveLegacy(pathname: string, search: string, hash: string, ca
   // Trang mới tự đặt `?tab=` — đặt trước để tab hiện đầu chuỗi (dễ đọc), phần còn lại giữ nguyên thứ tự của link cũ.
   const out = new URLSearchParams();
   if (t.tab) out.set('tab', t.tab);
-  params.forEach((v, k) => out.set(k, v));
+  params.forEach((v, k) => out.append(k, v));
   const qs = out.toString();
   return `${t.to}${qs ? `?${qs}` : ''}${hash}`;
 }

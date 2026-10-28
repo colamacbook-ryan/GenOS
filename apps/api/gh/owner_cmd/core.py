@@ -70,7 +70,8 @@ _HELP_T = (
     "/nhap <ý> — em soạn đề xuất (nháp tin, nhắc việc, ghi nhớ…)\n"
     "Hoặc hỏi em một câu bình thường — em chỉ trả lời, không tự làm gì.\n"
     "Việc cần ghi/gửi đi: em chỉ ĐỀ XUẤT, Sếp mở Console bấm Xác nhận và nhập mã PIN (mã PIN không bao giờ gõ ở đây). "
-    "Kênh Zalo/WhatsApp quản trị thì Sếp chỉ cần trả lời OK ngay trong chat."
+    "Ở kênh Zalo/WhatsApp quản trị: việc nội bộ Sếp trả lời OK ngay trong chat; tin gửi người ngoài phải OK riêng từng tin "
+    "(em nêu rõ người nhận + nguyên văn)."
 )
 _HELP_CHAT_T = (
     "Em là {name}. Sếp nhắn em ở đây được các lệnh sau:\n"

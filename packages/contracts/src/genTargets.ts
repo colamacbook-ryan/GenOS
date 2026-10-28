@@ -122,10 +122,10 @@ export const GEN_TARGETS: GenTarget[] = [
   { id: 'system.offsite.run', screen: 'system', label: 'Nút "Sao lưu ra ổ ngoài ngay"', description: 'Xuất bản sao ra ổ ngoài ngay lúc này', params: { tab: 'storage' }, sensitive: true, permission: 'system.manage' },
   { id: 'system.offsite.portable', screen: 'system', label: 'Nút "Tải gói mang đi"', description: 'Tải gói dữ liệu mã hoá về máy đang dùng (chỉ Owner, cần mã PIN)', params: { tab: 'storage' }, sensitive: true, permission: 'roles.manage' },
   { id: 'system.offsite.kit', screen: 'system', label: 'Nút "Bộ khôi phục"', description: 'Xem/in khoá khôi phục để mở bản sao ngoài máy (chỉ Owner, cần mã PIN)', params: { tab: 'storage' }, sensitive: true, permission: 'roles.manage' },
-  // v0.1.42 (F-7): người dùng ở Đội ngũ (id giữ nguyên).
-  { id: 'system.users.list', screen: 'team', label: 'Danh sách người dùng', description: 'Tên, email, vai trò, trạng thái, lần đăng nhập gần nhất; nút đặt lại mật khẩu, khoá/mở khoá', sensitive: true, permission: 'roles.manage' },
-  { id: 'system.users.invite', screen: 'team', label: 'Nút "Mời người dùng"', description: 'Tạo tài khoản mới với mật khẩu tạm (cần mã PIN)', permission: 'roles.manage' },
-  { id: 'system.users.temp_password', screen: 'team', label: 'Mật khẩu tạm vừa tạo', description: 'Hộp hiện mật khẩu tạm một lần sau khi mời / đặt lại mật khẩu', sensitive: true, permission: 'roles.manage' },
+  // v0.1.78 (G0): người dùng ở Quản trị › Người & quyền (id giữ nguyên).
+  { id: 'system.users.list', screen: 'access', label: 'Danh sách người dùng', description: 'Tên, email, vai trò, trạng thái, lần đăng nhập gần nhất; nút đặt lại mật khẩu, khoá/mở khoá', sensitive: true, permission: 'roles.manage' },
+  { id: 'system.users.invite', screen: 'access', label: 'Nút "Mời người dùng"', description: 'Tạo tài khoản mới với mật khẩu tạm (cần mã PIN)', permission: 'roles.manage' },
+  { id: 'system.users.temp_password', screen: 'access', label: 'Mật khẩu tạm vừa tạo', description: 'Hộp hiện mật khẩu tạm một lần sau khi mời / đặt lại mật khẩu', sensitive: true, permission: 'roles.manage' },
   { id: 'system.org.form', screen: 'system', label: 'Thông tin tổ chức', description: 'Tên tổ chức, múi giờ, tiền tệ, Sếp tự xưng là, Agent gọi Sếp là', params: { tab: 'org' } },
   { id: 'system.org.save', screen: 'system', label: 'Nút "Lưu thông tin tổ chức"', description: 'Lưu thay đổi thông tin tổ chức và xưng hô', params: { tab: 'org' } },
   // ── Việc & Nhắc hẹn / Hộp thư / Bàn làm việc (Gen v2 — A4: đề xuất có xác nhận gắn với các mục tiêu này) ──

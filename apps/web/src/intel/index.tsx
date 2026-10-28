@@ -16,6 +16,8 @@ const InboxScreen = LEGACY_SCREENS.inbox;
 const TABS: HubTab[] = [
   { key: 'today', label: 'Hôm nay', ownerOnly: true, render: () => <OwnerEmbed><IntelScreen /></OwnerEmbed> },
   { key: 'today', label: 'Hôm nay', notOwner: true, screen: 'overview', render: () => <OverviewScreen /> },
+  // Review v0.1.78: Sếp vẫn mở được Tổng quan cũ (đích Gen `overview.*`, thẻ "Hôm nay của Sếp") ở tab riêng.
+  { key: 'overview', label: 'Tổng quan', ownerOnly: true, screen: 'overview', render: () => <OverviewScreen /> },
   { key: 'signals', label: 'Tín hiệu', ownerOnly: true, render: () => <OwnerEmbed><FeedScreen /></OwnerEmbed> },
   { key: 'inbox', label: 'Hộp thư', screen: 'inbox', path: 'inbox', render: () => <InboxScreen /> },
 ];

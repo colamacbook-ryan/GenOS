@@ -27,7 +27,7 @@ describe('bảng chuyển hướng', () => {
     expect(t('/owner/gen')).toBe('/intel');
     expect(t('/owner/them')).toBe('/admin/start');
     expect(t('/owner/khong-co')).toBe('/intel');
-    expect(t('/overview')).toBe('/intel');
+    expect(t('/overview')).toBe('/intel?tab=overview');
     expect(t('/inbox')).toBe('/intel/inbox');
     expect(t('/workbench')).toBe('/decide?tab=drafts');
     expect(t('/tasks')).toBe('/work');
@@ -45,7 +45,9 @@ describe('bảng chuyển hướng', () => {
   it('giữ query và băm của link cũ; `tab` cũ bị bỏ trừ màn tự dùng ?tab= (Hộp thư, Plugin)', () => {
     expect(resolveLegacy('/owner/thong-tin', '?tin=A1', '')).toBe('/intel?tab=signals&tin=A1');
     expect(resolveLegacy('/owner/quan-he', '?list=hot&nguoi=P9', '')).toBe('/panorama?tab=relations&list=hot&nguoi=P9');
-    expect(resolveLegacy('/overview', '?gen=coach', '')).toBe('/intel?gen=coach');
+    expect(resolveLegacy('/overview', '?gen=coach', '')).toBe('/intel?tab=overview&gen=coach');
+    // Review v0.1.78: tham số lặp giữ đủ (append, không ghi đè).
+    expect(resolveLegacy('/directory', '?k=a&k=b', '')).toBe('/panorama?tab=people&k=a&k=b');
     expect(resolveLegacy('/inbox', '?tab=alert&intent=x', '')).toBe('/intel/inbox?tab=alert&intent=x');
     expect(resolveLegacy('/plugins', '?tab=core', '')).toBe('/admin/advanced/plugins?tab=core');
     expect(resolveLegacy('/directory', '?tab=zzz&dt=people', '')).toBe('/panorama?tab=people&dt=people');
