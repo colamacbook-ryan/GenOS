@@ -188,7 +188,7 @@ export function MoreScreen() {
         <div className="owner-list" data-testid="owner-more-advanced">
           <RowLink to="/api" title="API & Model" meta="Khoá API, model, thứ tự dự phòng" lead={<Icon name="ph ph-plugs" size={16} />} testId="owner-adv-api" />
           <RowLink to="/system?tab=brain" title="Bộ não AI" meta="Nguồn AI, Gen hướng dẫn" lead={<Icon name="ph ph-brain" size={16} />} testId="owner-adv-brain" />
-          <RowLink to={ADVANCED_SETTINGS_PATH} title="Mở Console đầy đủ" meta="Có nút “Về Mặt tiền” để quay lại" lead={<Icon name="ph ph-gear" size={16} />} testId="owner-advanced" />
+          <RowLink to={ADVANCED_SETTINGS_PATH} title="Mở Console đầy đủ" meta="Mở Tổng quan trong cùng giao diện" lead={<Icon name="ph ph-gear" size={16} />} testId="owner-advanced" />
         </div>
       </Panel>
     </div>

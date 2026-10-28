@@ -403,16 +403,16 @@ describe('/setup — ánh xạ URL', () => {
     await waitFor(() => expect(loc()).toBe('/setup?buoc=xong'));
   });
 
-  it('đã xong: /setup?step=7 → /guide/7; /setup → /owner', async () => {
+  it('đã xong: /setup?step=7 → /guide/7; /setup → /intel', async () => {
     startServer({ done: ALL, finished: true });
     const { unmount } = renderAt('/setup?step=7');
     await waitFor(() => expect(loc()).toBe('/guide/7'));
     unmount();
     renderAt('/setup');
-    await waitFor(() => expect(loc()).toBe('/owner'));
+    await waitFor(() => expect(loc()).toBe('/intel'));
   });
 
-  it('đã xong: mở ?buoc=nguon-ai (Owner) đổi nguồn AI, lưu PUT 4 rồi về /owner; không có phiên ⇒ /login?next=…; không phải Owner ⇒ "/"', async () => {
+  it('đã xong: mở ?buoc=nguon-ai (Owner) đổi nguồn AI, lưu PUT 4 rồi về /intel; không có phiên ⇒ /login?next=…; không phải Owner ⇒ "/"', async () => {
     const user = userEvent.setup();
     startServer({ done: ALL, finished: true, session: true, providers: [GEMINI_OK] });
     const { unmount } = renderAt('/setup?buoc=nguon-ai');
@@ -420,7 +420,7 @@ describe('/setup — ánh xạ URL', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /Tiếp tục/ })).toBeEnabled());
     expect(screen.queryByRole('button', { name: 'Làm sau' })).toBeNull(); // đã xong thì không còn "Làm sau"
     await user.click(screen.getByRole('button', { name: /Tiếp tục/ }));
-    await waitFor(() => expect(loc()).toBe('/owner'));
+    await waitFor(() => expect(loc()).toBe('/intel'));
     expect(srv.calls.find((c) => c.method === 'PUT' && c.path === '/setup/steps/4')!.body).toEqual({ provider_ids: ['pv-gemini'] });
     unmount();
 
@@ -587,16 +587,16 @@ describe('Bước 3 · Xong', () => {
     run: { id: 'r1', trigger: 'first_run', status: 'running', started_at: '2026-10-16T01:00:00Z', finished_at: null, input_count: 120, clean_count: 80, lowconf_count: 5, noise_count: 5, error_count: 0 },
   };
 
-  it('ba dòng tóm tắt (tài khoản · nguồn AI · lọc tin lần đầu), nút chính "Vào Mặt tiền", nút phụ "Nối Zalo ngay" + câu giải thích, hai link nhỏ', async () => {
+  it('ba dòng tóm tắt (tài khoản · nguồn AI · lọc tin lần đầu), nút chính "Vào Tình báo", nút phụ "Nối Zalo ngay" + câu giải thích, hai link nhỏ', async () => {
     startServer({ done: [1, 2, 3, 4], session: true, firstRun: RUNNING });
     renderAt('/setup?buoc=xong');
     await screen.findByRole('heading', { name: 'Xong rồi, thưa Sếp' });
     expect(await screen.findByText('Anh Nguyễn Văn A (Chủ) · Genesis Trading')).toBeInTheDocument();
     expect(screen.getByTestId('setup-done-ai')).toHaveTextContent('Đã chạy');
     expect(await screen.findByText(/Gen đang lọc tin lần đầu/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Vào Mặt tiền/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Vào Tình báo/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Nối Zalo ngay/ })).toBeInTheDocument();
-    expect(screen.getByText('Zalo là nguồn tin chính — chưa nối thì Mặt tiền còn trống.')).toBeInTheDocument();
+    expect(screen.getByText('Zalo là nguồn tin chính — chưa nối thì Tình báo còn trống.')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Nhận bản tin qua Telegram' })).toHaveAttribute('href', '/connections#telegram');
     expect(screen.getByRole('link', { name: 'Mời đội' })).toHaveAttribute('href', '/guide/10');
   });
@@ -614,12 +614,12 @@ describe('Bước 3 · Xong', () => {
     expect(await screen.findByText('Gen đã sẵn sàng. Đây là những gì đã bật:')).toBeInTheDocument();
   });
 
-  it('"Vào Mặt tiền": PUT 12 rồi /owner; "Nối Zalo ngay": PUT 12 rồi /guide/5', async () => {
+  it('"Vào Tình báo": PUT 12 rồi /owner; "Nối Zalo ngay": PUT 12 rồi /guide/5', async () => {
     const user = userEvent.setup();
     startServer({ done: [1, 2, 3, 4], session: true });
     const first = renderAt('/setup?buoc=xong');
-    await user.click(await screen.findByRole('button', { name: /Vào Mặt tiền/ }));
-    await waitFor(() => expect(loc()).toBe('/owner'));
+    await user.click(await screen.findByRole('button', { name: /Vào Tình báo/ }));
+    await waitFor(() => expect(loc()).toBe('/intel'));
     expect(puts(12)).toEqual([12]);
     first.unmount();
 
@@ -644,15 +644,15 @@ describe('Bước 3 · Xong', () => {
     startServer({ done: [1, 2, 3], session: true });
     sessionStorage.setItem(AI_LATER_KEY, '1');
     renderAt('/setup?buoc=xong');
-    await user.click(await screen.findByRole('button', { name: /Vào Mặt tiền/ }));
-    await waitFor(() => expect(loc()).toBe('/owner'));
+    await user.click(await screen.findByRole('button', { name: /Vào Tình báo/ }));
+    await waitFor(() => expect(loc()).toBe('/intel'));
     const order = srv.calls.filter((c) => c.method !== 'GET' && c.path.startsWith('/setup/steps/')).map((c) => `${c.method} ${c.path}`);
     expect(order).toEqual([4, 5, 6, 7, 8, 9, 10, 11].map((n) => `POST /setup/steps/${n}/skip`).concat('PUT /setup/steps/12'));
     // bước 4 xong thật thì KHÔNG bị ghi "để sau"
     queryClient.clear();
     startServer({ done: [1, 2, 3, 4], session: true });
     const again = renderAt('/setup?buoc=xong');
-    await user.click(await screen.findByRole('button', { name: /Vào Mặt tiền/ }));
+    await user.click(await screen.findByRole('button', { name: /Vào Tình báo/ }));
     await waitFor(() => expect(srv.calls.some((c) => c.path === '/setup/steps/12')).toBe(true));
     expect(srv.calls.some((c) => c.path === '/setup/steps/4/skip')).toBe(false);
     again.unmount();
@@ -665,7 +665,7 @@ describe('Bước 3 · Xong', () => {
       fail: { 'PUT /setup/steps/12': json(409, { status: 409, code: 'STEP_INCOMPLETE', title: 'Còn bước bắt buộc chưa xong: 3' }) },
     });
     renderAt('/setup?buoc=xong');
-    await user.click(await screen.findByRole('button', { name: /Vào Mặt tiền/ }));
+    await user.click(await screen.findByRole('button', { name: /Vào Tình báo/ }));
     expect(await screen.findByText('Còn bước bắt buộc chưa xong: 3')).toBeInTheDocument();
     expect(screen.getByText('Chi tiết kỹ thuật')).toBeInTheDocument();
     expect(loc()).toBe('/setup?buoc=xong');
@@ -732,7 +732,7 @@ describe('Đích "Chọn model" dồn về /setup?buoc=nguon-ai', () => {
     expect(await screen.findByRole('link', { name: /Chọn model/ })).toHaveAttribute('href', '/setup?buoc=nguon-ai');
   });
 
-  it('/guide/4 vẫn vẽ form Bộ não AI đầy đủ, quay về Mặt tiền (không còn "Hôm nay"), kèm "Cách nhanh: Thiết lập nguồn AI 2 phút"', async () => {
+  it('/guide/4 vẫn vẽ form Bộ não AI đầy đủ, quay về Tình báo (không còn "Hôm nay"), kèm "Cách nhanh: Thiết lập nguồn AI 2 phút"', async () => {
     startServer({ done: [1, 2, 3], session: true, providers: [GEMINI_OK] });
     render(
       <QueryClientProvider client={queryClient}>
@@ -743,7 +743,7 @@ describe('Đích "Chọn model" dồn về /setup?buoc=nguon-ai', () => {
         </MemoryRouter>
       </QueryClientProvider>,
     );
-    expect(await screen.findByRole('link', { name: /Mặt tiền/ })).toHaveAttribute('href', '/owner');
+    expect(await screen.findByRole('link', { name: /Tình báo/ })).toHaveAttribute('href', '/intel');
     expect(screen.queryByRole('link', { name: /Hôm nay/ })).toBeNull();
     expect(screen.getByRole('link', { name: 'Cách nhanh: Thiết lập nguồn AI 2 phút' })).toHaveAttribute('href', '/setup?buoc=nguon-ai');
     expect(await screen.findByTestId('setup-cli-antigravity_cli')).toBeInTheDocument(); // Step4Brain đầy đủ

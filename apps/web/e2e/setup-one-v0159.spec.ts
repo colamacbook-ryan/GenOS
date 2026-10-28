@@ -76,10 +76,10 @@ test.describe('Thiết lập một màn (v0.1.59)', () => {
     await expect(page.getByTestId('setup-done-account')).toContainText('Anh Nguyễn Văn A (Chủ)');
     await expect(page.getByTestId('setup-done-ai')).toContainText('Đã chạy');
     await expect(page.getByTestId('setup-done-first-run')).toContainText('Gen');
-    await expect(page.getByText('Zalo là nguồn tin chính — chưa nối thì Mặt tiền còn trống.')).toBeVisible();
+    await expect(page.getByText('Zalo là nguồn tin chính — chưa nối thì Tình báo còn trống.')).toBeVisible();
     await expect(page.getByRole('link', { name: 'Nhận bản tin qua Telegram' })).toHaveAttribute('href', '/connections#telegram');
     await expect(page.getByRole('link', { name: 'Mời đội' })).toHaveAttribute('href', '/guide/10');
-    await page.getByRole('button', { name: /Vào Mặt tiền/ }).click();
+    await page.getByRole('button', { name: /Vào Tình báo/ }).click();
     await expectOwnerFront(page);
 
     // Payload: 3 bước tài khoản giữ nguyên hình dạng cũ; xưng hô / múi giờ / tiền tệ dùng mặc định; bước 4 chỉ gửi danh sách nguồn.
@@ -104,7 +104,7 @@ test.describe('Thiết lập một màn (v0.1.59)', () => {
     await setupOneToDone(page, { skipAi: true });
     await expect(page).toHaveURL(/buoc=xong/);
     await expect(page.getByTestId('setup-done-ai')).toContainText('Làm sau — Gen sẽ chưa tóm tắt được bản tin');
-    await page.getByRole('button', { name: /Vào Mặt tiền/ }).click();
+    await page.getByRole('button', { name: /Vào Tình báo/ }).click();
     await expectOwnerFront(page);
 
     // v0.1.78: /owner/them → Quản trị › Bắt đầu › tab "Việc nên làm tiếp".
@@ -254,9 +254,9 @@ test.describe('Thiết lập một màn — điện thoại 390px (v0.1.59)', ()
 
     await expect(page.getByRole('heading', { name: 'Xong rồi, thưa Sếp' })).toBeVisible();
     await expectNoHorizontalScroll(page);
-    await expect(page.getByRole('button', { name: /Vào Mặt tiền/ })).toBeVisible();
+    await expect(page.getByRole('button', { name: /Vào Tình báo/ })).toBeVisible();
     // vùng chạm >= 44px cho nút chính và nút phụ nổi bật
-    for (const name of [/Vào Mặt tiền/, /Nối Zalo ngay/]) {
+    for (const name of [/Vào Tình báo/, /Nối Zalo ngay/]) {
       const box = await page.getByRole('button', { name }).boundingBox();
       expect(box!.height).toBeGreaterThanOrEqual(44);
     }

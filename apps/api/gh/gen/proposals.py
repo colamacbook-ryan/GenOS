@@ -609,8 +609,8 @@ def result_of(call: Call, fields: dict[str, Any], body: Any) -> dict[str, Any]:
 # ── v0.1.50 (F-87): đề xuất ghi Phiên vào Kho cho MỖI bản mới (job gh.gen.kho_release) ──
 
 def release_record(version: str, today: str, repo: str) -> dict[str, str]:
-    return {"Chủ đề": f"Gen-Harness lên bản {version}", "Ngày": today,
-            "Đã chốt": f"Máy chủ Gen-Harness đã nâng lên {version}. Ghi chú phát hành: "
+    return {"Chủ đề": f"GenOS lên bản {version}", "Ngày": today,
+            "Đã chốt": f"Máy chủ GenOS đã nâng lên {version}. Ghi chú phát hành: "
                        f"https://github.com/{repo}/releases/tag/{version}"}
 
 

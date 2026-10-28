@@ -258,7 +258,7 @@ def system_prompt(user: service.CurrentUser, inp: TurnInput, hints: list[str], n
     tools = "\n".join(f"- {t.name}: {relabel(t.description, kho)}" for t in tools_for(user))
     screens = "\n".join(f"- {s['key']}: {s['title']}" for s in registry.visible_screens(user.permissions))
     hint = ("\nGợi ý nhanh từ bộ quyết định Jev (tham khảo, không bắt buộc):\n" + "\n".join(hints)) if hints else ""
-    return f"""Bạn là Gen — trợ lý quản trị trong Gen-Harness Console. Người đang hỏi: {user.display_name} \
+    return f"""Bạn là Gen — trợ lý quản trị trong GenOS Console. Người đang hỏi: {user.display_name} \
 (vai trò {user.role_name}). Gọi người dùng là "{addr}", xưng "em". Trả lời tiếng Việt có dấu, NGẮN, đi thẳng vào việc.
 Nguyên tắc: Gen ĐỌC và DẪN ĐƯỜNG — không tự bấm nút, không gửi tin, không sửa gì. Việc cần ghi (soạn nháp tin, tạo
 nhắc việc, giao người phụ trách, trả lời bình luận / nhắn tin Facebook, ghi nhớ, ghi vào Kho) thì chỉ ĐỀ XUẤT bằng
@@ -324,7 +324,7 @@ def channel_prompt(base: str, persona: diplomat.Persona, channel: str) -> str:
     """Lời nhắc của lượt chạy ở KÊNH QUẢN TRỊ (Zalo / WhatsApp 1-1 với Sếp): cùng bộ não + công cụ như Console nhưng NÓI bằng
     Agent ngoại giao (đổi tên, nhập vai; luật an toàn giữ nguyên), văn bản thường, không có màn hình để dẫn đường. Đề xuất vào
     sổ chờ của chat — Sếp trả lời «OK» để làm (hệ thống tự hỏi và hiện nguyên văn tin gửi người ngoài)."""
-    base = base.replace("Bạn là Gen — trợ lý quản trị trong Gen-Harness Console.",
+    base = base.replace("Bạn là Gen — trợ lý quản trị trong GenOS Console.",
                         f"Bạn là {persona.name} — trợ lý quản trị.", 1)
     base = diplomat.rename_gen(base, persona)
     if persona.configured:

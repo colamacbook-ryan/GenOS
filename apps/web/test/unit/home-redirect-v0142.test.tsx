@@ -174,14 +174,14 @@ describe('Về "/" sau đổi mật khẩu bắt buộc và sau thiết lập', 
 
   // v0.1.59 (g5-thiet-lap): thiết lập đã xong ⇒ /setup về /owner (trừ ?buoc=nguon-ai). Vai khác Owner bị OwnerShell chuyển tiếp về "/" →
   // màn đầu tiên của vai trò (e2e/owner.spec.ts "operator/manager/auditor: mở /owner bị chuyển"); ở đây chỉ kiểm bước chuyển của SetupPage.
-  it('SetupPage khi đã hoàn tất → /owner (nay là đường cũ, router chuyển tiếp sang /intel — legacy-redirects-v0178.test.ts)', async () => {
+  it('SetupPage khi đã hoàn tất → /intel (nay là đường cũ, router chuyển tiếp sang /intel — legacy-redirects-v0178.test.ts)', async () => {
     const nav = buildNavigation(hiddenScreens('agent_staff'));
     const finished = { finished: true, current_step: 12, steps: [], org: null };
     stubNav(nav, (url) => (url.includes('/setup/state') ? finished : undefined));
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
     qc.setQueryData(qk.setupState, finished);
-    const router = renderAt('/setup', [{ path: '/setup', element: <SetupPage /> }, { path: '/owner', element: <Where /> }], qc);
-    expect(await screen.findByTestId('where')).toHaveTextContent('/owner');
-    expect(router.state.location.pathname).toBe('/owner');
+    const router = renderAt('/setup', [{ path: '/setup', element: <SetupPage /> }, { path: '/intel', element: <Where /> }], qc);
+    expect(await screen.findByTestId('where')).toHaveTextContent('/intel');
+    expect(router.state.location.pathname).toBe('/intel');
   });
 });

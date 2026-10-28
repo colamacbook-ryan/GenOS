@@ -80,7 +80,7 @@ ERROR_MESSAGES = {
     "GH-EB03": "Bản sao vừa tạo không đọc lại được — chưa có bản sao ngoài máy",
     "GH-EB04": "Không ghi được vào nơi lưu — kiểm tra ổ còn chỗ trống và cho phép ghi",
     "GH-EB05": "Máy chủ đang cập nhật/khôi phục — lần sao lưu ra ổ ngoài sẽ thử lại sau",
-    "GH-EB06": "Dịch vụ Gen-Harness chưa chạy — bật lại rồi thử lại",
+    "GH-EB06": "Dịch vụ GenOS chưa chạy — bật lại rồi thử lại",
     "GH-EB07": "Nơi lưu không hợp lệ — chọn lại thư mục trên ổ USB/NAS",
     # v0.1.53 (F-97): genh không xoá được tệp yêu cầu trong run/request nên KHÔNG làm yêu cầu (tránh chạy lặp) — thử
     # lại/cắm ổ không chữa được; phải sửa quyền thư mục.
@@ -97,7 +97,7 @@ STATE_MESSAGES = {
 }
 
 RECOVERY_STEPS = [
-    "Cài Gen-Harness trên máy mới theo hướng dẫn cài đặt (chưa cần tạo dữ liệu gì).",
+    "Cài GenOS trên máy mới theo hướng dẫn cài đặt (chưa cần tạo dữ liệu gì).",
     "Cắm ổ USB (hoặc mở thư mục NAS) chứa bản sao ngoài máy, chọn tệp .ghbundle mới nhất.",
     "Chạy trên máy mới: genh import --yes <tệp .ghbundle>",
     "Khi được hỏi mật khẩu gói, nhập Khoá khôi phục này (gõ đủ cả dấu '-').",

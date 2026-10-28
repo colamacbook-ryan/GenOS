@@ -200,8 +200,8 @@ export function StepAiSource({ finished = false, onSaved, onLater }: StepAiSourc
           </Button>
           <div className="setup-one__later">
             {finished || !onLater ? (
-              <Link to="/owner" className="setup-one__link setup-one__link--quiet">
-                Để sau, về Mặt tiền
+              <Link to="/intel" className="setup-one__link setup-one__link--quiet">
+                Để sau, về Tình báo
               </Link>
             ) : (
               <>

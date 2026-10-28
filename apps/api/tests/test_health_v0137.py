@@ -20,7 +20,7 @@ from gh.db import sessionmaker
 from tests.conftest import Api
 from tests.phase2 import org_id
 
-TITLE = "Máy chủ có thể không tự chạy lại Gen-Harness khi bật lại máy"
+TITLE = "Máy chủ có thể không tự chạy lại GenOS khi bật lại máy"
 DONE = "Chạy xong thì chạy genh status để cảnh báo tự hết"
 
 

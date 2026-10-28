@@ -110,7 +110,7 @@ HUB_TRANSPORT: Any = None
 HUB_SECTIONS = (("calendar_today", "calendar_today"), ("mail_reply", "mail_reply"), ("gtasks_open", "tasks_open"))
 HUB_BREAKER_LINE = "Gen-hub tạm không trả lời"
 HUB_HINT_OFF = "Muốn bản tin có lịch, mail và việc: nối Gen-hub ở Kết nối › Gen-hub rồi bấm Kiểm tra."
-HUB_HINT_SCOPE = ("Bản tin chưa có {sections}: vào Gen-hub tick thêm quyền {scopes} cho token của Gen-Harness, rồi bấm "
+HUB_HINT_SCOPE = ("Bản tin chưa có {sections}: vào Gen-hub tick thêm quyền {scopes} cho token của GenOS, rồi bấm "
                   "Kiểm tra ở Kết nối › Gen-hub.")
 HUB_BUTTON = "Mở thẻ Gen-hub"
 #: Nút dưới lời nhắc: cuộn tới + làm sáng thẻ Gen-hub ở Kết nối (không phải trang Gen-hub bên ngoài).

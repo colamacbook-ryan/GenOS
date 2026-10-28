@@ -586,7 +586,7 @@ def _nhap_prompt(
     )
     # Kênh ngoài Console là NGOẠI GIAO: không xưng Gen — đổi tên + nhập vai agent ngoại giao (nếu có); luật an toàn giữ nguyên.
     base = base.replace(
-        "Bạn là Gen — trợ lý quản trị trong Gen-Harness Console.", f"Bạn là {persona.name} — trợ lý quản trị.", 1
+        "Bạn là Gen — trợ lý quản trị trong GenOS Console.", f"Bạn là {persona.name} — trợ lý quản trị.", 1
     )
     base = diplomat.rename_gen(base, persona)
     if persona.configured:
