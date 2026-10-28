@@ -30,8 +30,10 @@ HISTORY_MAX = 14
 ALERTS_MAX = 5
 SUMMARY_MAX = 1000
 LINES_MAX = 5
-#: Sự cố không có đường dẫn riêng ⇒ về trang sức khoẻ hệ thống của Console.
-HEALTH_LINK = "/system?tab=storage&focus=health"
+#: v0.1.79 (G1): mục bản tin thuộc SỰ CỐ HỆ THỐNG — không hiện trên Tình báo (chip sức khoẻ + chuông lo việc đó).
+SYSTEM_SECTION_KEYS = frozenset({"incidents"})
+#: Cảnh báo của Tình báo (ô "Cảnh báo") = tín hiệu đang mở mức 🔴🟠, đúng bộ `/signals` (không `system`/`legacy`).
+INTEL_ALERT_LINK = "/intel?tab=signals"
 
 #: Nhóm hiển thị của từng mục bản tin: Việc phải quyết · Cảnh báo · Điểm chính. Mục lạ ⇒ "key".
 GROUP_OF = {
@@ -81,7 +83,8 @@ def _section(s: Any) -> dict[str, Any] | None:
 
 
 def _sections(raw: Any) -> list[dict[str, Any]]:
-    return [x for x in (_section(s) for s in (raw if isinstance(raw, list) else [])) if x is not None]
+    return [x for x in (_section(s) for s in (raw if isinstance(raw, list) else [])) if x is not None
+            and x["key"] not in SYSTEM_SECTION_KEYS]
 
 
 def _slot_part(content: dict[str, Any], created_at: datetime) -> str:
@@ -142,12 +145,15 @@ def _latest(r: Any) -> dict[str, Any]:
 
 
 async def _alerts(db: AsyncSession, org_id: uuid.UUID) -> list[dict[str, Any]]:
+    """Cảnh báo của Tình báo: tín hiệu thật (`biz.alerts` kind ∉ system/legacy) đang mở, 🔴 trước rồi 🟠. Sự cố hệ thống
+    (`ops.health_alerts`, `biz.alerts` kind system) KHÔNG nằm ở đây — chúng ở chip sức khoẻ và chuông."""
     rows = (await db.execute(text("""
-        SELECT key, title, severity, raised_at, link FROM ops.health_alerts
-        WHERE org_id = :o AND cleared_at IS NULL ORDER BY (severity = 'bad') DESC, raised_at DESC LIMIT :n"""),
-                             {"o": org_id, "n": ALERTS_MAX})).all()
-    return [{"key": str(r.key), "title": svc._text(r.title, 160), "severity": "bad" if r.severity == "bad" else "warn",
-             "raised_at": iso(r.raised_at), "to": front_to(r.link, HEALTH_LINK)} for r in rows]
+        SELECT id, title, level, created_at FROM biz.alerts
+        WHERE org_id = :o AND status = 'open' AND kind NOT IN ('system', 'legacy') AND level IN ('red', 'amber')
+          AND privacy = 'chat_ok'
+        ORDER BY (level = 'red') DESC, created_at DESC LIMIT :n"""), {"o": org_id, "n": ALERTS_MAX})).all()
+    return [{"key": str(r.id), "title": svc._text(r.title, 160), "severity": "bad" if r.level == "red" else "warn",
+             "raised_at": iso(r.created_at), "to": INTEL_ALERT_LINK} for r in rows]
 
 
 async def ai_ready(db: AsyncSession, org_id: uuid.UUID) -> bool:

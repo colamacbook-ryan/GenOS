@@ -3,11 +3,11 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import { IntelCard } from '../../src/screens/system/IntelCard';
+import { IntelCard } from '../../src/intel/IntelCard';
 import { AiBudgetCard } from '../../src/screens/system/AiBudgetCard';
 import { queryClient } from '../../src/lib/queryClient';
 import { qk } from '../../src/lib/queries';
-import type { IntelConsole } from '../../src/screens/system/intelModel';
+import type { IntelConsole } from '../../src/intel/intelModel';
 
 /** v0.1.76 (T11): thẻ "Tình báo" + khoá `intel_*` ở thẻ Chi phí — gọi đúng route, báo lỗi thân thiện, không lộ object. */
 
@@ -72,15 +72,15 @@ afterEach(() => {
 describe('<IntelCard> Tình báo', () => {
   it('vai không phải Owner không thấy thẻ và không gọi máy chủ', () => {
     const calls = mockApi(state());
-    renderCard(<IntelCard />, 'manager');
-    expect(screen.queryByRole('region', { name: 'Tình báo' })).toBeNull();
+    renderCard(<><IntelCard part="trial" /><IntelCard part="controls" /></>, 'manager');
+    expect(screen.queryByRole('region', { name: 'Khoá, xác minh và cảnh báo' })).toBeNull();
     expect(calls.length).toBe(0);
   });
 
   it('hiện trạng thái: trợ lý hoạt động, chưa có kênh phụ (cảnh báo vàng), STK chỉ 3 số cuối', async () => {
     mockApi(state());
-    renderCard(<IntelCard />);
-    const card = await screen.findByRole('region', { name: 'Tình báo' });
+    renderCard(<><IntelCard part="trial" /><IntelCard part="controls" /></>);
+    const card = await screen.findByRole('region', { name: 'Khoá, xác minh và cảnh báo' });
     expect(await within(card).findByText('Đang hoạt động')).toBeInTheDocument();
     expect(within(card).getByText('Chưa có kênh phụ')).toBeInTheDocument();
     expect(card).toHaveTextContent('…789');
@@ -89,15 +89,15 @@ describe('<IntelCard> Tình báo', () => {
 
   it('khoá trợ lý gọi POST /intel/lock-assistant; khi đã khoá chỉ còn nút Mở khoá (cần PIN)', async () => {
     const calls = mockApi(state());
-    renderCard(<IntelCard />);
+    renderCard(<><IntelCard part="trial" /><IntelCard part="controls" /></>);
     await userEvent.click(await screen.findByRole('button', { name: 'Khoá trợ lý' }));
     await waitFor(() => expect(calls.some((c) => c.method === 'POST' && c.url === '/intel/lock-assistant')).toBe(true));
   });
 
   it('đang khoá: Mở khoá trợ lý gọi unlock-assistant, Mở khoá hôm nay bị tắt', async () => {
     const calls = mockApi(state({ assistant: { locked: true, locked_at: '2026-10-25T01:00:00Z', locked_via: 'console' } }));
-    renderCard(<IntelCard />);
-    const card = await screen.findByRole('region', { name: 'Tình báo' });
+    renderCard(<><IntelCard part="trial" /><IntelCard part="controls" /></>);
+    const card = await screen.findByRole('region', { name: 'Khoá, xác minh và cảnh báo' });
     expect(await within(card).findByText(/Đang khoá/)).toBeInTheDocument();
     expect(within(card).queryByRole('button', { name: 'Khoá trợ lý' })).toBeNull();
     expect(within(card).getByRole('button', { name: /Mở khoá hôm nay/ })).toBeDisabled();
@@ -107,28 +107,28 @@ describe('<IntelCard> Tình báo', () => {
 
   it('Mở khoá hôm nay gọi POST /intel/unlock-today', async () => {
     const calls = mockApi(state());
-    renderCard(<IntelCard />);
+    renderCard(<><IntelCard part="trial" /><IntelCard part="controls" /></>);
     await userEvent.click(await screen.findByRole('button', { name: /Mở khoá hôm nay/ }));
     await waitFor(() => expect(calls.some((c) => c.url === '/intel/unlock-today')).toBe(true));
   });
 
   it('chuyển sang Chạy thử gửi PUT /intel/settings {mode:"shadow"}', async () => {
     const calls = mockApi(state());
-    renderCard(<IntelCard />);
+    renderCard(<><IntelCard part="trial" /><IntelCard part="controls" /></>);
     await userEvent.click(await screen.findByRole('radio', { name: 'Chạy thử' }));
     await waitFor(() => expect(calls.find((c) => c.url === '/intel/settings')?.body).toEqual({ mode: 'shadow' }));
   });
 
   it('tắt báo lừa đảo gọi POST /intel/mutes kind=rui_ro_lua_dao; bật lại gọi DELETE', async () => {
     const calls = mockApi(state());
-    renderCard(<IntelCard />);
+    renderCard(<><IntelCard part="trial" /><IntelCard part="controls" /></>);
     await userEvent.click(await screen.findByRole('switch', { name: 'Báo Rủi ro lừa đảo' }));
     await waitFor(() => expect(calls.find((c) => c.url === '/intel/mutes' && c.method === 'POST')?.body).toEqual({ scope_type: 'kind', scope_value: 'rui_ro_lua_dao' }));
   });
 
   it('đang tắt báo an toàn: công tắc tắt + huy hiệu, bật lại gọi DELETE /intel/mutes/{id}', async () => {
     const calls = mockApi(state({ mutes: [{ id: 'm1', scope_value: 'suc_khoe_an_toan', source: 'pin', until: null }] }));
-    renderCard(<IntelCard />);
+    renderCard(<><IntelCard part="trial" /><IntelCard part="controls" /></>);
     const sw = await screen.findByRole('switch', { name: 'Báo Sức khoẻ & an toàn' });
     expect(sw).toHaveAttribute('aria-checked', 'false');
     await userEvent.click(sw);
@@ -137,15 +137,15 @@ describe('<IntelCard> Tình báo', () => {
 
   it('xác minh STK gọi verify-payee của đúng tín hiệu', async () => {
     const calls = mockApi(state());
-    renderCard(<IntelCard />);
+    renderCard(<><IntelCard part="trial" /><IntelCard part="controls" /></>);
     await userEvent.click(await screen.findByRole('button', { name: /Xác minh số tài khoản VCB/ }));
     await waitFor(() => expect(calls.some((c) => c.url === '/intel/signals/sig-1/verify-payee' && c.method === 'POST')).toBe(true));
   });
 
   it('gán bối cảnh hàng loạt: chọn 2 nhóm + Kinh doanh gửi đúng thân', async () => {
     const calls = mockApi(state());
-    renderCard(<IntelCard />);
-    const card = await screen.findByRole('region', { name: 'Tình báo' });
+    renderCard(<><IntelCard part="trial" /><IntelCard part="controls" /></>);
+    const card = await screen.findByRole('region', { name: 'Khoá, xác minh và cảnh báo' });
     const btn = await within(card).findByRole('button', { name: 'Gán cho nhóm đã chọn' });
     expect(btn).toBeDisabled();
     await userEvent.click(within(card).getByRole('checkbox', { name: /Nhóm Quán/ }));
@@ -157,7 +157,7 @@ describe('<IntelCard> Tình báo', () => {
 
   it('lỗi máy chủ hiện chuỗi thân thiện + Chi tiết kỹ thuật, không render object', async () => {
     mockApi(state(), (c) => (c.url === '/intel/lock-assistant' ? json(403, { status: 403, code: 'NOT_OWNER', title: 'Không có quyền', detail: 'Chỉ Sếp mới khoá được trợ lý' }) : undefined));
-    renderCard(<IntelCard />);
+    renderCard(<><IntelCard part="trial" /><IntelCard part="controls" /></>);
     await userEvent.click(await screen.findByRole('button', { name: 'Khoá trợ lý' }));
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('Chỉ Sếp mới khoá được trợ lý');
@@ -167,7 +167,7 @@ describe('<IntelCard> Tình báo', () => {
 
   it('máy chủ lỗi khi tải: báo lỗi có nút Thử lại', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => json(500, { status: 500, code: 'INTERNAL', title: 'Lỗi máy chủ' })));
-    renderCard(<IntelCard />);
+    renderCard(<IntelCard part="controls" />);
     expect(await screen.findByRole('button', { name: /Thử lại/ })).toBeInTheDocument();
   });
 });
@@ -194,7 +194,7 @@ describe('<AiBudgetCard> trần tình báo intel_*', () => {
 describe('phản hồi sai khuôn', () => {
   it('máy chủ trả {} cho /intel/console ⇒ lỗi tại chỗ có Thử lại, thẻ không vỡ', async () => {
     mockApi(state(), (c) => (c.url === '/intel/console' ? json(200, {}) : undefined));
-    renderCard(<IntelCard />);
+    renderCard(<IntelCard part="controls" />);
     expect(await screen.findByRole('button', { name: /Thử lại/ })).toBeInTheDocument();
   });
 });
@@ -203,7 +203,7 @@ describe('hộp xác nhận cho việc hạ phòng thủ và nhãn nhóm', () =>
   it('Huỷ xác nhận ⇒ không gọi máy chủ: tắt báo lừa đảo, chạy thử, mở khoá trợ lý', async () => {
     vi.spyOn(window, 'confirm').mockReturnValue(false);
     const calls = mockApi(state({ assistant: { locked: true, locked_at: null, locked_via: 'console' } }));
-    renderCard(<IntelCard />);
+    renderCard(<><IntelCard part="trial" /><IntelCard part="controls" /></>);
     await userEvent.click(await screen.findByRole('switch', { name: 'Báo Rủi ro lừa đảo' }));
     await userEvent.click(screen.getByRole('radio', { name: 'Chạy thử' }));
     await userEvent.click(screen.getByRole('button', { name: /Mở khoá trợ lý/ }));
@@ -213,7 +213,7 @@ describe('hộp xác nhận cho việc hạ phòng thủ và nhãn nhóm', () =>
 
   it('nói rõ gán hàng loạt THAY TOÀN BỘ bối cảnh đã gán', async () => {
     mockApi(state());
-    renderCard(<IntelCard />);
+    renderCard(<><IntelCard part="trial" /><IntelCard part="controls" /></>);
     expect(await screen.findByText(/THAY TOÀN BỘ bối cảnh/)).toBeInTheDocument();
   });
 
@@ -223,7 +223,7 @@ describe('hộp xác nhận cho việc hạ phòng thủ và nhãn nhóm', () =>
     ['STK thiếu title', { payees: [{ signal_id: 's', last3: '1', bank: null }] }],
   ])('%s ⇒ lỗi tại chỗ, thẻ không vỡ', async (_n, over) => {
     mockApi(state(over as Partial<IntelConsole>));
-    renderCard(<IntelCard />);
+    renderCard(<IntelCard part="controls" />);
     expect(await screen.findByRole('button', { name: /Thử lại/ })).toBeInTheDocument();
   });
 });

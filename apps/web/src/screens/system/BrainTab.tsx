@@ -13,8 +13,6 @@ import { BackgroundSourcesCard } from './BackgroundSourcesCard';
 import { GenMemoryCard } from './GenMemoryCard';
 import { GenCoachCard } from './GenCoachCard';
 import { AiBudgetCard } from './AiBudgetCard';
-import { IntelCard } from './IntelCard';
-import { IntelSetupCard } from './IntelSetupCard';
 import { useCan } from '../../lib/permissions';
 import { StandardModeStrip } from '../../defaults/StandardModeStrip';
 import { AI_SOURCE_PATH } from '../../setup/steps';
@@ -225,12 +223,15 @@ export function BrainTabBody() {
         <AiBudgetCard />
       </div>
 
-      {/* v0.1.76 (T14, D3): hai bước để Tình báo đầy đủ chạy — chỉ Owner thấy; xong thì thu gọn thành một dòng. */}
-      <IntelSetupCard />
-
       <div className="sys-grid2">
         <TriageCard />
-        <IntelCard />
+        {/* v0.1.79 (G1): Tình báo (thiết lập, chạy thử 14 ngày, khoá/PIN) đã chuyển sang trang Tình báo — ở đây chỉ còn đường dẫn. */}
+        <div className="gh-card brain-cli-link" data-testid="brain-intel-moved" data-gen-target="system.brain.intel_moved">
+          <Link to="/intel?tab=setup" className="sys-link">
+            <Icon name="ph ph-sun" size={13} />
+            Tình báo đã chuyển sang trang Tình báo
+          </Link>
+        </div>
       </div>
     </div>
   );

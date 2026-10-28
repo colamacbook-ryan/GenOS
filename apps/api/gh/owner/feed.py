@@ -54,6 +54,12 @@ IMPORTANT_EVENT_TYPES = frozenset({
 #: Mặt tiền tính cả xin mẫu / báo giá / chốt đơn nên cùng một chữ «Cơ hội» ra hai con số khác nhau.
 OPPORTUNITY_EVENT_TYPES = frozenset(qsvc.OPPORTUNITY_EVENTS)
 URGENT_EVENT_TYPE = "Complained"
+#: v0.1.79 (G1): sự cố HỆ THỐNG không thuộc Tình báo — chỉ hiện ở chip sức khoẻ + chuông. Lọc ở đây (một nguồn cho
+#: danh sách, số đếm và `urgent_open`), không chỉ ẩn ở giao diện. `kind='system'` (bảng LEGACY_MAP của signals) cộng
+#: các loại do đường ống Tình báo tự báo về chính nó.
+SYSTEM_ALERT_TYPES = (
+    "model_chain_exhausted", "model_chain_agy_only", "model_quota_low", "data_conflict", "intel_free_mode",
+    "intel_safety_abuse", "intel_safety_cap", "intel_write_failed_safety")
 #: Trạng thái nháp trả lời coi như tin đã được xử lý (nháp chờ duyệt / bị từ chối / lỗi thì chưa).
 HANDLED_DRAFT_STATUSES = ("approved", "edited", "sent")
 
@@ -98,7 +104,7 @@ async def _items_cte(db: AsyncSession, org_id: uuid.UUID) -> tuple[str, dict[str
     junk = ""
     params: dict[str, Any] = {"o": org_id, "urgent": URGENT_EVENT_TYPE, "imp": sorted(IMPORTANT_EVENT_TYPES),
                               "hot": svc.HOT_MIN, "opp": sorted(OPPORTUNITY_EVENT_TYPES), "days": UNIT_WINDOW_DAYS,
-                              "handled": list(HANDLED_DRAFT_STATUSES)}
+                              "handled": list(HANDLED_DRAFT_STATUSES), "sysal": list(SYSTEM_ALERT_TYPES)}
     if cfg["enabled"]:
         # Cùng điều kiện "ẩn rác & trùng" của Hộp thư (gh.biz.queue.routes.JUNK_SQL).
         junk = "AND NOT COALESCE(m.is_spam OR m.duplicate_of IS NOT NULL OR m.quality < :minq, false)"
@@ -132,6 +138,7 @@ WITH handled AS (
     AND i.privacy = 'chat_ok'   -- v0.1.76 (T1): console_pin chỉ xem ở Tình báo khi đã mở PIN
     AND (i.item_type <> 'unit' OR i.created_at > now() - make_interval(days => :days))
     AND {qsvc.not_silenced_sql("i")}
+    AND NOT (i.item_type = 'alert' AND (COALESCE(a.kind, '') = 'system' OR a.alert_type = ANY(CAST(:sysal AS text[]))))
     AND COALESCE(gc.type, '') <> 'facebook'
     {junk}
 )"""

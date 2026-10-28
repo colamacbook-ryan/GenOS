@@ -8,8 +8,8 @@ import { parseVnd, priceStr } from './moneyInput';
 import { toast } from '../../lib/toast';
 import { CardError, InlineError, Panel, SkeletonLines } from '../common';
 import { useAiCost, useSetAiBudget, useSetModelPrice } from './queries';
-import { useIntelBudget, useSetIntelBudget } from './intelQueries';
-import { INTEL_CAPS } from './intelModel';
+import { useIntelBudget, useSetIntelBudget } from '../../intel/intelQueries';
+import { INTEL_CAPS } from '../../intel/intelModel';
 
 const PRICE_SOURCE_LABEL: Record<string, string> = {
   owner: 'Sếp nhập',

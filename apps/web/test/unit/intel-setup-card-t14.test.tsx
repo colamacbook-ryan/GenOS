@@ -3,11 +3,12 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import { IntelSetupCard } from '../../src/screens/system/IntelSetupCard';
-import { IntelCard } from '../../src/screens/system/IntelCard';
+import { IntelSetupCard } from '../../src/intel/IntelSetupCard';
+import { IntelCard } from '../../src/intel/IntelCard';
+import { SetupBanner } from '../../src/intel/TodayTab';
 import { queryClient } from '../../src/lib/queryClient';
 import { qk } from '../../src/lib/queries';
-import { setupPendingText, type IntelConsole, type IntelSetup } from '../../src/screens/system/intelModel';
+import { setupPendingText, type IntelConsole, type IntelSetup } from '../../src/intel/intelModel';
 
 /** v0.1.76 (T14, Ryan chốt D3): thẻ "Thiết lập Tình báo" — hai bước, gọi đúng API sẵn có, banner nhắc ở thẻ Tình báo, lỗi thân thiện. */
 
@@ -163,21 +164,21 @@ describe('<IntelSetupCard> Thiết lập Tình báo', () => {
   });
 });
 
-describe('<IntelCard> banner nhắc Thiết lập Tình báo', () => {
+describe('<SetupBanner> dải nhắc Thiết lập Tình báo (Hôm nay)', () => {
   it('chưa xong ⇒ banner nêu phần còn thiếu; đã xong ⇒ không banner', async () => {
     mockApi(setup());
-    const { unmount } = renderCard(<IntelCard />);
+    const { unmount } = renderCard(<SetupBanner />);
     const banner = await screen.findByTestId('intel-setup-banner');
     expect(banner).toHaveTextContent('còn 2 nhóm chưa gán bối cảnh, chưa khai nhân viên');
     expect(banner).toHaveTextContent('Thiết lập Tình báo chưa xong');
     expect(banner).not.toHaveTextContent('Tình báo đầy đủ chưa bật');
-    expect(within(banner).getByRole('button', { name: 'Thiết lập ngay' })).toBeInTheDocument();
+    expect(within(banner).getByRole('link', { name: 'Làm ngay' })).toHaveAttribute('href', '/intel?tab=setup');
     unmount();
     queryClient.clear();
     mockApi(setup({ ready: true, groups: { done: true, total: 1, unlabeled_count: 0, unlabeled: [] }, staff: { done: true, confirmed_at: null, staff_count: 0, people: [] } }));
-    renderCard(<IntelCard />);
-    await screen.findByRole('region', { name: 'Tình báo' });
-    await waitFor(() => expect(screen.queryByTestId('intel-setup-banner')).toBeNull());
+    renderCard(<SetupBanner />);
+    await waitFor(() => expect(queryClient.getQueryState(['intel', 'setup'])?.status).toBe('success'));
+    expect(screen.queryByTestId('intel-setup-banner')).toBeNull();
   });
 
   it('setupPendingText chỉ nêu phần thiếu', () => {
@@ -189,7 +190,7 @@ describe('<IntelCard> banner nhắc Thiết lập Tình báo', () => {
 describe('<IntelCard> bốn cổng thường trong v0.1.76', () => {
   it('chỉ lên đầu bản tin: hiện "Đầu bản tin (bản này)", không có lựa chọn Báo ngay', async () => {
     const calls = mockApi(setup());
-    renderCard(<IntelCard />);
+    renderCard(<IntelCard part="trial" />);
     const row = await screen.findByTestId('intel-mode');
     expect(within(row).getByText('Đầu bản tin (bản này)')).toBeInTheDocument();
     expect(within(row).queryByRole('radio', { name: 'Nhắn ngay từ sớm' })).toBeNull();

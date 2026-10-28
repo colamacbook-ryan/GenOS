@@ -39,6 +39,7 @@ import { createMock as createGenV0150, type KhoWriteReq } from './mock-gen-v0150
 import { createMock as createGenCoach, type GenCoachOptions } from './mock-gen-coach';
 import { createMock as createDefaults } from './mock-defaults';
 import { createMock as createOwnerChannel } from './mock-owner-channel';
+import { createMock as createIntel } from './mock-intel';
 import { createMock as createOwner, type OwnerDataMode } from './mock-owner';
 import { acceptWebSocket, type MockSocket } from './mock-ws';
 import { buildScreenTree, SCREEN_BY_KEY } from '../../../packages/contracts/src/screens';
@@ -537,6 +538,8 @@ function createMockState(opts: MockOptions = {}, broadcast: (type: string, data:
     defaults: createDefaults({ fresh: opts.setup === 'fresh', emit: broadcast }),
     // v0.1.72: Bot tài khoản riêng — kênh quản trị, Chế độ hỗ trợ nhóm, sổ tin bot tự gửi (/owner-channel, /auto-sends, /groups/{id}/support).
     ownerChannel: createOwnerChannel({ fresh: opts.setup === 'fresh', emit: broadcast }),
+    // v0.1.79 (G1): trang Tình báo — /signals, /asks, /intel/console, /intel/setup (chỉ Owner).
+    intel: createIntel({ fresh: opts.setup === 'fresh' }),
     // agents TRƯỚC core: `GET /agents/decisions` cần trả dữ liệu thật ("agent đã nói gì") — core.handle() có
     // một stub rỗng cho cùng đường (chưa màn nào dùng tới trước giai đoạn 4) nên phải chặn trước nó.
     agents: p4Agents,

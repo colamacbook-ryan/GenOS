@@ -1,14 +1,13 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Badge, Button, SelectField, Segmented, Switch } from '@gen-harness/ui';
-import { errorDetail, errorText } from '../../lib/errorText';
-import { useMe } from '../../lib/queries';
-import { toast } from '../../lib/toast';
-import { CardError, InlineError, Panel, SkeletonLines } from '../common';
+import { errorDetail, errorText } from '../lib/errorText';
+import { useMe } from '../lib/queries';
+import { toast } from '../lib/toast';
+import { CardError, InlineError, Panel, SkeletonLines } from '../screens/common';
 import {
   useBulkContexts,
   useIntelConsole,
-  useIntelSetup,
   useIntelSettings,
   useLockAssistant,
   useMuteKind,
@@ -25,34 +24,51 @@ import {
   kindLabel,
   rampBannerText,
   reasonText,
-  setupPendingText,
   vnTime,
   type IntelConsole,
   type IntelMode,
   type IntelRamp,
   type WrongReason,
 } from './intelModel';
-import { INTEL_SETUP_ANCHOR } from './IntelSetupCard';
+import { GATE_LABEL, REGULAR_GATES } from './intelHubModel';
 import './intelP4.css';
 
 /**
- * v0.1.76 (T11, CNS-077): thẻ "Tình báo" tối thiểu — nơi DUY NHẤT trên Console làm các thao tác cần mã PIN của Tình báo: khoá / mở khoá
- * trợ lý, mở khoá hôm nay (cho «OK» gửi tin khách), chạy thật / chạy thử, ghép kênh phụ, tắt báo lừa đảo-an toàn, xác minh số tài khoản,
- * gán bối cảnh nhóm hàng loạt. Chỉ Owner thấy. Việc cần PIN: máy chủ trả 423 ⇒ hộp PIN chung tự mở rồi gửi lại (không tự dựng ô PIN).
+ * v0.1.76 (T11, CNS-077) — thao tác cần mã PIN của Tình báo; v0.1.79 (G1): tách đôi cho trang Tình báo (`/intel`), chỉ Owner thấy:
+ *  - `part="trial"` → tab "Chạy thử 14 ngày": banner R4, tình trạng từng cổng + M1, dòng bóng chờ chấm Đúng/Sai, "Cách chạy" (chạy thật / chạy thử);
+ *  - `part="controls"` → tab "Thiết lập" (dưới các bước): khoá / mở khoá trợ lý, mở khoá hôm nay (cho «OK» gửi tin khách), ghép kênh phụ, tắt báo
+ *    lừa đảo-an toàn, xác minh số tài khoản, gán bối cảnh nhóm hàng loạt.
+ * Việc cần PIN: máy chủ trả 423 ⇒ hộp PIN chung tự mở rồi gửi lại (không tự dựng ô PIN).
  */
-export function IntelCard() {
+const PARTS = {
+  trial: {
+    title: 'Chạy thử 14 ngày',
+    kicker: 'Bốn cổng thường chạy thử trước khi Gen được nhắn riêng ngay',
+    genTarget: 'intel.trial.card',
+  },
+  controls: {
+    title: 'Khoá, xác minh và cảnh báo',
+    kicker: 'Thao tác cần mã PIN của Tình báo',
+    genTarget: 'intel.setup.controls',
+  },
+} as const;
+
+export function IntelCard({ part }: { part: 'trial' | 'controls' }) {
   const me = useMe();
   const isOwner = me.data?.role?.code === 'owner';
   const q = useIntelConsole(isOwner);
   if (!isOwner) return null;
+  const p = PARTS[part];
   return (
-    <Panel title="Tình báo" kicker="Thao tác cần mã PIN của Tình báo" label="Tình báo" bodyClass="intel-card">
+    <Panel title={p.title} kicker={p.kicker} label={p.title} bodyClass="intel-card" genTarget={p.genTarget}>
       {q.isPending ? (
         <SkeletonLines rows={5} padding="0" />
       ) : q.isError ? (
         <CardError error={q.error} onRetry={() => void q.refetch()} retrying={q.isFetching} />
+      ) : part === 'trial' ? (
+        <TrialBody s={q.data} />
       ) : (
-        <IntelBody s={q.data} />
+        <ControlsBody s={q.data} />
       )}
     </Panel>
   );
@@ -72,27 +88,6 @@ function Row({ title, state, children, testId }: { title: string; state?: React.
 
 function Err({ e }: { e: unknown }) {
   return e ? <InlineError detail={errorDetail(e)}>{errorText(e)}</InlineError> : null;
-}
-
-/** v0.1.76 (T14, D3): nhắc khi "Thiết lập Tình báo" chưa xong — không chặn thẻ; lỗi đọc trạng thái thì im (thẻ Thiết lập tự báo lỗi). */
-function SetupBanner() {
-  const q = useIntelSetup(true);
-  if (!q.data || q.data.ready) return null;
-  return (
-    <div className="intel-setup-banner" role="status" data-testid="intel-setup-banner">
-      <span className="intel-setup-banner__text">
-        Thiết lập Tình báo chưa xong: {setupPendingText(q.data)}. Nhóm chưa gán bối cảnh được xử lý thận trọng (ít báo); lừa đảo và an toàn vẫn
-        báo bình thường.
-      </span>
-      <Button
-        variant="secondary"
-        size="sm"
-        onClick={() => document.getElementById(INTEL_SETUP_ANCHOR)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-      >
-        Thiết lập ngay
-      </Button>
-    </div>
-  );
 }
 
 /** v0.1.77 (R4): bốn cổng thường chạy thử lại 14 ngày — nói rõ từ ngày nào, còn mấy ngày, đã chấm mấy lượt. Hết thử/đạt M1 thì biến mất. */
@@ -171,20 +166,66 @@ function ShadowRow({ s }: { s: IntelConsole }) {
   );
 }
 
-function IntelBody({ s }: { s: IntelConsole }) {
+function TrialBody({ s }: { s: IntelConsole }) {
   return (
     <>
-      <SetupBanner />
       <RampBanner s={s} />
+      <GatesRow s={s} />
       <ShadowRow s={s} />
+      <ModeRow s={s} />
+    </>
+  );
+}
+
+function ControlsBody({ s }: { s: IntelConsole }) {
+  return (
+    <>
       <AssistantRow s={s} />
       <UnlockTodayRow s={s} />
-      <ModeRow s={s} />
       <BackupRow s={s} />
       <MutesRow s={s} />
       <PayeesRow s={s} />
       <GroupsRow s={s} />
     </>
+  );
+}
+
+/**
+ * v0.1.79 (G1): "loại nào đã đủ để đẩy thật" — bốn cổng thường: đã qua M1 (đủ lượt chấm và đủ đúng) / chấm Sai nhiều / còn thiếu lượt chấm,
+ * cùng số lượt Sếp đã chấm (M1 gộp n/min_n). Chỉ đọc từ `GET /intel/console` (`ramp`); máy chủ cũ không gửi ⇒ không hiện.
+ */
+function GatesRow({ s }: { s: IntelConsole }) {
+  const r = s.ramp;
+  if (!r) return null;
+  const passed = new Set(r.passed_gates);
+  const low = new Set(r.m1.low_precision_gates);
+  const pct = r.m1.p == null ? null : Math.round(r.m1.p * 100);
+  return (
+    <Row
+      title="Đã chấm bao nhiêu, loại nào đủ để nhắn ngay"
+      testId="intel-gates"
+      state={<Badge kind="status" tone={r.m1.ok ? 'ok' : 'neutral'}>{`Đã chấm ${r.m1.n}/${r.m1.min_n} lượt`}</Badge>}
+    >
+      <p className="muted-note">
+        {pct == null ? 'Chưa có lượt chấm nào.' : `Trong ${r.m1.n} lượt Sếp chấm, ${r.m1.k} lượt Đúng (${pct}%).`}{' '}
+        {r.m1.n >= r.m1.min_n ? '' : `Cần ít nhất ${r.m1.min_n} lượt để Gen biết khi nào đủ chính xác.`}
+        {r.days_left != null && r.in_trial ? ` Còn ${r.days_left} ngày chạy thử.` : ''}
+      </p>
+      <ul className="intel-list">
+        {REGULAR_GATES.map((g) => (
+          <li key={g} className="intel-list__item" data-testid={`intel-gate-${g}`}>
+            <span className="intel-list__text">{GATE_LABEL[g]}</span>
+            {passed.has(g) ? (
+              <Badge kind="status" tone="ok">Đủ để nhắn ngay</Badge>
+            ) : low.has(g) ? (
+              <Badge kind="status" tone="warn">Chấm Sai nhiều</Badge>
+            ) : (
+              <Badge kind="status" tone="neutral">Chưa đủ lượt chấm</Badge>
+            )}
+          </li>
+        ))}
+      </ul>
+    </Row>
   );
 }
 

@@ -3,7 +3,8 @@ import { expect, test, type Page } from '@playwright/test';
 import { loginAsOwner, resetMock } from './support';
 
 /**
- * v0.1.77 (P4) — Bộ não › Thiết lập Tình báo (bước 3 "Khách chủ chốt") và thẻ Tình báo (banner chạy thử R4, dòng bóng + nút Sai 3 lý do).
+ * v0.1.77 (P4) — Thiết lập Tình báo (bước 3 "Khách chủ chốt") và thẻ Chạy thử (banner R4, dòng bóng + nút Sai 3 lý do). v0.1.79 (G1): hai thẻ này nay ở
+ * trang Tình báo (`/intel?tab=setup` và `/intel?tab=trial`) thay vì Cài đặt › Bộ não AI.
  * API tình báo của mock chưa có ⇒ trả dữ liệu cố định qua `page.route`; kiểm: hiển thị ở 1440 và 390 không tràn ngang, không lỗi console,
  * bấm Đúng/Sai/khách chủ chốt gọi đúng đường. Đặt `P4_SHOTS=<thư mục>` để lưu ảnh.
  */
@@ -68,7 +69,7 @@ for (const [label, width, height] of [['1440', 1440, 1000], ['390', 390, 844]] a
       page.on('pageerror', (e) => errors.push(String(e)));
       page.on('response', (r) => r.status() >= 400 && /\/api\/v1\/(intel|signals|me\/profile)/.test(r.url()) && failedIntel.push(`${r.status()} ${r.url()}`));
       const calls = await routeIntel(page);
-      await page.goto('/system?tab=brain');
+      await page.goto('/intel?tab=setup');
 
       const setup = page.getByRole('region', { name: 'Thiết lập Tình báo' });
       await expect(setup).toBeVisible();
@@ -77,18 +78,23 @@ for (const [label, width, height] of [['1440', 1440, 1000], ['390', 390, 844]] a
       await expect(step3).toContainText('Trợ lý gợi ý — chờ Sếp xác nhận');
       await expect(setup.getByRole('img', { name: 'Đã xong 2 trên 3 bước' })).toBeVisible();
 
-      const card = page.getByRole('region', { name: 'Tình báo', exact: true });
+      if (SHOTS) {
+        mkdirSync(SHOTS, { recursive: true });
+        await page.screenshot({ path: `${SHOTS}/p4-setup-tab-${label}.png`, fullPage: true });
+      }
+      await step3.getByRole('switch', { name: 'Anh Tư là khách chủ chốt' }).click();
+      await expect.poll(() => calls.find((c) => c.url === '/me/profile/items')?.body).toEqual({ section: 'key_relations', object_entity_id: 'e3' });
+
+      // Tab Chạy thử 14 ngày: banner R4, các cổng, dòng bóng, nút Sai 3 lý do
+      await page.getByRole('tab', { name: 'Chạy thử 14 ngày' }).click();
+      await expect(page).toHaveURL(/\/intel\?tab=trial$/);
+      const card = page.getByRole('region', { name: 'Chạy thử 14 ngày', exact: true });
+      await expect(card.getByTestId('intel-gates')).toContainText('Đã chấm 4/10 lượt');
       await expect(card.getByTestId('intel-ramp-banner')).toContainText('Chạy thử lại 14 ngày (từ 26/10)');
       const shadow = card.getByTestId('intel-shadow');
       await expect(shadow).toContainText('Chị Mai chê giao trễ trong nhóm khách sỉ');
       await expect(shadow).toContainText('khách chủ chốt (Sếp đã đánh dấu)');
       await expect(shadow.getByText('Đã chấm Đúng')).toBeVisible();
-
-      if (SHOTS) {
-        mkdirSync(SHOTS, { recursive: true });
-        await setup.scrollIntoViewIfNeeded();
-        await setup.screenshot({ path: `${SHOTS}/p4-setup-step3-${label}.png` });
-      }
 
       await shadow.getByRole('button', { name: 'Báo sai: Chị Mai chê giao trễ trong nhóm khách sỉ' }).click();
       const grp = shadow.getByRole('group', { name: 'Vì sao báo sai?' });
@@ -102,14 +108,11 @@ for (const [label, width, height] of [['1440', 1440, 1000], ['390', 390, 844]] a
       await shadow.getByRole('button', { name: 'Báo đúng: Hứa giao 20 bao xi măng trước 15h' }).click();
       await expect.poll(() => calls.find((c) => c.url === '/signals/s2/feedback')?.body).toEqual({ verdict: 'correct' });
 
-      await step3.getByRole('switch', { name: 'Anh Tư là khách chủ chốt' }).click();
-      await expect.poll(() => calls.find((c) => c.url === '/me/profile/items')?.body).toEqual({ section: 'key_relations', object_entity_id: 'e3' });
-
       // không tràn ngang ở thẻ nào của màn
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       expect(overflow).toBeLessThanOrEqual(1);
       await expect(page.getByText('[object Object]')).toHaveCount(0);
-      if (SHOTS) await page.screenshot({ path: `${SHOTS}/p4-brain-tab-${label}.png`, fullPage: true });
+      if (SHOTS) await page.screenshot({ path: `${SHOTS}/p4-trial-tab-${label}.png`, fullPage: true });
       expect(errors.filter((e) => !/favicon|ResizeObserver/.test(e))).toEqual([]);
       expect(failedIntel).toEqual([]);
     });

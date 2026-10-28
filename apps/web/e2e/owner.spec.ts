@@ -35,7 +35,7 @@ const PAGES = [
 /** Link cũ của Mặt tiền → đích mới (đúng bảng ở shell/legacyRedirects.ts). */
 const OLD_LINKS = [
   { from: '/owner', to: /\/intel$/ },
-  { from: '/owner/thong-tin', to: /\/intel\?tab=signals$/ },
+  { from: '/owner/thong-tin', to: /\/intel\?tab=feed$/ },
   { from: '/owner/quan-he', to: /\/panorama\?tab=relations$/ },
   { from: '/owner/phan-tich', to: /\/panorama\?tab=trends$/ },
   { from: '/owner/viec', to: /\/decide$/ },
@@ -108,7 +108,7 @@ test.describe('v0.1.78 · một shell cho Owner (máy tính 1440)', () => {
     }
     // giữ tham số của link cũ (?tin= ?nguoi=)
     await page.goto('/owner/thong-tin?tin=fd-1');
-    await expect(page).toHaveURL(/\/intel\?tab=signals&tin=fd-1$/);
+    await expect(page).toHaveURL(/\/intel\?tab=feed&tin=fd-1$/);
     await page.goto('/owner/quan-he?nguoi=p-bao');
     await expect(page).toHaveURL(/\/panorama\?tab=relations&nguoi=p-bao$/);
     await page.goto('/overview');
