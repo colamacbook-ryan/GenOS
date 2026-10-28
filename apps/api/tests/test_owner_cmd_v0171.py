@@ -204,7 +204,7 @@ async def test_unknown_command_points_to_help(owner_api: Api, redis: Any) -> Non
 async def test_every_known_kind_is_handled_and_telegram_kinds_match(
     owner_api: Api, redis: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    assert commands.KINDS == core.KINDS
+    assert (*commands.KINDS[:5], "bat_dau", *commands.KINDS[5:]) == core.KINDS     # v0.1.78: /bat_dau mới ở lõi; commands.KINDS (ngoài gói G6) bổ sung sau
     ctx = await ctx_for(owner_api, redis, Router("ok", _reminder()))
 
     async def none(*a: Any) -> list[dict[str, Any]]:
@@ -259,9 +259,11 @@ async def test_read_commands_defang_and_cap_lists(owner_api: Api, redis: Any, mo
     hom_nay = await core.handle(ocmd("hom_nay"), ctx)
     assert hom_nay.links == [] and hom_nay.text.startswith("Hôm nay · ") and "• Việc đến hạn (2)" in hom_nay.text
     assert "https://lua-dao" not in hom_nay.text and "[@]admin" in hom_nay.text and "/overview" in hom_nay.text
-    viec = await core.handle(ocmd("viec"), ctx)
-    assert viec.text.startswith("Việc Sếp cần làm (12):") and viec.text.count("• ") == core.MAX_LIST
-    assert "… và 4 việc nữa" in viec.text and "https://x" not in viec.text
+    bd = await core.handle(ocmd("bat_dau"), ctx)       # v0.1.78 (G6): danh sách thiết lập ở /bat_dau, không còn mang tên "Việc Sếp cần làm"
+    assert bd.text.startswith("Bắt đầu / Kiểm tra kết nối (12):") and bd.text.count("• ") == core.MAX_LIST
+    assert "… và 4 việc nữa" in bd.text and "https://x" not in bd.text and "Việc Sếp cần làm" not in bd.text
+    viec = await core.handle(ocmd("viec"), ctx)        # không có tín hiệu/ask ⇒ không bịa việc từ danh sách thiết lập
+    assert viec.text.startswith(core.NOTHING) and "Việc 0" not in viec.text
     sk = await core.handle(ocmd("suc_khoe"), ctx)
     assert "Sự cố đang mở (2)" in sk.text and "[nặng] Ổ đĩa sắp đầy http[:]//a[.]b" in sk.text and "• Chậm" in sk.text
     assert sk.links == []
@@ -462,3 +464,40 @@ def test_owner_cmd_sources_have_no_buttons_pin_intake_or_outbound_stream() -> No
         assert "/gen/proposals" not in src and ".confirm" not in src, p.name
         assert "gh.bridge.outbound" not in src and "BRIDGE_OUTBOUND" not in src and "ops.auto_sends" not in src, p.name
         assert "redis.xadd" not in src and ".xadd(" not in src, p.name  # không có đường publish nào
+
+
+async def test_viec_lists_real_signals_with_action_and_pending_asks_g6(owner_api: Api, redis: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """G6 (v0.1.78): /viec = tín hiệu còn mở có dòng hành động (cùng nguồn /hom_nay) + asks đang chờ; không phải danh sách thiết lập."""
+    from gh.biz.intel import digest
+
+    ctx = await ctx_for(owner_api, redis)
+
+    def item(n: int, title: str, action: str | None) -> digest.DigestItem:
+        return digest.DigestItem(n, f"s{n}", f"C{n}", "cau_hoi_cho_xu_ly", "amber", "digest", None, None, title, [], None, action=action)
+
+    async def fake_build(*a: Any, **k: Any) -> digest.Digest:
+        return digest.Digest("o", NOW, [item(1, "Khách doạ bỏ https://lua-dao.vn", "Gọi khách trong hôm nay"), item(2, "Cụm không việc", None)], {}, None)
+
+    async def asks(c: Any) -> list[str]:
+        return ["Chờ Sếp quyết (1):", "• #A1 — Gọi anh Nam · OK là làm"]
+
+    async def todos(c: Any) -> list[dict[str, Any]]:
+        return [{"title": "Nối Gen-hub"}]
+
+    monkeypatch.setattr(digest, "build", fake_build)
+    monkeypatch.setattr(core, "ask_lines", asks)
+    monkeypatch.setattr(core, "todos", todos)
+    reply = await core.handle(ocmd("viec"), ctx)
+    t = reply.text
+    assert t.startswith("Việc Sếp cần làm:\n1. 🟠 Khách doạ bỏ https[:]//lua-dao[.]vn\n   → Gọi khách trong hôm nay")
+    assert "Cụm không việc" not in t and "Chờ Sếp quyết (1):" in t and "#A1" in t
+    assert "Nối Gen-hub" not in t and "Bắt đầu / Kiểm tra kết nối" not in t
+
+
+async def test_help_lists_bat_dau_and_states_ok_rule_for_chat_g6(owner_api: Api, redis: Any) -> None:
+    ctx = await ctx_for(owner_api, redis)
+    for via in ("zalo", "telegram"):
+        h = (await core.handle(ocmd("tro_giup", via=via), ctx)).text
+        assert "/bat_dau — Bắt đầu / Kiểm tra kết nối" in h and "/viec — Việc Sếp cần làm" in h
+    z = (await core.handle(ocmd("tro_giup", via="zalo"), ctx)).text
+    assert "OK" in z and "riêng từng tin" in z and "em chỉ trả lời, không tự làm gì" not in z and "ĐỀ XUẤT, Sếp mở Console" not in z

@@ -3,7 +3,7 @@
 
 `handle(cmd, ctx) -> Reply` nhận `OwnerCommand` ĐÃ XÁC THỰC (kênh gọi tự xác thực người gửi = Owner đã ghép, ví dụ
 `gh.telegram.inbound`) và chỉ ĐỌC hoặc ĐỀ XUẤT:
-  /hom_nay   Bản tin ngắn (số đếm các mục trong ngày)        /viec     Việc Sếp cần làm      /suc_khoe  sự cố đang mở
+  /hom_nay   Bản tin ngắn (số đếm các mục trong ngày)        /viec     Việc Sếp cần làm      /bat_dau  Bắt đầu/Kiểm tra kết nối   /suc_khoe  sự cố đang mở
   /nhap <ý>  Gen soạn ĐỀ XUẤT (nháp tin, nhắc việc, ghi nhớ…) — lưu như đề xuất trong khung chat Gen của Console
   câu hỏi tự do  Gen trả lời CHỈ ĐỌC, dữ liệu đưa vào model đã che (`mask_for_model`) và gói nhãn "không tin cậy"
   /start /tro_giup  hướng dẫn ngắn
@@ -57,28 +57,31 @@ CONTEXT_MAX = 6000  # tổng độ dài (đã bọc) của dữ liệu đọc đ
 RATE_PER_MIN = 20
 
 #: Mọi `kind` lệnh được hiểu (còn lại ⇒ UNKNOWN). `gh.telegram.commands.KINDS` phải khớp (test chống lệch).
-KINDS = ("start", "tro_giup", "help", "hom_nay", "viec", "suc_khoe", "nhap", "hoi")
+KINDS = ("start", "tro_giup", "help", "hom_nay", "viec", "bat_dau", "suc_khoe", "nhap", "hoi")
 
 Button = tuple[str, str]  # (chữ nút, URL) — chỉ link
 
 _HELP_T = (
     "Em là {name}. Sếp nhắn em ở đây được các lệnh sau:\n"
     "/hom_nay — bản tin ngắn hôm nay\n"
-    "/viec — Việc Sếp cần làm\n"
+    "/viec — Việc Sếp cần làm (cảnh báo còn mở + việc chờ Sếp quyết)\n"
+    "/bat_dau — Bắt đầu / Kiểm tra kết nối\n"
     "/suc_khoe — sự cố đang mở\n"
     "/nhap <ý> — em soạn đề xuất (nháp tin, nhắc việc, ghi nhớ…)\n"
     "Hoặc hỏi em một câu bình thường — em chỉ trả lời, không tự làm gì.\n"
-    "Việc cần ghi/gửi đi: em chỉ ĐỀ XUẤT, Sếp mở Console bấm Xác nhận và nhập mã PIN (mã PIN không bao giờ gõ ở đây)."
+    "Việc cần ghi/gửi đi: em chỉ ĐỀ XUẤT, Sếp mở Console bấm Xác nhận và nhập mã PIN (mã PIN không bao giờ gõ ở đây). "
+    "Kênh Zalo/WhatsApp quản trị thì Sếp chỉ cần trả lời OK ngay trong chat."
 )
 _HELP_CHAT_T = (
     "Em là {name}. Sếp nhắn em ở đây được các lệnh sau:\n"
     "/hom_nay — bản tin ngắn hôm nay\n"
-    "/viec — Việc Sếp cần làm\n"
+    "/viec — Việc Sếp cần làm (cảnh báo còn mở + việc chờ Sếp quyết)\n"
+    "/bat_dau — Bắt đầu / Kiểm tra kết nối\n"
     "/suc_khoe — sự cố đang mở\n"
     "/nhap <ý> — em soạn đề xuất (nháp tin, nhắc việc, ghi nhớ…) rồi hỏi lại Sếp\n"
-    "Hoặc hỏi em một câu bình thường — em chỉ trả lời, không tự làm gì.\n"
-    "Em hỏi «Trả lời OK để em làm» thì Sếp nhắn OK (hoặc OK kèm mã #XXXXXX) là em làm ngay; nhắn HUỶ để bỏ. "
-    "Tin gửi cho người ngoài thì em nêu rõ người nhận + nguyên văn, Sếp OK riêng từng tin. "
+    "Hoặc hỏi em một câu bình thường.\n"
+    "Việc của riêng Sếp (ghi nhớ, nhắc hẹn, việc nội bộ): em đề xuất cụ thể, Sếp trả lời «OK» (hoặc OK kèm mã #XXXXXX) là em làm ngay; nhắn HUỶ để bỏ. "
+    "Tin gửi cho người ngoài: em nêu rõ người nhận + nguyên văn, Sếp phải OK riêng từng tin. "
     "Không cần mở Console, không cần mã PIN (mã PIN không bao giờ gõ ở đây)."
 )
 #: Bản mặc định (chưa chọn agent ngoại giao): xưng «trợ lý», KHÔNG xưng Gen ở kênh ngoài Console (Sếp quyết 19/10/2026).
@@ -102,10 +105,10 @@ _NO_OWNER_VIA = {
 }
 NO_MODEL = (
     "Em chưa có model AI để trả lời. Sếp mở Console › Kết nối để thêm khoá hoặc Antigravity CLI. "
-    "Các lệnh /hom_nay /viec /suc_khoe vẫn dùng được."
+    "Các lệnh /hom_nay /viec /bat_dau /suc_khoe vẫn dùng được."
 )
 MODEL_DOWN = (
-    "Em đang không gọi được model AI, Sếp thử lại sau ít phút. Các lệnh /hom_nay /viec /suc_khoe vẫn dùng được."
+    "Em đang không gọi được model AI, Sếp thử lại sau ít phút. Các lệnh /hom_nay /viec /bat_dau /suc_khoe vẫn dùng được."
 )
 NOT_UNDERSTOOD = "Em chưa hiểu ý Sếp để soạn đề xuất. Sếp nói rõ hơn một chút nhé."
 NEED_TEXT = "Sếp gõ kèm ý cần soạn, ví dụ: /nhap nhắc tôi gọi anh Nam lúc 9h sáng mai"
@@ -305,7 +308,7 @@ async def digest_lines(ctx: Context, now: datetime) -> list[str]:
         await db.rollback()
     out: list[str] = []
     for it in d.items[:DIGEST_MAX_LINES]:
-        parts = [f"{it.n}. {LEVEL_ICON.get(it.level, '•')} {otext.line(it.title, 120)}"]
+        parts = [f"{it.n}. {LEVEL_ICON.get(it.level, '•')} {otext.cut_title(it.title, 120)}"]
         if it.quote:
             parts.append(f"«{otext.line(it.quote, 80)}»")
         parts += it.line_facts
@@ -385,15 +388,48 @@ async def ask_lines(ctx: Context) -> list[str]:
     return out
 
 
+async def action_lines(ctx: Context, now: datetime) -> list[str]:
+    """v0.1.78 (G6): "Việc Sếp cần làm" THẬT = tín hiệu còn mở có dòng hành động — CÙNG nguồn `/hom_nay` (`digest.build`, kênh chat,
+    KHÔNG đánh dấu đã gửi). Mỗi mục: tiêu đề + một dòng «→ hành động» (che/defang như `/hom_nay`)."""
+    from gh.biz.intel import digest
+
+    async with ctx.sm() as db:
+        await _set_org(db, ctx.org_id)
+        d = await digest.build(db, ctx.org_id, now, audience="chat", only_new=False)
+        await db.rollback()
+    acts = [it for it in d.items if it.action]
+    out: list[str] = []
+    for n, it in enumerate(acts[:MAX_LIST], 1):
+        out.append(otext.defang(f"{n}. {LEVEL_ICON.get(it.level, '•')} {otext.cut_title(it.title, 120)}"))
+        out.append(otext.defang(f"   → {otext.line(str(it.action), 100)}"))
+    if len(acts) > MAX_LIST:
+        out.append(f"… và {len(acts) - MAX_LIST} việc nữa (xem Console)")
+    return out
+
+
 async def viec(ctx: Context, *, todos_fn: Callable[[Context], Awaitable[list[dict[str, Any]]]] | None = None) -> Reply:
+    """`/viec` = Việc Sếp cần làm THẬT: tín hiệu còn mở có dòng hành động + asks đang chờ. Danh sách thiết lập đã chuyển sang
+    `/bat_dau`; `todos_fn` chỉ giữ để `telegram.commands._viec` (còn truyền vào) không vỡ, không dùng ở đây."""
+    del todos_fn
+    signals = await action_lines(ctx, datetime.now(UTC))
     pending = await ask_lines(ctx)
-    items = await (todos_fn or todos)(ctx)
-    if not items and not pending:
+    if not signals and not pending:
         return Reply(f"{NOTHING}\nMở Console: {_console_link('/overview')}")
-    lines = [*pending, ""] if pending else []
+    lines: list[str] = []
+    if signals:
+        lines += ["Việc Sếp cần làm:", *signals]
+    if pending:
+        lines += ["", *pending] if lines else pending
+    lines += ["", f"Mở Console: {_console_link('/overview')}"]
+    return Reply("\n".join(lines))
+
+
+async def bat_dau(ctx: Context, *, todos_fn: Callable[[Context], Awaitable[list[dict[str, Any]]]] | None = None) -> Reply:
+    """`/bat_dau` = "Bắt đầu / Kiểm tra kết nối": danh sách thiết lập còn dở (trước v0.1.78 nằm nhầm dưới tên /viec)."""
+    items = await (todos_fn or todos)(ctx)
     if not items:
-        return Reply("\n".join([*lines, f"Mở Console: {_console_link('/overview')}"]))
-    lines += [f"Việc Sếp cần làm ({len(items)}):"]
+        return Reply(f"Bắt đầu / Kiểm tra kết nối: không còn gì cần thiết lập.\nMở Console: {_console_link('/overview')}")
+    lines = [f"Bắt đầu / Kiểm tra kết nối ({len(items)}):"]
     lines += [f"• {otext.defang(otext.line(str(t.get('title') or t.get('key') or '?')))}" for t in items[:MAX_LIST]]
     if len(items) > MAX_LIST:
         lines.append(f"… và {len(items) - MAX_LIST} việc nữa")
@@ -970,6 +1006,8 @@ async def handle(cmd: OwnerCommand, ctx: Context, *, overrides: Mapping[str, Han
             return await over.get("hom_nay", hom_nay)(ctx)
         if cmd.kind == "viec":
             return await over.get("viec", viec)(ctx)
+        if cmd.kind == "bat_dau":
+            return await over.get("bat_dau", bat_dau)(ctx)
         if cmd.kind == "suc_khoe":
             return await over.get("suc_khoe", suc_khoe)(ctx)
         if cmd.kind == "nhap":
