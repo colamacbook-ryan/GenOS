@@ -241,6 +241,9 @@
 @media (max-width: 600px) {
   /* Ba viên trạng thái không đủ chỗ — số liệu chi tiết vẫn ở Tổng quan. */
   .hd-status { display: none; }
+  /* Chip sức khoẻ chỉ còn biểu tượng (tên truy cập vẫn đủ chữ ở aria-label) để tiêu đề trang hiện đủ ở 390px. */
+  .hd-health__txt { display: none; }
+  .hd-titles { min-width: 0; flex: 1 1 0; }
 }
 
 @media (max-width: 400px) {

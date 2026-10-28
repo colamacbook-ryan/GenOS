@@ -106,7 +106,7 @@ test.describe('Bước Nguồn AI "Làm sau" (v0.1.29, v0.1.59)', () => {
     await page.getByRole('button', { name: 'Làm sau' }).click();
     await expect(page.getByRole('heading', { name: 'Xong rồi, thưa Sếp' })).toBeVisible();
     await expect(page.getByTestId('setup-done-ai')).toContainText('Làm sau — Gen sẽ chưa tóm tắt được bản tin');
-    await page.getByRole('button', { name: /Vào Mặt tiền/ }).click();
+    await page.getByRole('button', { name: /Vào Tình báo/ }).click();
     // Owner "/" ⇒ Mặt tiền /owner (Tình báo là trang đầu); thẻ "Chưa có model" nằm ở Tổng quan (Console).
     await expectOwnerFront(page);
     await page.goto('/overview');

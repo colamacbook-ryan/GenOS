@@ -3,7 +3,7 @@
     "id": "N01",
     "order": 10,
     "title": "Hỏi Gen mọi lúc",
-    "body": "Em là Gen, trợ lý ngay trong Gen-Harness của Sếp. Sếp bấm nút Gen (hình ngôi sao) ở góc trên bên phải để mở khung chat, rồi gõ câu hỏi bằng tiếng Việt như “Hôm nay có gì gấp” hay “Sao lưu ở đâu”. Em tra số liệu, mở đúng màn và khoanh sáng chỗ Sếp cần bấm. Việc quan trọng em chỉ đề xuất, Sếp bấm Xác nhận em mới làm.",
+    "body": "Em là Gen, trợ lý ngay trong GenOS của Sếp. Sếp bấm nút Gen (hình ngôi sao) ở góc trên bên phải để mở khung chat, rồi gõ câu hỏi bằng tiếng Việt như “Hôm nay có gì gấp” hay “Sao lưu ở đâu”. Em tra số liệu, mở đúng màn và khoanh sáng chỗ Sếp cần bấm. Việc quan trọng em chỉ đề xuất, Sếp bấm Xác nhận em mới làm.",
     "try": {
       "label": "Làm thử",
       "target": "help.ask_gen"
@@ -61,7 +61,7 @@
     "id": "N06",
     "order": 145,
     "title": "Cho Gen ghi vào Kho dữ liệu",
-    "body": "Em ghi được Phiên làm việc và Việc vào Kho dữ liệu, nhưng em chỉ đề xuất. Sếp đọc thẻ Ghi vào Kho dữ liệu, bấm “Xác nhận và ghi Kho” rồi nhập mã PIN thì em mới ghi. Trước đó Sếp tick hai quyền ghi Kho (kho_create, kho_update) cho token Gen-Harness ở Gen-hub, rồi bấm Kiểm tra ở Kết nối › Gen-hub. Mỗi bản mới em đề xuất một Phiên, ghi xong thì dòng Gen ghi Kho ở Việc Sếp cần làm tự chuyển sang Đạt.",
+    "body": "Em ghi được Phiên làm việc và Việc vào Kho dữ liệu, nhưng em chỉ đề xuất. Sếp đọc thẻ Ghi vào Kho dữ liệu, bấm “Xác nhận và ghi Kho” rồi nhập mã PIN thì em mới ghi. Trước đó Sếp tick hai quyền ghi Kho (kho_create, kho_update) cho token GenOS ở Gen-hub, rồi bấm Kiểm tra ở Kết nối › Gen-hub. Mỗi bản mới em đề xuất một Phiên, ghi xong thì dòng Gen ghi Kho ở Việc Sếp cần làm tự chuyển sang Đạt.",
     "try": {
       "label": "Làm thử",
       "target": "boss_checks.row.kho_write"
@@ -95,7 +95,7 @@
     "id": "N09",
     "order": 135,
     "title": "Gia hạn token Gen-hub",
-    "body": "Token là chìa khoá để Gen-Harness vào Gen-hub, nên nó có hạn 90 ngày. Em nhắc Sếp trước khi hết hạn 14 ngày, hết hạn thì em mất kết nối lịch, mail và Kho. Sếp tạo token mới trong Gen-hub, rồi dán vào ô Token mới ở Kết nối › Gen-hub, nhập Ngày hết hạn token và bấm Lưu & kiểm tra. Token chỉ ghi vào, em không bao giờ hiện lại, nên Sếp cứ dán token mới là xong.",
+    "body": "Token là chìa khoá để GenOS vào Gen-hub, nên nó có hạn 90 ngày. Em nhắc Sếp trước khi hết hạn 14 ngày, hết hạn thì em mất kết nối lịch, mail và Kho. Sếp tạo token mới trong Gen-hub, rồi dán vào ô Token mới ở Kết nối › Gen-hub, nhập Ngày hết hạn token và bấm Lưu & kiểm tra. Token chỉ ghi vào, em không bao giờ hiện lại, nên Sếp cứ dán token mới là xong.",
     "try": {
       "label": "Làm thử",
       "target": "mcp.hub_link.token"

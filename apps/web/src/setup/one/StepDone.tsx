@@ -17,7 +17,7 @@ import { AI_LATER_TEXT } from './StepAiSource';
 
 /** Đích của các nút ở bước Xong (đều ghi PUT /setup/steps/12 trước khi đi). */
 const DONE_TARGETS = {
-  front: '/owner',
+  front: '/intel',
   zalo: '/guide/5',
   telegram: '/connections#telegram',
   team: '/guide/10',
@@ -39,7 +39,7 @@ export interface StepDoneProps {
 }
 
 /**
- * Bước 3 của Thiết lập một màn — Xong. Ba dòng tóm tắt (tài khoản · nguồn AI · lần lọc tin đầu), nút chính "Vào Mặt tiền" và
+ * Bước 3 của Thiết lập một màn — Xong. Ba dòng tóm tắt (tài khoản · nguồn AI · lần lọc tin đầu), nút chính "Vào Tình báo" và
  * nút phụ nổi bật "Nối Zalo ngay" (Zalo là nguồn tin chính). Mọi nút/link đi tiếp đều ghi PUT /setup/steps/12 trước (chỉ bắt buộc
  * bước 1–3); lỗi hiện câu thân thiện + "Chi tiết kỹ thuật".
  */
@@ -151,12 +151,12 @@ export function StepDone({ state, aiLater, onFinished, onBack }: StepDoneProps) 
 
       <div className="setup-one__cta">
         <Button variant="primary" iconRight="ph ph-arrow-right" loading={busy === DONE_TARGETS.front} disabled={!!busy} onClick={() => void finish(DONE_TARGETS.front)}>
-          Vào Mặt tiền
+          Vào Tình báo
         </Button>
         <Button variant="secondary" icon="ph ph-chat-circle-dots" loading={busy === DONE_TARGETS.zalo} disabled={!!busy} onClick={() => void finish(DONE_TARGETS.zalo)} data-testid="setup-done-zalo">
           Nối Zalo ngay
         </Button>
-        <p className="setup-one__cta-why">Zalo là nguồn tin chính — chưa nối thì Mặt tiền còn trống.</p>
+        <p className="setup-one__cta-why">Zalo là nguồn tin chính — chưa nối thì Tình báo còn trống.</p>
       </div>
 
       <div className="setup-one__links">

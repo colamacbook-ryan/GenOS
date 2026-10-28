@@ -6,7 +6,6 @@ import { api } from '../lib/api';
 import { qk, useMe } from '../lib/queries';
 import { queryClient } from '../lib/queryClient';
 import { toast } from '../lib/toast';
-import { OWNER_HOME } from '../owner/ownerModel';
 import { CardError, SkeletonLines } from '../screens/common';
 import { Step4Brain } from '../setup/Step4Brain';
 import { Step5Channels } from '../setup/Step5Channels';
@@ -87,8 +86,8 @@ export function GuideStepPage() {
   }
 
   // Bước 4 (chọn model): v0.1.59 — nút "Chọn model" mới đi thẳng /setup?buoc=nguon-ai; trang này (form đầy đủ, cho người muốn
-  // chỉnh kỹ) quay về Mặt tiền, không còn về /overview.
-  const home = n === 4 ? { to: OWNER_HOME, label: 'Mặt tiền' } : { to: '/guide', label: 'Hướng dẫn thiết lập' };
+  // chỉnh kỹ) quay về Tình báo, không còn về /overview.
+  const home = n === 4 ? { to: '/intel', label: 'Tình báo' } : { to: '/guide', label: 'Hướng dẫn thiết lập' };
   const back = () => navigate(home.to);
   const meta = mergeSteps(state.data).find((s) => s.n === n)!;
 

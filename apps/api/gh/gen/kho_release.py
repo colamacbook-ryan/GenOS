@@ -43,9 +43,9 @@ PROPOSAL_TTL_S = 7 * 24 * 3600
 KIND = "gen.kho_proposal"
 ACTION = "gen.kho_release_proposed"
 TITLE = "Gen đề xuất ghi Kho · Phiên {version}"
-SAY = ("Máy chủ Gen-Harness vừa lên {version}. Em đề xuất ghi một Phiên vào " + KHO_LABEL +
+SAY = ("Máy chủ GenOS vừa lên {version}. Em đề xuất ghi một Phiên vào " + KHO_LABEL +
        " để lưu mốc này — {addr} xem lại, sửa nếu cần rồi bấm Xác nhận và nhập mã PIN thì em mới ghi (qua Gen-hub).")
-BELL_BODY = "Gen-Harness đã lên {version}. Xem thẻ đề xuất, Xác nhận và nhập mã PIN để ghi Phiên vào " + KHO_LABEL + "."
+BELL_BODY = "GenOS đã lên {version}. Xem thẻ đề xuất, Xác nhận và nhập mã PIN để ghi Phiên vào " + KHO_LABEL + "."
 #: Đề xuất `pending` còn trẻ hơn mốc này không bị coi là "hết hạn" dù thiếu khoá Redis (tránh đua với lúc vừa dựng).
 STALE_AFTER = timedelta(hours=1)
 _VERSION = re.compile(r"v?(\d+\.\d+\.\d+)")

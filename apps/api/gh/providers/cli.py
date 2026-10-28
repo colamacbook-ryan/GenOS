@@ -60,7 +60,7 @@ from gh.providers.clients import (
 )
 
 CLI_MISSING = "Máy chủ chưa cài công cụ đăng nhập Google (Antigravity CLI) — dùng khoá API ở bên dưới thay thế"
-CLAUDE_MISSING = "Máy chủ chưa cài Claude Code CLI — cập nhật Gen-Harness bản mới rồi thử lại"
+CLAUDE_MISSING = "Máy chủ chưa cài Claude Code CLI — cập nhật GenOS bản mới rồi thử lại"
 AGY = "antigravity_cli"
 CLAUDE = "claude_code_cli"
 CLI_KINDS = (AGY, CLAUDE)
@@ -556,7 +556,7 @@ async def _report_claude_home(sm: async_sessionmaker[AsyncSession] | None, share
                     await health.raise_once(
                         db, org_id, key=CLAUDE_HOME_SHARED_KEY, kind=CLAUDE_HOME_SHARED_KEY, severity="bad",
                         title="Phiên Claude Code nằm chung chỗ với Antigravity CLI",
-                        body="Antigravity CLI có thể đọc phiên đăng nhập đã lưu của Claude Code. Cập nhật Gen-Harness "
+                        body="Antigravity CLI có thể đọc phiên đăng nhập đã lưu của Claude Code. Cập nhật GenOS "
                              "bản mới (dùng volume claude_state riêng). Chi tiết kỹ thuật: " + CLAUDE_HOME_SHARED_MSG,
                         link=None)
                 else:

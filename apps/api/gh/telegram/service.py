@@ -104,7 +104,7 @@ def _iso(v: datetime | None) -> str | None:
 
 
 #: Chưa bật Truy cập từ xa (public_url còn là localhost) thì link trong tin trên điện thoại không mở được (F092).
-LOCAL_CONSOLE_LINE = "Mở Console từ máy chủ Gen-Harness (chưa bật Truy cập từ xa nên điện thoại chưa mở được link)."
+LOCAL_CONSOLE_LINE = "Mở Console từ máy chủ GenOS (chưa bật Truy cập từ xa nên điện thoại chưa mở được link)."
 
 
 def console_line(path: str) -> str:
@@ -291,7 +291,7 @@ async def sync_host_file(sm: Any) -> bool:
 
 def test_text() -> str:
     at = datetime.now(UTC).astimezone(VN_TZ).strftime("%H:%M %d/%m")
-    return (f"Gen-Harness · Tin thử từ Console lúc {at}. Sếp nhận được tin này nghĩa là kênh Báo động & bản tin "
+    return (f"GenOS · Tin thử từ Console lúc {at}. Sếp nhận được tin này nghĩa là kênh Báo động & bản tin "
             f"đã thông.\n{console_line('/connections#telegram')}\n{ONE_WAY}")
 
 

@@ -44,7 +44,7 @@ MAX_CONCLUSION = 400
 CHUNK_EVENTS = 40
 CHUNK_CHARS = 24_000
 
-SYSTEM = """Bạn là Core agent sàng lọc của Gen-Harness: đọc tin nhắn thô từ nhóm chat doanh nghiệp (tiếng Việt) và \
+SYSTEM = """Bạn là Core agent sàng lọc của GenOS: đọc tin nhắn thô từ nhóm chat doanh nghiệp (tiếng Việt) và \
 rút ra các "sự kiện có nghĩa" (spec G3) cho kho dữ liệu sạch. Chỉ kết luận điều có trong tin; không suy diễn đời tư; \
 không đánh giá con người.
 

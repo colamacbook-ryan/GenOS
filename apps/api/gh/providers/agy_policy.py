@@ -62,7 +62,7 @@ CODE_UNTRUSTED_TEXT = "untrusted_text"
 REASON_BOX_DOWN = ("Hộp riêng Antigravity chưa chạy — việc có người ngoài (trả lời khách, sàng lọc tin, Gen của "
                    "nhân viên) tạm dùng nguồn AI kế, không dùng Antigravity trong tiến trình")
 REASON_BOX_NOT_INSTALLED = ("Hộp riêng Antigravity chưa được cài — việc có người ngoài (trả lời khách, sàng lọc "
-                            "tin, Gen của nhân viên) dùng nguồn AI kế; cập nhật Gen-Harness để có hộp")
+                            "tin, Gen của nhân viên) dùng nguồn AI kế; cập nhật GenOS để có hộp")
 REASON_UNTRUSTED_TEXT = "Antigravity không dùng để thử quy tắc trên văn bản tuỳ ý — việc này dùng khoá API"
 
 #: Thử quy tắc (`/rules/test`): văn bản do người dùng (kể cả vai chỉ đọc như Auditor) gõ tuỳ ý ⇒ KHÔNG dùng agy, kể cả

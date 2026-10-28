@@ -155,7 +155,7 @@ _getaddrinfo: Callable[[str, int], Awaitable[list[Any]]] = _default_getaddrinfo
 
 # Trung tính (dùng chung MCP, Gen-hub, nhà cung cấp AI) — bên gọi nhận ra qua "không hợp lệ".
 INVALID_ENDPOINT_MSG = "Địa chỉ không hợp lệ (cần dạng http(s)://<máy chủ>)"
-FORBIDDEN_SERVICE_MSG = "Địa chỉ trỏ vào tên dịch vụ nội bộ của Gen-Harness"
+FORBIDDEN_SERVICE_MSG = "Địa chỉ trỏ vào tên dịch vụ nội bộ của GenOS"
 HTTPS_REQUIRED_MSG = ("Có token mà máy chủ ở mạng công cộng thì phải dùng https:// (http:// chỉ dùng được với máy "
                       "trong mạng nội bộ hoặc cùng máy)")
 

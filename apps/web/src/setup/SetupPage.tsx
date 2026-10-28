@@ -118,7 +118,7 @@ export function SetupPage() {
       </div>
     );
   }
-  if (!route || route.kind === 'owner') return <Navigate to="/owner" replace />;
+  if (!route || route.kind === 'owner') return <Navigate to="/intel" replace />;
   if (route.kind === 'guide') return <Navigate to={`/guide/${route.n}`} replace />;
   const data = state.data;
 
@@ -153,7 +153,7 @@ export function SetupPage() {
     void queryClient.invalidateQueries({ queryKey: FOLLOW_UP_KEY });
     if (data.finished) {
       toast('Đã lưu nguồn AI — Gen dùng được ngay.', 'ok');
-      setExitTo('/owner');
+      setExitTo('/intel');
     } else {
       goView('xong');
     }
@@ -207,7 +207,7 @@ export function SetupPage() {
   );
 }
 
-/** Logo của Thiết lập: cùng kiểu với Mặt tiền (ô hình heo + "Gen-Harness"), không viết hoa toàn bộ như logo Console. */
+/** Logo của Thiết lập: cùng kiểu với logo GenOS (ô hình heo + "GenOS"), không viết hoa toàn bộ như logo Console. */
 function SetupBrand() {
   return (
     <div className="setup-one__brand" data-testid="setup-brand">

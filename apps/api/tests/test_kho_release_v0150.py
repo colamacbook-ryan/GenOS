@@ -122,8 +122,8 @@ async def test_job_proposes_once_per_version(owner_api: Api, fake_hub: FakeHub, 
     assert set(p) == {"id", "type", "fields", "summary", "labels", "target", "requires_pin", "status"}
     today = kho_write.vn_today().isoformat()
     assert p["fields"] == {"bang": "Phiên", "record": {
-        "Chủ đề": "Gen-Harness lên bản v0.1.50", "Ngày": today,
-        "Đã chốt": ("Máy chủ Gen-Harness đã nâng lên v0.1.50. Ghi chú phát hành: "
+        "Chủ đề": "GenOS lên bản v0.1.50", "Ngày": today,
+        "Đã chốt": ("Máy chủ GenOS đã nâng lên v0.1.50. Ghi chú phát hành: "
                     f"https://github.com/{REPO}/releases/tag/v0.1.50")}}
     assert p["requires_pin"] is True and p["target"] == "hub.kho_write:Phiên"
     # `release` = phiên bản: thẻ nói rõ mỗi bản ghi MỘT lần cho cả tổ chức (Huỷ = huỷ cho mọi Owner).
@@ -142,7 +142,7 @@ async def test_job_proposes_once_per_version(owner_api: Api, fake_hub: FakeHub, 
     assert (await _run(redis))[org] == "proposed"
     assert [r.version for r in await _rows()] == ["v0.1.50", "v0.1.51"]
     p51 = await _release_proposal(owner_api, "v0.1.51")
-    assert p51["fields"]["record"]["Chủ đề"] == "Gen-Harness lên bản v0.1.51"
+    assert p51["fields"]["record"]["Chủ đề"] == "GenOS lên bản v0.1.51"
     assert fake_hub.writes() == []
 
 
