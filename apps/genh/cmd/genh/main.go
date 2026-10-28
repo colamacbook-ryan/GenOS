@@ -379,7 +379,9 @@ func acquireOpLockEx(ctx context.Context, installDir string, mode lockMode, stil
 // để đọc lại sau Parse.
 func opsFlagSet(name string) (fs *flag.FlagSet, port *int, installDir *string) {
 	fs = flag.NewFlagSet(name, flag.ContinueOnError)
-	port = fs.Int("port", machine.DefaultPort, "cổng HTTPS của proxy")
+	// 0 = không truyền cờ ⇒ ResolvePortFor lấy GH_PORT của bản cài (8443 nếu chưa có); `--port 8443` gõ tường
+	// minh vẫn được tôn trọng (review v0.1.79).
+	port = fs.Int("port", 0, "cổng HTTPS của proxy (mặc định: cổng của bản cài, 8443 nếu chưa có)")
 	installDir = fs.String("install-dir", "", "thư mục cài đặt (mặc định ~/.gen-harness)")
 	return fs, port, installDir
 }
@@ -2030,6 +2032,12 @@ func runInstall(args []string) int {
 	force := fs.Bool("force", false, "bỏ qua kiểm tra máy đã cài — CHẠY LẠI cả 8 bước dù đã có bản cài hoàn chỉnh (dùng khi lần cài trước hỏng hẳn, cần dựng lại từ đầu; bình thường hãy dùng `genh update`)")
 	noAutoUpdate := fs.Bool("no-auto-update", false, "không tự bật lịch cập nhật hằng đêm (mặc định BẬT sau khi cài xong — xem `genh auto-update`)")
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	// Review v0.1.79: chặn cổng ngoài 1–65535 NGAY sau Parse (trước khi đụng docker) — `--port 0` từng kiểm 8443
+	// nhưng giữ GH_PORT cũ, `--port 70000` vỡ ở bước ghi bí mật với mã lỗi sai bản chất.
+	if *port < 1 || *port > 65535 {
+		fmt.Printf("✖ Cổng %d không hợp lệ\n  vì sao: cổng phải từ 1 đến 65535\n  làm gì tiếp: chạy lại với --port trong khoảng 1–65535 (bỏ cờ để dùng 8443)\n", *port)
 		return 2
 	}
 

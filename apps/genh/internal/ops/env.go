@@ -53,12 +53,12 @@ func ResolvePort(port int) int {
 	return port
 }
 
-// ResolvePortFor chọn cổng thật cho bản cài installDir: cờ --port khác mặc định
-// thắng; còn lại (không truyền cờ) lấy GH_PORT trong .env cạnh compose.yaml — đó là
+// ResolvePortFor chọn cổng thật cho bản cài installDir: cờ --port truyền tường minh
+// (> 0, kể cả 8443) thắng; còn lại (không truyền cờ) lấy GH_PORT trong .env cạnh compose.yaml — đó là
 // cổng compose THẬT SỰ bind, nên `genh status/doctor/open…` chạy không kèm --port vẫn
 // đúng với bản cài `--port N`. Không có → machine.DefaultPort. Chỉ ĐỌC, không tạo tệp.
 func ResolvePortFor(installDir string, flagPort int) int {
-	if flagPort > 0 && flagPort != machine.DefaultPort {
+	if flagPort > 0 {
 		return flagPort
 	}
 	return PortFromEnvFile(installDir)

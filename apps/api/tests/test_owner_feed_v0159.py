@@ -109,23 +109,24 @@ async def test_item_shape_titles_and_clipping(owner: Api, db: Any) -> None:
 
 
 async def test_system_incidents_never_enter_the_intel_feed(owner: Api, db: Any) -> None:
-    """v0.1.79 (G1): "Hết chuỗi model", "hạn mức sắp hết"… là sự cố hệ thống — không có trong danh sách, số đếm hay
-    `urgent_open` của Tình báo (lọc ở API). Cảnh báo thật vẫn hiện."""
+    """v0.1.79 (G1): "Hết chuỗi model", trần an toàn… là sự cố hệ thống — không có trong danh sách, số đếm hay
+    `urgent_open` của Tình báo (lọc ở API). Cảnh báo thật vẫn hiện. Review v0.1.79: `model_quota_low` (P2) GIỮ lại vì
+    không có chỗ nào khác báo nó (không lên chip sức khoẻ, chuông chỉ P1)."""
     org = await _org(db)
-    for code, atype, kind, title in [
-        ("ALR-1", "customer_cooling", "quan_he_nong_nguoi", "Khách đang nguội"),
-        ("ALR-2", "model_chain_exhausted", "system", "Hết chuỗi model"),
-        ("ALR-3", "model_quota_low", "system", "Model sắp hết hạn mức"),
-        ("ALR-4", "intel_safety_cap", "legacy", "Vượt trần lượt an toàn"),
+    for code, atype, kind, title, prio in [
+        ("ALR-1", "customer_cooling", "quan_he_nong_nguoi", "Khách đang nguội", "P1"),
+        ("ALR-2", "model_chain_exhausted", "system", "Hết chuỗi model", "P1"),
+        ("ALR-3", "model_quota_low", "system", "Model sắp hết hạn mức", "P2"),
+        ("ALR-4", "intel_safety_cap", "legacy", "Vượt trần lượt an toàn", "P1"),
     ]:
         await db.execute(text("""INSERT INTO biz.alerts (org_id, code, alert_type, priority, title, status, kind,
                                                          evidence_n)
-                                 VALUES (:o, :c, :t, 'P1', :ti, 'open', :k, 1)"""),
-                         {"o": org, "c": code, "t": atype, "ti": title, "k": kind})
+                                 VALUES (:o, :c, :t, :p, :ti, 'open', :k, 1)"""),
+                         {"o": org, "c": code, "t": atype, "p": prio, "ti": title, "k": kind})
     await db.commit()
     d = await _feed(owner, view="all")
-    assert [i["title"] for i in d["items"]] == ["Khách đang nguội"]
-    assert d["counts"]["alert"] == 1 and d["counts"]["urgent_open"] == 1
+    assert sorted(i["title"] for i in d["items"]) == ["Khách đang nguội", "Model sắp hết hạn mức"]
+    assert d["counts"]["alert"] == 2 and d["counts"]["urgent_open"] == 1
     assert (await owner.get("/owner/today")).json()["nav"]["urgent_open"] == 1
 
 
