@@ -204,7 +204,7 @@ async def test_unknown_command_points_to_help(owner_api: Api, redis: Any) -> Non
 async def test_every_known_kind_is_handled_and_telegram_kinds_match(
     owner_api: Api, redis: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    assert (*commands.KINDS[:5], "bat_dau", *commands.KINDS[5:]) == core.KINDS     # v0.1.78: /bat_dau mới ở lõi; commands.KINDS (ngoài gói G6) bổ sung sau
+    assert commands.KINDS == core.KINDS
     ctx = await ctx_for(owner_api, redis, Router("ok", _reminder()))
 
     async def none(*a: Any) -> list[dict[str, Any]]:

@@ -36,7 +36,7 @@ LONG_POLL_S = 20
 BUDGET_S = 55.0
 JOB_TIMEOUT_S = 180
 PAIRED_TEXT = (
-    "Đã ghép tài khoản này với Gen-Harness. Từ giờ Sếp nhắn em ở đây được: /hom_nay · /viec · /suc_khoe · "
+    "Đã ghép tài khoản này với Gen-Harness. Từ giờ Sếp nhắn em ở đây được: /hom_nay · /viec · /bat_dau · /suc_khoe · "
     "/nhap <ý> · hoặc hỏi tự do. Em chỉ đọc và đề xuất — việc ghi/gửi Sếp Xác nhận (kèm mã PIN) trong Console."
 )
 RATE_TEXT = "Sếp nhắn hơi nhanh — em đợi một chút rồi trả lời tiếp (tối đa 20 lệnh mỗi phút)."
