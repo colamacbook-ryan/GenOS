@@ -71,8 +71,10 @@ test.describe('B4 — điện thoại 375px', () => {
     await page.screenshot({ path: join(shots, 'phone-drawer.png') });
     // Ngăn kéo luôn hiện đủ tên mục (không phải rail icon).
     await expect(sidebar).toHaveAttribute('data-mode', 'full');
-    await sidebar.getByRole('link', { name: /Cài đặt/ }).click();
-    await expect(page).toHaveURL(/\/system$/);
+    // v0.1.78: "Cài đặt" không còn — mục cuối thanh bên là Quản trị (miền thu gọn, bấm mở ra các trang con).
+    await sidebar.getByRole('button', { name: /Quản trị/ }).click();
+    await sidebar.getByRole('link', { name: /Sao lưu & cập nhật/ }).click();
+    await expect(page).toHaveURL(/\/admin\/backup$/);
     await expect(sidebar).toBeHidden();
 
     await page.getByRole('button', { name: 'Mở danh mục' }).click();
@@ -128,8 +130,8 @@ test.describe('B5–B7 (máy tính)', () => {
     await settle(page);
     await page.screenshot({ path: join(shots, 'notfound-1280.png') });
     await page.getByRole('button', { name: 'Về trang chủ' }).click();
-    // v0.1.55: "/" của Owner là Mặt tiền (/owner), không còn /overview.
-    await expect(page).toHaveURL(/\/owner$/);
+    // v0.1.78: "/" của Owner là Tình báo (/intel) — Mặt tiền /owner đã gộp vào một shell.
+    await expect(page).toHaveURL(/\/intel$/);
   });
 
   test('chuông: số chưa đọc, cập nhật trực tiếp qua WebSocket, bấm mở trang liên quan', async ({ page }) => {
@@ -137,7 +139,7 @@ test.describe('B5–B7 (máy tính)', () => {
     const bell = page.locator('header .hd-bell');
     await expect(bell).toHaveAccessibleName('Thông báo — 1 chưa đọc');
     // Thông báo mới từ máy chủ (sao lưu lỗi) → huy hiệu tăng ngay, không cần tải lại.
-    await mockHook(page.request, 'notify', { kind: 'backup.failed', title: 'Sao lưu thất bại', body: 'Hết dung lượng.', link: '/system?tab=storage' });
+    await mockHook(page.request, 'notify', { kind: 'backup.failed', title: 'Sao lưu thất bại', body: 'Hết dung lượng.', link: '/system?tab=storage' }); // link cũ đã lưu trong thông báo — phải chuyển hướng sang trang mới
     await expect(bell).toHaveAccessibleName('Thông báo — 2 chưa đọc');
     await expect(bell.locator('.hd-bell__badge')).toHaveText('2');
     await bell.click();
@@ -146,7 +148,7 @@ test.describe('B5–B7 (máy tính)', () => {
     await settle(page);
     await page.screenshot({ path: join(shots, 'bell-1280.png') });
     await dlg.getByRole('button', { name: /Sao lưu thất bại/ }).click();
-    await expect(page).toHaveURL(/\/system\?tab=storage$/);
+    await expect(page).toHaveURL(/\/admin\/backup$/);
     await expect(bell).toHaveAccessibleName('Thông báo — 1 chưa đọc');
     await bell.click();
     await page.getByRole('button', { name: 'Đánh dấu đã đọc hết' }).click();
