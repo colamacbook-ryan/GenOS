@@ -946,7 +946,7 @@
       "id": "help.version",
       "screen": "help",
       "label": "Phiên bản đang chạy",
-      "description": "Phiên bản Gen-Harness, tổ chức, múi giờ, vai trò",
+      "description": "Phiên bản GenOS, tổ chức, múi giờ, vai trò",
       "dynamic": null,
       "params": null
     },

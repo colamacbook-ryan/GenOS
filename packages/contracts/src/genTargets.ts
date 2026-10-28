@@ -159,7 +159,7 @@ export const GEN_TARGETS: GenTarget[] = [
   { id: 'account.pin', screen: 'account', label: 'Đổi mã PIN', description: 'Đặt mã PIN 6 số mới', sensitive: true },
   { id: 'account.sessions', screen: 'account', label: 'Phiên đăng nhập', description: 'Thiết bị đang đăng nhập, đăng xuất thiết bị khác', sensitive: true },
   // ── Trợ giúp ──
-  { id: 'help.version', screen: 'help', label: 'Phiên bản đang chạy', description: 'Phiên bản Gen-Harness, tổ chức, múi giờ, vai trò' },
+  { id: 'help.version', screen: 'help', label: 'Phiên bản đang chạy', description: 'Phiên bản GenOS, tổ chức, múi giờ, vai trò' },
   { id: 'help.ask_gen', screen: 'help', label: 'Cách hỏi Gen', description: 'Hướng dẫn mở khung Gen và câu hỏi mẫu' },
   { id: 'help.guide', screen: 'help', label: 'Nút "Mở Hướng dẫn thiết lập"', description: 'Sang trang hướng dẫn các việc thiết lập để sau (Owner)' },
   { id: 'help.curriculum', screen: 'help', label: 'Thẻ "Lộ trình học cùng Gen"', description: '19 bài học của Gen hướng dẫn kèm trạng thái: xem nội dung, Làm thử, Học lại (chỉ Owner)', permission: 'system.manage' },
