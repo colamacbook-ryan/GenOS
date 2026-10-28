@@ -1,9 +1,9 @@
 import { useEffect } from 'react';
 import { Link, Navigate, useLocation } from 'react-router-dom';
+import { screenPath } from '@gen-harness/contracts';
 import { Card, EmptyState, ErrorState, Skeleton } from '@gen-harness/ui';
 import { errorDetail, errorText } from '../lib/errorText';
 import { useMe, useNavigation } from '../lib/queries';
-import { OWNER_HOME } from '../owner/ownerModel';
 import { firstScreenKey } from './navModel';
 
 /**
@@ -11,20 +11,17 @@ import { firstScreenKey } from './navModel';
  * không còn cứng "/overview" (Agent NV không có quyền Tổng quan từng gặp ổ khoá ngay khi đăng nhập). Giữ nguyên
  * query (vd `?gen=` mở Bản tin Gen từ chuông).
  *
- * v0.1.55 (G5): vai Owner ⇒ `/owner` (Mặt tiền), vẫn giữ nguyên `?gen=` (`?gen=coach` mở thẻ Hôm nay của Sếp, `?gen=<mã>`
- * mở Bản tin); mọi vai khác giữ như cũ. "Cài đặt nâng cao" của Mặt tiền đi tới `/overview`, không qua "/".
+ * v0.1.78 (G0): MỘT shell — mọi vai vào mục đầu tiên không ẩn của cây (`firstScreenKey`): Sếp, Quản lý, Vận hành, Nhân viên đều
+ * là Tình báo (`/intel`; "Hôm nay" theo vai ở trong trang). Không còn nhánh riêng cho Owner/Mặt tiền.
  */
 export function HomeRedirect() {
   const me = useMe();
   const nav = useNavigation();
   const { search } = useLocation();
-  const owner = me.data?.role?.code === 'owner';
 
   useEffect(() => {
     document.title = 'Gen-Harness';
   }, []);
-
-  if (owner) return <Navigate to={`${OWNER_HOME}${search}`} replace />;
 
   // Chưa biết vai (đang tải /auth/me) hoặc chưa có danh mục: khung chờ. /auth/me lỗi ⇒ coi như không phải Owner.
   if (me.isPending || nav.isPending) {
@@ -74,5 +71,5 @@ export function HomeRedirect() {
       </div>
     );
   }
-  return <Navigate to={`/${key}${search}`} replace />;
+  return <Navigate to={`${screenPath(key)}${search}`} replace />;
 }

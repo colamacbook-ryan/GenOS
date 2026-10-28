@@ -1,6 +1,6 @@
 import { type CSSProperties } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import type { NavDomain, NavItem } from '@gen-harness/contracts';
+import { screenPath, type NavDomain, type NavItem } from '@gen-harness/contracts';
 import { ErrorState, Icon, Skeleton, Tooltip, toneColor, toneTint } from '@gen-harness/ui';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
@@ -172,7 +172,7 @@ function Group({ g, wide, activeKey, level1 }: { g: NavItem; wide: boolean; acti
   if (!isPureGroup && g.key) {
     el = (
       <Link
-        to={`/${g.key}`}
+        to={screenPath(g.key)}
         {...common}
         aria-current={view.self ? 'page' : undefined}
         aria-label={wide ? undefined : g.name}
@@ -190,7 +190,7 @@ function Group({ g, wide, activeKey, level1 }: { g: NavItem; wide: boolean; acti
         aria-label={wide ? undefined : g.name}
         onClick={() => {
           if (action.type === 'toggle') setNavOpen(action.group, action.open);
-          else if (action.type === 'navigate') navigate(`/${action.key}`);
+          else if (action.type === 'navigate') navigate(screenPath(action.key));
         }}
       >
         {inner}
@@ -213,7 +213,7 @@ function Group({ g, wide, activeKey, level1 }: { g: NavItem; wide: boolean; acti
             c.key ? (
               <Link
                 key={c.key}
-                to={`/${c.key}`}
+                to={screenPath(c.key)}
                 className="sb-child"
                 data-screen={c.key}
                 data-on={c.key === activeKey || undefined}

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { buildScreenTree, SCREENS } from '@gen-harness/contracts';
+import { buildScreenTree, screenPath, SCREENS } from '@gen-harness/contracts';
 import { autonomyTooltip, confidencePercent } from '../../src/shell/headerModel';
 import { initials, roleLine } from '../../src/shell/people';
 import { safeNext } from '../../src/lib/safeNext';
@@ -31,12 +31,12 @@ describe('screen registry', () => {
       expect(s.title).toBe(d.title);
       expect(s.subtitle).toBe(d.subtitle);
       expect(s.parent).toBe(d.parent);
-      expect(s.domain).toBe(({ 'Việc hằng ngày': 'business', 'Nâng cao': 'tech' } as Record<string, string>)[d.domain]);
+      expect(s.domain).toBe(({ 'Việc hằng ngày': 'daily', 'Quản trị': 'admin' } as Record<string, string>)[d.domain]);
       expect(!!s.navHidden).toBe(!!d.hidden);
     }
   });
 
-  it('builds one route per screen, nested domain › group › screen', () => {
+  it('builds one page route per sidebar entry (v0.1.78: one shell), plus sub-routes for embedded screens that own ?tab=', () => {
     const paths: string[] = [];
     const walk = (rs: typeof routes, depth: string[]) =>
       rs.forEach((r) => {
@@ -44,35 +44,40 @@ describe('screen registry', () => {
         if (r.children) walk(r.children, r.id ? [...depth, r.id] : depth);
       });
     walk(routes, []);
-    // 21 màn thiết kế + 3 màn spec bổ sung (tasks, documents, deals) + Hướng dẫn thiết lập (guide, guide/:n)
-    // + Tài khoản của tôi (account, v0.1.19) + Trợ giúp (help, v0.1.22) + Tài khoản mạng xã hội (social, v0.1.29)
-    // + Việc Sếp cần làm (guide/viec-sep, v0.1.39) + Kết nối, Đội ngũ (v0.1.42)
-    // + Trang cảnh báo gửi Facebook (social/ghi-facebook, v0.1.47)
-    // + Mặt tiền Owner (v0.1.55): 4 màn con tương đối của /owner (quan-he, viec, gen, them)
-    // + Mặt tiền v2 (v0.1.59): thêm 2 trụ cột thong-tin, phan-tich ⇒ 6 màn con của /owner.
-    // + Nhật ký lắng nghe (listenlog, v0.1.68).
-    expect(paths).toHaveLength(40);
-    for (const p of ['thong-tin', 'quan-he', 'phan-tich', 'viec', 'gen', 'them']) expect(paths).toContain(p);
-    expect(paths).toContain('social/ghi-facebook');
-    expect(paths).toContain('domain:business > connections');
-    expect(paths).toContain('domain:business > team');
-    expect(paths).toContain('domain:business > group:Đội ngũ > people');
+    for (const p of ['intel', 'intel/inbox', 'decide', 'work', 'panorama', 'me', 'team']) expect(paths).toContain(`domain:daily > ${p}`);
+    for (const p of ['start', 'connections', 'access', 'backup', 'org', 'log', 'advanced', 'advanced/plugins']) {
+      expect(paths).toContain(`domain:admin > admin/${p}`);
+    }
+    // Mọi mục thanh bên có đúng một route ở đường dẫn chuẩn SCREEN_PATH.
+    for (const d of buildScreenTree()) {
+      for (const e of d.entries) {
+        const key = e.kind === 'screen' ? e.screen.key : e.group.key!;
+        expect(paths, key).toContain(`domain:${d.id} > ${screenPath(key).slice(1)}`);
+      }
+    }
     expect(paths).toContain('account');
     expect(paths).toContain('help');
-    expect(paths).toContain('guide');
-    expect(paths).toContain('guide/:n');
+    expect(paths).toContain('social');
+    expect(paths).toContain('social/ghi-facebook');
     expect(paths).toContain('guide/viec-sep');
+    expect(paths).toContain('guide/:n');
     // `guide/viec-sep` phải đứng TRƯỚC `guide/:n` (không bị `:n` nuốt).
     expect(paths.indexOf('guide/viec-sep')).toBeLessThan(paths.indexOf('guide/:n'));
-    expect(paths).toContain('domain:business > group:Hộp thư & Việc > inbox');
-    expect(paths).toContain('domain:tech > graph');
-    expect(paths).toContain('domain:tech > group:Bản đồ quan hệ > notebook');
-    // Màn ẩn (Hồ sơ sống, Plugin) vẫn có route.
-    expect(paths).toContain('domain:business > group:Khách & Cơ hội > profile');
-    expect(paths).toContain('domain:tech > plugins');
-    expect(paths).toContain('domain:business > system');
-    // v0.1.42: 6 mục Việc hằng ngày + 5 mục Nâng cao.
-    expect(buildScreenTree().map((d) => d.entries.length)).toEqual([6, 5]);
+    // Đường cũ không còn route riêng cho màn — chỉ là chuyển hướng (bảng ở legacy-redirects-v0178.test.ts).
+    expect(paths).not.toContain('domain:business > connections');
+    // v0.1.78: 6 mục Việc hằng ngày + 7 trang Quản trị.
+    expect(buildScreenTree().map((d) => d.entries.length)).toEqual([6, 7]);
+  });
+
+  it('/owner và /owner/* là bộ chuyển hướng ngoài AppShell, đặt trước "/"', () => {
+    const root = routes[0].children ?? [];
+    const idxOwner = root.findIndex((r) => r.path === '/owner');
+    const idxStar = root.findIndex((r) => r.path === '/owner/*');
+    const idxHome = root.findIndex((r) => r.path === '/');
+    expect(idxOwner).toBeGreaterThanOrEqual(0);
+    expect(idxStar).toBeGreaterThan(idxOwner);
+    expect(idxStar).toBeLessThan(idxHome);
+    expect(root[idxOwner].children).toBeUndefined();
   });
 });
 

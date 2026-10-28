@@ -100,10 +100,11 @@ describe('v0.1.42 — Facebook vào Kết nối (không còn mục "Mạng xã h
   it('Owner (rộng): không có mục "Mạng xã hội"; menu tài khoản vẫn mở /social', async () => {
     const user = userEvent.setup();
     renderSidebar(OWNER);
+    await user.click(screen.getByRole('button', { name: /Quản trị/ }));
     const nav = screen.getByRole('navigation', { name: 'Danh mục màn hình' });
     expect(within(nav).queryByRole('link', { name: /Mạng xã hội/ })).not.toBeInTheDocument();
     expect(document.querySelector('[data-screen="social"]')).toBeNull();
-    expect(within(nav).getByRole('link', { name: /Kết nối/ })).toHaveAttribute('href', '/connections');
+    expect(within(nav).getByRole('link', { name: /Kết nối/ })).toHaveAttribute('href', '/admin/connections');
     await user.click(screen.getByRole('button', { name: /Anh Nguyễn Văn A/ }));
     await user.click(screen.getByRole('menuitem', { name: /Tài khoản mạng xã hội/ }));
     expect(screen.getByTestId('where')).toHaveTextContent('/social');
@@ -113,7 +114,7 @@ describe('v0.1.42 — Facebook vào Kết nối (không còn mục "Mạng xã h
     useUiStore.setState({ sidebarMode: 'rail' });
     renderSidebar(OWNER, '/social', 'connections');
     const conn = screen.getByRole('link', { name: 'Kết nối' });
-    expect(conn).toHaveAttribute('href', '/connections');
+    expect(conn).toHaveAttribute('href', '/admin/connections');
     expect(conn).toHaveAttribute('aria-current', 'page');
     expect(screen.queryByRole('link', { name: 'Mạng xã hội' })).not.toBeInTheDocument();
   });

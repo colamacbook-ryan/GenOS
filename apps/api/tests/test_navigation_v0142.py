@@ -1,5 +1,5 @@
-"""v0.1.42 (F-7, F-41, F-65): cây danh mục 6 mục "Việc hằng ngày" + "Nâng cao"; màn ẩn; Đánh giá/Chăm sóc theo
-nhân viên (core.persons person_type='staff' còn hiệu lực)."""
+"""v0.1.42 (F-7, F-41, F-65) → v0.1.78 (G0): cây danh mục MỘT shell — 6 mục "Việc hằng ngày" + "Quản trị" (7 trang con);
+màn cũ là con ẩn của trang mới; Đội ngũ chỉ hiện khi đã có nhân viên (core.persons person_type='staff' còn hiệu lực)."""
 
 import re
 from pathlib import Path
@@ -12,8 +12,13 @@ from gh.shell import navigation
 from tests.conftest import Api
 from tests.test_rbac_api import login_as
 
-ALWAYS_HIDDEN = {"profile", "plugins"}
-STAFF_ONLY = {"people", "care"}
+# Màn cũ nay là con ẩn của trang mới (nhúng thành tab) — luôn ẩn khỏi thanh bên.
+LEGACY = {"overview", "inbox", "workbench", "tasks", "directory", "opportunity", "deals", "documents", "search",
+          "profile", "graph", "notebook", "supply", "people", "care", "raw", "listenlog", "rules", "clean",
+          "identity", "agents", "api", "mcp", "plugins", "system"}
+DAILY = ["intel", "decide", "work", "panorama", "me", "team"]
+ADMIN = ["start", "connections", "access", "backup", "org", "log", "advanced"]
+STAFF_ONLY = {"team"}
 
 
 def walk(nav: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -48,64 +53,74 @@ async def add_staff(db, code: str, *, deleted: bool = False, merged: bool = Fals
 
 async def test_owner_tree_without_staff(owner_api: Api) -> None:
     nav = (await owner_api.get("/navigation")).json()
-    assert [d["domain"] for d in nav] == ["business", "tech"]
-    assert [d["label"] for d in nav] == ["Việc hằng ngày", "Nâng cao"]
-    assert [d["crumb"] for d in nav] == ["HẰNG NGÀY", "NÂNG CAO"]
+    assert [d["domain"] for d in nav] == ["daily", "admin"]
+    assert [d["label"] for d in nav] == ["Việc hằng ngày", "Quản trị"]
+    assert [d["crumb"] for d in nav] == ["HẰNG NGÀY", "QUẢN TRỊ"]
     assert [d["collapsed"] for d in nav] == [False, True]
-    top = [n["key"] or n["name"] for n in nav[0]["groups"]]
-    assert top == ["overview", "Hộp thư & Việc", "Khách & Cơ hội", "connections", "team", "system"]
-    assert len(top) <= 6
-    assert [n["key"] or n["name"] for n in nav[1]["groups"]] == ["Tầng dữ liệu", "Agent & Model", "graph",
-                                                                  "supply", "plugins"]
+    assert [n["key"] for n in nav[0]["groups"]] == DAILY
+    assert [n["key"] for n in nav[1]["groups"]] == ADMIN
     keys = by_key(nav)
-    for k in ALWAYS_HIDDEN | STAFF_ONLY:
-        assert keys[k].get("hidden") is True, k
-    assert all("hidden" not in n for n in walk(nav) if n["key"] not in ALWAYS_HIDDEN | STAFF_ONLY)
-    assert [d["count"] for d in nav] == [12, 11]
+    assert keys["team"].get("hidden") is True                         # chưa có nhân viên ⇒ Đội ngũ ẩn
+    for k in LEGACY:
+        assert keys[k].get("hidden") is True, k                       # màn cũ luôn ẩn, chỉ còn là tab của trang mới
+    assert all("hidden" not in n for n in walk(nav) if n["key"] not in LEGACY | STAFF_ONLY)
+    assert [d["count"] for d in nav] == [5, 7]
     assert [c["key"] for c in keys["team"]["children"]] == ["people", "care"]
-    assert [c["key"] for c in keys["graph"]["children"]] == ["notebook"]
+    assert [c["key"] for c in keys["intel"]["children"]] == ["overview", "inbox"]
+    assert [c["key"] for c in keys["panorama"]["children"]] == [
+        "directory", "opportunity", "deals", "documents", "search", "profile", "graph", "notebook", "supply"]
+    assert [c["key"] for c in keys["advanced"]["children"]] == [
+        "raw", "listenlog", "rules", "clean", "identity", "agents", "api", "mcp", "plugins", "system"]
 
 
-async def test_staff_reveals_people_and_care(owner_api: Api, db) -> None:  # type: ignore[no-untyped-def]
+async def test_staff_reveals_team(owner_api: Api, db) -> None:  # type: ignore[no-untyped-def]
     await add_staff(db, "NV-DEL", deleted=True)
     await add_staff(db, "NV-MRG", merged=True)
     nav = (await owner_api.get("/navigation")).json()
-    assert by_key(nav)["people"].get("hidden") is True                # đã xoá / đã gộp ⇒ không tính
-    assert by_key(nav)["care"].get("hidden") is True
-    assert [d["count"] for d in nav] == [12, 11]
+    assert by_key(nav)["team"].get("hidden") is True                  # đã xoá / đã gộp ⇒ không tính
+    assert [d["count"] for d in nav] == [5, 7]
     await add_staff(db, "NV-001")
     nav = (await owner_api.get("/navigation")).json()
     keys = by_key(nav)
-    assert "hidden" not in keys["people"] and "hidden" not in keys["care"]
-    assert keys["profile"]["hidden"] is True and keys["plugins"]["hidden"] is True
-    assert [d["count"] for d in nav] == [14, 11]
+    assert "hidden" not in keys["team"]
+    # people/care là tab của Đội ngũ, không phải mục thanh bên
+    assert keys["people"]["hidden"] is True and keys["care"]["hidden"] is True
+    assert keys["plugins"]["hidden"] is True
+    assert [d["count"] for d in nav] == [6, 7]
 
 
 async def test_names_and_icons(owner_api: Api) -> None:
     keys = by_key((await owner_api.get("/navigation")).json())
-    assert {k: keys[k]["name"] for k in ("overview", "inbox", "directory", "system", "team", "connections")} == {
-        "overview": "Hôm nay", "inbox": "Hộp thư", "directory": "Khách & Nhóm", "system": "Cài đặt",
-        "team": "Đội ngũ", "connections": "Kết nối"}
-    assert keys["overview"]["icon"] == "ph ph-sun-horizon"
+    assert {k: keys[k]["name"] for k in ("intel", "decide", "work", "panorama", "me", "team", "start", "connections",
+                                         "access", "backup", "org", "log", "advanced", "inbox", "directory")} == {
+        "intel": "Tình báo", "decide": "Cần quyết", "work": "Việc", "panorama": "Toàn cảnh", "me": "Tôi",
+        "team": "Đội ngũ", "start": "Bắt đầu", "connections": "Kết nối", "access": "Người & quyền",
+        "backup": "Sao lưu & cập nhật", "org": "Tổ chức", "log": "Nhật ký", "advanced": "Nâng cao",
+        "inbox": "Hộp thư", "directory": "Khách & Nhóm"}
+    assert keys["intel"]["icon"] == "ph ph-sun"
     assert keys["system"]["icon"] == "ph ph-gear-six"
     assert keys["mcp"]["name"] == "MCP Hub"
 
 
-async def test_agent_staff_first_visible_is_inbox(owner_api: Api, client, db) -> None:  # type: ignore[no-untyped-def]
+async def test_agent_staff_first_visible_is_intel(owner_api: Api, client, db) -> None:  # type: ignore[no-untyped-def]
     api = await login_as(client, db, "agent_staff")
     nav = (await api.get("/navigation")).json()
     first = next(n["key"] for n in walk(nav) if n["key"] and not n.get("hidden"))
-    assert first == "inbox"
+    assert first == "intel"  # Nhân viên: trang chủ là Tình báo (Hôm nay theo vai)
+    assert [n["key"] for n in nav[0]["groups"] if n["key"]] == ["intel", "decide", "work", "panorama"]
+    assert len(nav) == 1                                              # không có Quản trị
 
 
-async def test_manager_sees_settings_not_connections_or_team(owner_api: Api, client, db) -> None:  # type: ignore[no-untyped-def]
+async def test_manager_sees_log_only_in_admin(owner_api: Api, client, db) -> None:  # type: ignore[no-untyped-def]
     keys = by_key((await (await login_as(client, db, "manager")).get("/navigation")).json())
-    assert "system" in keys and "connections" not in keys and "team" not in keys
+    assert {"intel", "decide", "work", "panorama", "log"} <= set(keys)
+    assert not ({"connections", "access", "backup", "org", "start", "advanced", "me", "team"} & set(keys))
 
 
-async def test_auditor_sees_connections_not_team(owner_api: Api, client, db) -> None:  # type: ignore[no-untyped-def]
+async def test_auditor_sees_connections_not_start_or_decide(owner_api: Api, client, db) -> None:  # type: ignore[no-untyped-def]
     keys = by_key((await (await login_as(client, db, "auditor")).get("/navigation")).json())
-    assert "connections" in keys and "team" not in keys
+    assert {"connections", "backup", "org", "log", "access", "advanced"} <= set(keys)
+    assert not ({"start", "decide", "me", "team"} & set(keys))
 
 
 def test_hidden_screens_never_have_badges() -> None:
@@ -113,13 +128,19 @@ def test_hidden_screens_never_have_badges() -> None:
     badges: dict[str, int | None] = {k: 7 for k in navigation.all_screen_keys()}
     nav = navigation.build(owner, badges, has_staff=False)
     hidden = [n for n in walk(nav) if n["key"] and n.get("hidden")]
-    assert {n["key"] for n in hidden} == ALWAYS_HIDDEN | STAFF_ONLY
+    assert {n["key"] for n in hidden} == LEGACY | STAFF_ONLY
     assert all(n["badge"] is None for n in hidden)
-    assert "plugins" not in navigation.BADGE_SCREENS
-    assert {"connections", "team"} <= set(navigation.all_screen_keys())
+    assert set(navigation.BADGE_SCREENS) <= set(DAILY)
+    assert {"connections", "team", "intel", "advanced"} <= set(navigation.all_screen_keys())
     shown = by_key(navigation.build(owner, badges, has_staff=True))
-    assert shown["people"]["badge"] == {"value": "7", "tone": "ok"}
-    assert shown["plugins"]["badge"] is None
+    assert shown["team"]["badge"] == {"value": "7", "tone": "ok"}
+    assert shown["people"]["badge"] is None and shown["plugins"]["badge"] is None
+
+
+def test_every_screen_key_has_a_permission() -> None:
+    # Khoá màn mới không có quyền trong rbac.SCREEN_PERMISSION ⇒ không ai thấy (kể cả Owner): chặn quên khi thêm mục.
+    assert set(navigation.all_screen_keys()) <= set(rbac.SCREEN_PERMISSION)
+    assert len(navigation.all_screen_keys()) == len(set(navigation.all_screen_keys()))
 
 
 # ── Cây Python (navigation.NAV) phải trùng packages/contracts/src/screens.ts (nit review v0.1.42) ──────────────────
@@ -152,7 +173,7 @@ def _ts_tree() -> dict[str, Any]:
 
 def test_python_nav_matches_web_screens_ts() -> None:
     ts = _ts_tree()
-    assert len(ts["screens"]) >= 25 and set(ts["order"]) == {"business", "tech"}
+    assert len(ts["screens"]) >= 38 and set(ts["order"]) == {"daily", "admin"}
     py_screens: dict[str, dict[str, Any]] = {}
 
     def collect(nodes: list[dict[str, Any]], parent: str | None, domain: str) -> None:

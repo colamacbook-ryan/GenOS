@@ -13,6 +13,7 @@ import { GenPanel } from '../gen/GenPanel';
 import { Spotlight } from '../gen/Spotlight';
 import { useGenStore } from '../gen/genStore';
 import { useOpenGenFromUrl } from '../owner/useOpenGenFromUrl';
+import { closeAskGen, useAskGenStore } from '../owner/AskGenScreen';
 
 function useCrumbs(activeKey: string | null): Crumbs | null {
   const matches = useMatches();
@@ -69,6 +70,14 @@ export function AppShell() {
   // Điện thoại: khung Gen phủ cả màn — khi Gen đang chỉ vào một phần tử thì tạm ẩn khung để thấy phần tử (gen.css).
   const spotting = useGenStore((s) => !!s.spotlight);
   useOpenGenFromUrl(me.data?.id ?? null, genOn);
+  // v0.1.78: màn của Mặt tiền cũ nhúng trong trang mới gọi `openAskGen()` ("Nhờ Gen soạn…", "Hỏi Gen") — một shell ⇒ mở khung Gen bên phải.
+  const askOpen = useAskGenStore((s) => s.open);
+  const meId = me.data?.id ?? null;
+  useEffect(() => {
+    if (!askOpen) return;
+    if (genOn && meId) useGenStore.getState().setOpen(meId, true);
+    closeAskGen();
+  }, [askOpen, genOn, meId]);
   // v0.1.19: mật khẩu tạm (genh reset-password) → mọi màn Console chuyển về "Đặt mật khẩu mới".
   if (me.data?.must_change_password) return <Navigate to="/change-password" replace />;
   return (
@@ -87,7 +96,7 @@ export function AppShell() {
       <main className="main" id="main" tabIndex={-1}>
         <Header
           crumbs={crumbs}
-          advanced={!!activeKey && SCREEN_BY_KEY[activeKey]?.domain === 'tech'}
+          advanced={activeKey === 'advanced'}
           screenKey={activeKey}
         />
         <div className="content">

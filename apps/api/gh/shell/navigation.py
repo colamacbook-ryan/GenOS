@@ -1,4 +1,4 @@
-"""Cây danh mục của Console — cây chuẩn v0.1.42 (giống hệt apps/web/src/screens.ts).
+"""Cây danh mục của Console — cây chuẩn v0.1.78 (giống hệt packages/contracts/src/screens.ts).
 
 Chỉ nhãn, icon, cấu trúc lấy từ thiết kế. Số badge KHÔNG lấy từ thiết kế (đó là số mẫu):
 badge được tính từ dữ liệu thật qua `BadgeSource`; chưa có nguồn → `null`.
@@ -24,64 +24,78 @@ def _g(name: str, icon: str, children: list[dict[str, Any]]) -> dict[str, Any]:
             "hidden": False, "needs_staff": False}
 
 
-# v0.1.42 (F-7): cây chuẩn 6 mục "Việc hằng ngày" + "Nâng cao" (mặc định gập). Phải giống hệt
-# apps/web/src/screens.ts. `hidden=True` = có trong cây, có route, không hiện ở thanh bên.
+# v0.1.78 (G0, UI-IA-REVIEW §4): MỘT shell, hai miền — `daily` (6 mục) và `admin` (Quản trị, thu gọn mặc định).
+# Mỗi mục thanh bên
+# là MỘT trang có tab; màn cũ (inbox, workbench, raw…) vẫn là khoá màn (quyền, Gen, góc nhìn đã lưu) nhưng chỉ là con ẩn
+# (`hidden=True`: có trong cây, không hiện thanh bên) của trang mới. Phải giống hệt packages/contracts/src/screens.ts.
+def _h(key: str, icon: str, name: str, en: str, needs_staff: bool = False) -> dict[str, Any]:
+    """Con ẩn: màn cũ được nhúng thành tab của trang cha."""
+    return _s(key, icon, name, en, hidden=True, needs_staff=needs_staff)
+
+
 NAV: list[dict[str, Any]] = [
-    {"domain": "business", "label": "Việc hằng ngày", "crumb": "HẰNG NGÀY", "icon": "ph-fill ph-briefcase",
+    {"domain": "daily", "label": "Việc hằng ngày", "crumb": "HẰNG NGÀY", "icon": "ph-fill ph-briefcase",
      "tone": OK, "collapsed": False,
      "groups": [
-         _s("overview", "ph ph-sun-horizon", "Hôm nay", "Cần Sếp xử lý · 4 số chính", BAD),
-         _g("Hộp thư & Việc", "ph ph-tray", [
-             _s("inbox", "ph ph-tray", "Hộp thư", "Tin quan trọng đã được sắp xếp", WARN),
-             _s("workbench", "ph ph-pen-nib", "Bàn làm việc", "Soạn & duyệt tin trả lời", WARN),
-             _s("tasks", "ph ph-check-square", "Việc & Nhắc hẹn", "Việc cần làm và lời nhắc", BAD),
+         _s("intel", "ph ph-sun", "Tình báo", "Sáng nay có gì, tín hiệu nào cần để ý", BAD, children=[
+             _h("overview", "ph ph-sun-horizon", "Hôm nay", "Cần Sếp xử lý · 4 số chính"),
+             _h("inbox", "ph ph-tray", "Hộp thư", "Tin quan trọng đã được sắp xếp"),
          ]),
-         _g("Khách & Cơ hội", "ph ph-address-book", [
-             _s("directory", "ph ph-address-book", "Khách & Nhóm", "Nhóm theo kênh · lọc khách"),
-             _s("opportunity", "ph ph-target", "Bảng cơ hội", "Cơ hội bán hàng đang theo", OK),
-             _s("deals", "ph ph-handshake", "Deal & Vụ việc", "Thương vụ và vụ việc"),
-             _s("documents", "ph ph-files", "Tài liệu", "Báo giá, hợp đồng, tệp"),
-             _s("search", "ph ph-brain", "Kho hội thoại", "Tìm trong mọi hội thoại"),
-             # F-65: Hồ sơ sống mở từ danh sách, không còn là mục thanh bên.
-             _s("profile", "ph ph-identification-card", "Hồ sơ sống", "Hồ sơ một người — mở từ danh sách",
-                hidden=True),
+         _s("decide", "ph ph-seal-check", "Cần quyết", "Nháp tin và đề xuất chờ Sếp quyết", WARN, children=[
+             _h("workbench", "ph ph-pen-nib", "Bàn làm việc", "Soạn & duyệt tin trả lời"),
          ]),
-         _s("connections", "ph ph-plugs-connected", "Kết nối", "Bộ não AI, Zalo, Facebook, Gen-hub…"),
-         _s("team", "ph ph-users", "Đội ngũ", "Người dùng, đánh giá, chăm sóc", children=[
-             _s("people", "ph ph-users-three", "Đánh giá con người", "Điểm nhân viên có chứng cứ", needs_staff=True),
-             _s("care", "ph ph-heartbeat", "Chất lượng chăm sóc", "Cách nhân viên chăm khách", needs_staff=True),
+         _s("work", "ph ph-check-square", "Việc", "Việc đến hạn và lời hứa", BAD, children=[
+             _h("tasks", "ph ph-check-square", "Việc & Nhắc hẹn", "Việc cần làm và lời nhắc"),
          ]),
-         _s("system", "ph ph-gear-six", "Cài đặt", "Sao lưu, cập nhật, tổ chức, bộ não AI, quyền, nhật ký"),
+         _s("panorama", "ph ph-map-trifold", "Toàn cảnh", "Người, nhóm, quan hệ, cơ hội", children=[
+             _h("directory", "ph ph-address-book", "Khách & Nhóm", "Nhóm theo kênh · lọc khách"),
+             _h("opportunity", "ph ph-target", "Bảng cơ hội", "Cơ hội bán hàng đang theo"),
+             _h("deals", "ph ph-handshake", "Deal & Vụ việc", "Thương vụ và vụ việc"),
+             _h("documents", "ph ph-files", "Tài liệu", "Báo giá, hợp đồng, tệp"),
+             _h("search", "ph ph-brain", "Kho hội thoại", "Tìm trong mọi hội thoại"),
+             # F-65: Hồ sơ sống mở từ danh sách; v0.1.78 có thêm tab riêng ở Toàn cảnh.
+             _h("profile", "ph ph-identification-card", "Hồ sơ sống", "Hồ sơ một người — mở từ danh sách"),
+             _h("graph", "ph ph-graph", "Bản đồ quan hệ", "Ai quen ai, qua đâu"),
+             _h("notebook", "ph ph-notebook", "Sổ tay nhận thức", "Ghi chú trợ lý theo từng người"),
+             _h("supply", "ph ph-arrows-left-right", "Cung ↔ Cầu", "Ghép người cần với người có"),
+         ]),
+         _s("me", "ph ph-user-circle", "Tôi", "Hồ sơ của Sếp, Gen nhớ gì về Sếp"),
+         _s("team", "ph ph-users-three", "Đội ngũ", "Đánh giá nhân viên, chất lượng chăm sóc", needs_staff=True,
+            children=[
+                _h("people", "ph ph-users-three", "Đánh giá con người", "Điểm nhân viên có chứng cứ", needs_staff=True),
+                _h("care", "ph ph-heartbeat", "Chất lượng chăm sóc", "Cách nhân viên chăm khách", needs_staff=True),
+            ]),
      ]},
-    {"domain": "tech", "label": "Nâng cao", "crumb": "NÂNG CAO", "icon": "ph-fill ph-cpu", "tone": ACCENT,
+    {"domain": "admin", "label": "Quản trị", "crumb": "QUẢN TRỊ", "icon": "ph-fill ph-gear", "tone": ACCENT,
      "collapsed": True,
      "groups": [
-         _g("Tầng dữ liệu", "ph ph-database", [
-             _s("raw", "ph ph-database", "Kho dữ liệu thô", "Tin gốc các kênh gom về", WARN),
-             _s("listenlog", "ph ph-ear", "Nhật ký lắng nghe", "Mọi kênh đang nghe, hệ thống đã làm gì"),
-             _s("rules", "ph ph-funnel", "Quy tắc sàng lọc", "Lọc, phân loại, chấm điểm"),
-             _s("clean", "ph ph-check-circle", "Kho sạch", "Dữ liệu đã lọc & bộ nhớ làm việc"),
-             _s("identity", "ph ph-git-merge", "Hợp nhất danh tính", "Gộp một người nhiều tài khoản", WARN),
+         _s("start", "ph ph-rocket-launch", "Bắt đầu", "Việc thiết lập và kiểm tra kết nối"),
+         _s("connections", "ph ph-plugs-connected", "Kết nối", "Bộ não AI, Zalo, Facebook, Gen-hub…"),
+         _s("access", "ph ph-users", "Người & quyền", "Người dùng Console và quyền hạn"),
+         _s("backup", "ph ph-database", "Sao lưu & cập nhật", "Máy có an toàn không, bản mới"),
+         _s("org", "ph ph-briefcase", "Tổ chức", "Tên, giờ, xưng hô"),
+         _s("log", "ph ph-notebook", "Nhật ký", "Ai đã làm gì"),
+         _s("advanced", "ph ph-cpu", "Nâng cao", "Dữ liệu, agent, model, MCP", children=[
+             _h("raw", "ph ph-database", "Kho dữ liệu thô", "Tin gốc các kênh gom về"),
+             _h("listenlog", "ph ph-ear", "Nhật ký lắng nghe", "Mọi kênh đang nghe, hệ thống đã làm gì"),
+             _h("rules", "ph ph-funnel", "Quy tắc sàng lọc", "Lọc, phân loại, chấm điểm"),
+             _h("clean", "ph ph-check-circle", "Kho sạch", "Dữ liệu đã lọc & bộ nhớ làm việc"),
+             _h("identity", "ph ph-git-merge", "Hợp nhất danh tính", "Gộp một người nhiều tài khoản"),
+             _h("agents", "ph ph-user-focus", "Danh tính Agent", "Tên, giọng, phạm vi trợ lý"),
+             _h("api", "ph ph-plugs", "API & Model", "Khoá API và model cho trợ lý"),
+             _h("mcp", "ph ph-plugs-connected", "MCP Hub", "Máy chủ MCP bên ngoài"),
+             # F-41: đóng băng — route và API /plugins giữ nguyên, không hiện thanh bên.
+             _h("plugins", "ph ph-puzzle-piece", "Plugin & Tiện ích", "Plugin nền và plugin cài thêm"),
+             _h("system", "ph ph-gear-six", "Cài đặt", "Sao lưu, cập nhật, tổ chức, bộ não AI, quyền, nhật ký"),
          ]),
-         _g("Agent & Model", "ph ph-robot", [
-             _s("agents", "ph ph-user-focus", "Danh tính Agent", "Tên, giọng, phạm vi trợ lý"),
-             _s("api", "ph ph-plugs", "API & Model", "Khoá API và model cho trợ lý"),
-             _s("mcp", "ph ph-plugs-connected", "MCP Hub", "Máy chủ MCP bên ngoài", OK),
-         ]),
-         _s("graph", "ph ph-graph", "Bản đồ quan hệ", "Ai quen ai, qua đâu", children=[
-             _s("notebook", "ph ph-notebook", "Sổ tay nhận thức", "Ghi chú trợ lý theo từng người"),
-         ]),
-         _s("supply", "ph ph-arrows-left-right", "Cung ↔ Cầu", "Ghép người cần với người có", OK),
-         # F-41: đóng băng — route và API /plugins giữ nguyên, không hiện thanh bên.
-         _s("plugins", "ph ph-puzzle-piece", "Plugin & Tiện ích", "Plugin nền và plugin cài thêm", OK,
-            hidden=True),
      ]},
 ]
 
 # Màn có badge trong thiết kế. Mỗi giai đoạn đăng ký nguồn số thật cho màn của mình.
-# v0.1.42 (F-41): bỏ 'plugins' — màn đóng băng, ẩn khỏi thanh bên. Màn ẩn không bao giờ có badge.
+# v0.1.78: số đếm chỉ gắn vào ba mục thanh bên có số (Tình báo 🔴, Cần quyết, Việc) — nguồn số thật do G1/G2
+# đăng ký; màn ẩn không bao giờ có badge.
 BadgeSource = Callable[[Any], Awaitable[int | None]]
-BADGE_SCREENS = ("overview", "inbox", "workbench", "tasks", "opportunity", "supply", "raw", "identity", "mcp")
+BADGE_SCREENS = ("intel", "decide", "work")
 
 
 def format_badge(n: int | None) -> str | None:

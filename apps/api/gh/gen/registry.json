@@ -1,6 +1,30 @@
 {
   "_comment": "Sinh từ packages/contracts/src/genTargets.ts + apps/web/src/guide/guideContent.ts — KHÔNG sửa tay. GEN_WRITE=1 npx vitest run gen-targets",
   "screens": {
+    "intel": {
+      "path": "/intel",
+      "title": "Tình báo"
+    },
+    "decide": {
+      "path": "/decide",
+      "title": "Cần quyết"
+    },
+    "work": {
+      "path": "/work",
+      "title": "Việc"
+    },
+    "panorama": {
+      "path": "/panorama",
+      "title": "Toàn cảnh"
+    },
+    "me": {
+      "path": "/me",
+      "title": "Tôi"
+    },
+    "team": {
+      "path": "/team",
+      "title": "Đội ngũ"
+    },
     "overview": {
       "path": "/overview",
       "title": "Hôm nay"
@@ -41,13 +65,17 @@
       "path": "/profile",
       "title": "Hồ sơ sống"
     },
-    "connections": {
-      "path": "/connections",
-      "title": "Kết nối"
+    "graph": {
+      "path": "/graph",
+      "title": "Bản đồ quan hệ"
     },
-    "team": {
-      "path": "/team",
-      "title": "Đội ngũ"
+    "notebook": {
+      "path": "/notebook",
+      "title": "Sổ tay nhận thức"
+    },
+    "supply": {
+      "path": "/supply",
+      "title": "Cung ↔ Cầu"
     },
     "people": {
       "path": "/people",
@@ -57,9 +85,33 @@
       "path": "/care",
       "title": "Chất lượng chăm sóc"
     },
-    "system": {
-      "path": "/system",
-      "title": "Cài đặt"
+    "start": {
+      "path": "/start",
+      "title": "Bắt đầu"
+    },
+    "connections": {
+      "path": "/connections",
+      "title": "Kết nối"
+    },
+    "access": {
+      "path": "/access",
+      "title": "Người & quyền"
+    },
+    "backup": {
+      "path": "/backup",
+      "title": "Sao lưu & cập nhật"
+    },
+    "org": {
+      "path": "/org",
+      "title": "Tổ chức"
+    },
+    "log": {
+      "path": "/log",
+      "title": "Nhật ký"
+    },
+    "advanced": {
+      "path": "/advanced",
+      "title": "Nâng cao"
     },
     "raw": {
       "path": "/raw",
@@ -93,17 +145,9 @@
       "path": "/mcp",
       "title": "MCP Hub"
     },
-    "graph": {
-      "path": "/graph",
-      "title": "Bản đồ quan hệ"
-    },
-    "notebook": {
-      "path": "/notebook",
-      "title": "Sổ tay nhận thức"
-    },
-    "supply": {
-      "path": "/supply",
-      "title": "Cung ↔ Cầu"
+    "system": {
+      "path": "/system",
+      "title": "Cài đặt"
     },
     "guide": {
       "path": "/guide",

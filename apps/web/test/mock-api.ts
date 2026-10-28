@@ -51,6 +51,9 @@ export const MOCK_OWNER = { email: 'owner@genesis.local', password: 'matkhau-rat
 
 /** Badge values shown in the design, served so the shell can be compared with it. */
 const DESIGN_BADGES: Record<string, { value: string; tone: 'ok' | 'warn' | 'bad' }> = {
+  intel: { value: '9', tone: 'bad' },
+  decide: { value: '6', tone: 'warn' },
+  work: { value: '3', tone: 'bad' },
   overview: { value: '9', tone: 'bad' },
   inbox: { value: '28', tone: 'warn' },
   workbench: { value: '6', tone: 'warn' },
@@ -142,7 +145,7 @@ function restoreMatrix(): void {
   for (const [k, v] of Object.entries(MATRIX_DEFAULT)) MATRIX[k] = [...v] as [string, string, string, string, string];
 }
 const SCREEN_PERMISSION: Record<string, string[]> = {
-  overview: ['overview.read'], inbox: ['queue.read'], workbench: ['action.draft', 'action.approve'],
+  overview: ['overview.read'], inbox: ['queue.read'], tasks: ['queue.read'], deals: ['opportunity.read'], workbench: ['action.draft', 'action.approve'],
   directory: ['profile.read'], graph: ['profile.read'], profile: ['profile.read'], notebook: ['profile.read'],
   documents: ['profile.read'],
   opportunity: ['opportunity.read'], supply: ['opportunity.read'], search: ['opportunity.read'],
@@ -150,8 +153,12 @@ const SCREEN_PERMISSION: Record<string, string[]> = {
   listenlog: ['data.read'], raw: ['data.read'], rules: ['data.read'], clean: ['data.read'], identity: ['data.read'],
   agents: ['system.read'], api: ['system.read'], mcp: ['system.read'], plugins: ['system.read'],
   system: ['system.read', 'audit.read'],
-  // v0.1.42: Kết nối (system.read), Đội ngũ (roles.manage).
-  connections: ['system.read'], team: ['roles.manage'],
+  connections: ['system.read'],
+  // v0.1.78 (G0): mục thanh bên mới — khớp apps/api/gh/auth/rbac.py SCREEN_PERMISSION.
+  intel: ['overview.read', 'queue.read'], decide: ['action.draft', 'action.approve'], work: ['queue.read'],
+  panorama: ['profile.read', 'opportunity.read'], me: ['roles.manage'], team: ['people_review.read', 'care.read'],
+  start: ['system.manage'], access: ['system.read'], backup: ['system.read'], org: ['system.read'], log: ['audit.read'],
+  advanced: ['system.read', 'data.read'],
 };
 export function permissionsOf(role: RoleCode): Record<string, string> {
   const i = ROLE_ORDER.indexOf(role);
@@ -199,7 +206,7 @@ export function buildNavigation(
     name,
     en,
     icon,
-    badge: badges ? (DESIGN_BADGES[key] ?? null) : null,
+    badge: badges && !navHidden(key) ? (DESIGN_BADGES[key] ?? null) : null,
     children: [],
     ...(navHidden(key) ? { hidden: true } : {}),
   });
@@ -230,7 +237,7 @@ export function buildNavigation(
         label: d.label,
         crumb: d.crumb,
         icon: d.icon,
-        tone: d.id === 'business' ? ('ok' as const) : ('accent' as const),
+        tone: d.id === 'daily' ? ('ok' as const) : ('accent' as const),
         collapsed: d.collapsedByDefault,
         count,
         groups,

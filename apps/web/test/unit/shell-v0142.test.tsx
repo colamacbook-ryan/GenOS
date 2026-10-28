@@ -67,8 +67,8 @@ describe('Header (F-67, F-63)', () => {
     renderWith(<Header crumbs={CRUMBS} />);
     expect(await screen.findByText(/2 kênh · 5 nhóm/)).toBeInTheDocument();
     expect(screen.queryByText('Soạn sẵn chờ duyệt')).toBeNull();
-    // v0.1.43 (F-62): nút kính lúp cùng tên với màn /search.
-    expect(screen.getByRole('button', { name: 'Kho hội thoại' })).toBeInTheDocument();
+    // v0.1.78: nút kính lúp mở Toàn cảnh › Tìm (đường cũ /search chuyển hướng tới đó).
+    expect(screen.getByRole('button', { name: 'Tìm trong mọi hội thoại' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Tìm theo ý định' })).toBeNull();
     expect(screen.queryByText('78%')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Góc nhìn đã lưu' })).toBeNull();
@@ -144,7 +144,7 @@ describe('Đội ngũ', () => {
     expect(await screen.findByRole('heading', { name: 'Đội ngũ' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Đánh giá con người/ })).toHaveAttribute('href', '/people');
     expect(screen.getByRole('link', { name: /Chất lượng chăm sóc/ })).toHaveAttribute('href', '/care');
-    expect(screen.queryByRole('note')).toBeNull();
+    // v0.1.78: TeamScreen không còn route (Đội ngũ mới là /team với tab) — thanh bên không còn ẩn mục con, nên không kiểm ghi chú ở đây.
   });
 
   it('chưa có nhân viên: vẫn có liên kết (không ngõ cụt), ghi chú nói cách đánh dấu nhân viên ở hồ sơ + link Khách & Nhóm (v0.1.64)', async () => {

@@ -7,7 +7,7 @@ import { useViews } from '../screens/core/queries';
 import { useUiStore } from '../lib/uiStore';
 import { autonomyPillText, autonomyTooltip, confidencePercent, showSavedViews } from './headerModel';
 import { GenToggle } from '../gen/GenToggle';
-import { BackToFront } from '../owner/BackToFront';
+import { HealthChip } from './HealthChip';
 import { NotificationBell } from './NotificationBell';
 import { ThemeToggle } from './ThemeToggle';
 
@@ -56,8 +56,6 @@ export function Header({
           aria-expanded={drawerOpen}
           onClick={() => setDrawerOpen(!drawerOpen)}
         />
-        {/* v0.1.55 (G5): "← Về Mặt tiền" — chỉ Owner thấy (BackToFront tự ẩn với vai khác). */}
-        <BackToFront />
         {crumbs ? (
           <>
             <span className="hd-chip">{crumbs.domain}</span>
@@ -100,10 +98,11 @@ export function Header({
           )}
         </div>
         {listed || showSavedViews(screenKey, advanced, savedCount) ? <SavedViewsButton /> : null}
+        <HealthChip />
         <GenToggle />
         <NotificationBell />
         <ThemeToggle />
-        <IconButton icon="ph ph-magnifying-glass" label="Kho hội thoại" variant="primary" onClick={() => navigate('/search')} />
+        <IconButton icon="ph ph-magnifying-glass" label="Tìm trong mọi hội thoại" variant="primary" onClick={() => navigate('/panorama?tab=search')} />
       </div>
     </header>
   );

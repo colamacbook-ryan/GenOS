@@ -90,12 +90,7 @@
       "crawl": true
     }
   ],
-  "baseline": {
-    "agent-model-ten-man": {
-      "apps/api/gh/shell/navigation.py": 1,
-      "packages/contracts/src/screens.ts": 5
-    }
-  },
+  "baseline": {},
   "crawl_baseline": {
     "1440|/clean|term:tu-ky-thuat": 1,
     "1440|/connections|term:tu-ky-thuat": 3,
