@@ -33,7 +33,7 @@ export function LoginPage() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    document.title = 'Đăng nhập · Gen-Harness';
+    document.title = 'Đăng nhập · GenOS';
   }, []);
 
   const emailError = touched.email ? validateEmail(email) : null;

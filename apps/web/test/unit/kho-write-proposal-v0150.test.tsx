@@ -73,7 +73,7 @@ const PHIEN: GenProposal = {
     bang: 'Phiên',
     record: {
       'Việc tiếp': 'Sếp duyệt đề xuất PHIEN đầu tiên',
-      'Chủ đề': 'Gen-Harness v0.1.50 — Gen nhớ và ghi Kho',
+      'Chủ đề': 'GenOS v0.1.50 — Gen nhớ và ghi Kho',
       'Đã chốt': 'Gen nhớ tối đa 30 ghi chú',
       Ngày: '2026-10-09',
     },
@@ -204,7 +204,7 @@ describe('Thẻ "Ghi vào Kho dữ liệu" — kho_create', () => {
     const rows = [...tableRows(card)].map((r) => [...r.children].map((c) => c.textContent));
     // Đúng 4 khoá của record (không thêm trường rỗng), theo thứ tự KHO_FIELDS của Phiên — không theo thứ tự record.
     expect(rows).toEqual([
-      ['Chủ đề', 'Gen-Harness v0.1.50 — Gen nhớ và ghi Kho'],
+      ['Chủ đề', 'GenOS v0.1.50 — Gen nhớ và ghi Kho'],
       ['Ngày', '2026-10-09'],
       ['Đã chốt', 'Gen nhớ tối đa 30 ghi chú'],
       ['Việc tiếp', 'Sếp duyệt đề xuất PHIEN đầu tiên'],
@@ -660,7 +660,7 @@ describe('Sửa thẻ Ghi vào Kho — ô theo từng trường cho phép của 
     expect(form.querySelectorAll('input, textarea, select')).toHaveLength(6);
     const topic = within(form).getByLabelText('Chủ đề');
     expect(topic.tagName).toBe('INPUT');
-    expect(topic).toHaveValue('Gen-Harness v0.1.50 — Gen nhớ và ghi Kho');
+    expect(topic).toHaveValue('GenOS v0.1.50 — Gen nhớ và ghi Kho');
     expect(within(form).getByText('Bắt buộc')).toBeInTheDocument();
     expect(within(form).getByLabelText('Ngày')).toHaveAttribute('type', 'date');
     expect(within(form).getByLabelText('Ngày')).toHaveValue('2026-10-09');
@@ -736,7 +736,7 @@ describe('Sửa thẻ Ghi vào Kho — ô theo từng trường cho phép của 
     expect(within(form).getByLabelText('Đã chốt')).toHaveAttribute('maxlength', String(KHO_TEXT_MAX));
     expect(within(form).getByLabelText('Cảnh báo')).toHaveAttribute('maxlength', String(KHO_WARNING_MAX));
     expect(within(form).getByLabelText('Ngày')).not.toHaveAttribute('maxlength');
-    expect(within(form).getByTestId('gen-kho-count-Chủ đề')).toHaveTextContent(`${[...'Gen-Harness v0.1.50 — Gen nhớ và ghi Kho'].length}/200`);
+    expect(within(form).getByTestId('gen-kho-count-Chủ đề')).toHaveTextContent(`${[...'GenOS v0.1.50 — Gen nhớ và ghi Kho'].length}/200`);
     expect(within(form).getByTestId('gen-kho-count-Cảnh báo')).toHaveTextContent('0/1000');
     expect(within(form).queryByTestId('gen-kho-count-Ngày')).toBeNull();
     // Dán vượt giới hạn (máy chủ cũ / sửa thẳng DOM) ⇒ báo lỗi ngay, không đợi 422 sau PIN.
@@ -768,7 +768,7 @@ describe('Sửa thẻ Ghi vào Kho — ô theo từng trường cho phép của 
   });
 
   it('hàm thuần: changedFields / initialDraft / khoDraftRecord / khoDraftValid / khoFieldKind / khoBangOf', () => {
-    expect(initialDraft(PHIEN)).toEqual({ 'Chủ đề': 'Gen-Harness v0.1.50 — Gen nhớ và ghi Kho', Ngày: '2026-10-09', 'Đã chốt': 'Gen nhớ tối đa 30 ghi chú', 'Đang bàn': '', 'Việc tiếp': 'Sếp duyệt đề xuất PHIEN đầu tiên', 'Cảnh báo': '' });
+    expect(initialDraft(PHIEN)).toEqual({ 'Chủ đề': 'GenOS v0.1.50 — Gen nhớ và ghi Kho', Ngày: '2026-10-09', 'Đã chốt': 'Gen nhớ tối đa 30 ghi chú', 'Đang bàn': '', 'Việc tiếp': 'Sếp duyệt đề xuất PHIEN đầu tiên', 'Cảnh báo': '' });
     expect(changedFields(PHIEN, initialDraft(PHIEN))).toEqual({});
     expect(changedFields(PHIEN, { ...initialDraft(PHIEN), 'Chủ đề': 'Khác', evil: 'x', bang: 'Việc' })).toEqual({
       record: { 'Chủ đề': 'Khác', Ngày: '2026-10-09', 'Đã chốt': 'Gen nhớ tối đa 30 ghi chú', 'Việc tiếp': 'Sếp duyệt đề xuất PHIEN đầu tiên' },

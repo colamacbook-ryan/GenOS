@@ -19,7 +19,7 @@ import { ErrorWithDetail } from './WriteProofDialog';
 export function SocialWriteRiskPage() {
   const me = useMe();
   useEffect(() => {
-    document.title = 'Gửi trả lời & tin nhắn Facebook · Gen-Harness';
+    document.title = 'Gửi trả lời & tin nhắn Facebook · GenOS';
   }, []);
   if (me.isPending) return <div className="screen"><SkeletonLines rows={4} /></div>;
   // Lỗi tải /auth/me (mạng, 5xx) KHÔNG có nghĩa là "không phải Owner" — báo lỗi tải kèm nút thử lại.
@@ -104,7 +104,7 @@ function RiskBody() {
               <Card title="Hệ thống sẽ làm / không làm">
                 <div className="social-dos">
                   <div>
-                    <div className="setup-section__title">Gen-Harness SẼ</div>
+                    <div className="setup-section__title">GenOS SẼ</div>
                     <ul className="risk-list">
                       {fb.will_do.map((r) => (
                         <li key={r}>{r}</li>
@@ -112,7 +112,7 @@ function RiskBody() {
                     </ul>
                   </div>
                   <div>
-                    <div className="setup-section__title">Gen-Harness KHÔNG</div>
+                    <div className="setup-section__title">GenOS KHÔNG</div>
                     <ul className="risk-list">
                       {fb.wont_do.map((r) => (
                         <li key={r}>{r}</li>

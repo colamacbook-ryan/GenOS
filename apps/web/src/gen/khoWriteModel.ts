@@ -16,7 +16,7 @@ export const isMemoryNote = (p: GenProposal): p is MemoryProposal => p.type === 
 /** Câu cảnh báo cố định trên thẻ "Ghi vào Kho dữ liệu" (còn chờ xác nhận). */
 export const KHO_WRITE_WARNING = `Ghi thẳng vào ${KHO_LABEL} qua Gen-hub khi Sếp bấm Xác nhận và nhập mã PIN — không tự hoàn tác.`;
 export const KHO_MISSING_TEXT = 'Gen-hub chưa cấp quyền ghi Kho';
-export const KHO_MISSING_HINT = 'Vào Gen-hub tick quyền kho_create, kho_update cho token của Gen-Harness rồi bấm Kiểm tra ở Kết nối › Gen-hub.';
+export const KHO_MISSING_HINT = 'Vào Gen-hub tick quyền kho_create, kho_update cho token của GenOS rồi bấm Kiểm tra ở Kết nối › Gen-hub.';
 /** Đích của nút "Mở thẻ Gen-hub" / "Mở Kết nối › Gen-hub" — thẻ Gen-hub ở Kết nối. */
 export const HUB_CARD_PATH = '/connections#genhub';
 /** Đích của nút "Mở MCP Hub" — nơi Sếp mở lại tool ghi Kho đã TỰ đóng (Kiểm tra ở Gen-hub không mở lại). */

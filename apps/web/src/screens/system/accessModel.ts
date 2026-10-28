@@ -50,7 +50,7 @@ export const ACCESS_COMMANDS: readonly AccessCommand[] = [
 /** Cảnh báo theo chế độ (null = không cần). */
 export function modeWarning(a: Pick<AccessInfo, 'mode' | 'public_url_local'>): string | null {
   if (a.mode === 'lan_legacy') {
-    return 'Mọi máy cùng mạng (Wi-Fi văn phòng, khách…) đều thấy trang đăng nhập Gen-Harness. Hãy chọn Tailscale (khuyên dùng) hoặc Chỉ máy này.';
+    return 'Mọi máy cùng mạng (Wi-Fi văn phòng, khách…) đều thấy trang đăng nhập GenOS. Hãy chọn Tailscale (khuyên dùng) hoặc Chỉ máy này.';
   }
   if (a.mode === 'lan') {
     return 'Mọi máy cùng mạng nội bộ đều thấy trang đăng nhập. Chỉ nên dùng ở mạng tin cậy; mỗi điện thoại cần cài Chứng chỉ CA.';

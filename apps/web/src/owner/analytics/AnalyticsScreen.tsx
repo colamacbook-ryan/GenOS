@@ -399,7 +399,7 @@ const COLUMNS: readonly DataColumn<TableRow>[] = [
 
 export function AnalyticsScreen(): JSX.Element {
   useEffect(() => {
-    document.title = 'Phân tích · Gen-Harness';
+    document.title = 'Phân tích · GenOS';
   }, []);
   const tz = useOrgTimezone() || DEFAULT_TZ;
   const [range, setRange] = useState<InsightRange>('week');

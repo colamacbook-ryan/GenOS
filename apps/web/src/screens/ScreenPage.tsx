@@ -68,7 +68,7 @@ export function ScreenPage({ screenKey }: { screenKey: string }) {
   const nav = useNavigation();
 
   useEffect(() => {
-    document.title = `${meta.title} · Gen-Harness`;
+    document.title = `${meta.title} · GenOS`;
   }, [meta.title]);
 
   // Thiết kế không vẽ dòng tiêu đề cho overview, workbench, profile (header đã mang tiêu đề) → giữ nguyên như vậy.

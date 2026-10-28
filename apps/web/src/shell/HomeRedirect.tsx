@@ -20,7 +20,7 @@ export function HomeRedirect() {
   const { search } = useLocation();
 
   useEffect(() => {
-    document.title = 'Gen-Harness';
+    document.title = 'GenOS';
   }, []);
 
   // Chưa biết vai (đang tải /auth/me) hoặc chưa có danh mục: khung chờ. /auth/me lỗi ⇒ coi như không phải Owner.

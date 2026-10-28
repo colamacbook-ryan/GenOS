@@ -106,7 +106,7 @@ export class ErrorBoundary extends Component<BoundaryProps, BoundaryState> {
   }
 
   componentDidCatch(error: unknown, info: ErrorInfo): void {
-    console.error(`[Gen-Harness] ${this.state.errorId ?? 'ERR'} — lỗi giao diện`, error, info.componentStack);
+    console.error(`[GenOS] ${this.state.errorId ?? 'ERR'} — lỗi giao diện`, error, info.componentStack);
     if (this.state.errorId) reportClientError({ errorId: this.state.errorId, error, componentStack: info.componentStack });
   }
 
@@ -125,7 +125,7 @@ export function RouteErrorPage() {
   const error = useRouteError();
   const errorId = useMemo(() => newErrorId(), []);
   useEffect(() => {
-    console.error(`[Gen-Harness] ${errorId} — lỗi route`, error);
+    console.error(`[GenOS] ${errorId} — lỗi route`, error);
     // 404 của router không phải lỗi giao diện — không báo về máy chủ.
     if (!(isRouteErrorResponse(error) && error.status === 404)) reportClientError({ errorId, error });
   }, [error, errorId]);
@@ -138,7 +138,7 @@ export function NotFoundPage({ variant = 'inline' }: { variant?: 'page' | 'inlin
   const navigate = useNavigate();
   const { pathname } = useLocation();
   useEffect(() => {
-    document.title = 'Không tìm thấy · Gen-Harness';
+    document.title = 'Không tìm thấy · GenOS';
   }, []);
   return (
     <div className={variant === 'page' ? 'err-page' : 'err-inline'}>

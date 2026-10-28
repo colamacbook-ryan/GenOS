@@ -330,11 +330,11 @@ const HEALTH_KIND_DEFAULTS: Record<string, Omit<HealthIssue, 'raised_at' | 'body
   'offsite.failed': { key: 'offsite.failed', kind: 'offsite.failed', severity: 'warn', title: 'Sao lưu ra ổ ngoài chưa thành công', body: "Chưa thấy ổ USB/NAS — cắm lại ổ rồi bấm 'Sao lưu ra ổ ngoài ngay'", link: '/system?tab=storage&focus=offsite', action: 'Xem bản sao ngoài máy' },
   'job.timeout': { key: 'job.timeout:retention_sweep', kind: 'job.timeout', severity: 'warn', title: 'Việc nền "dọn dữ liệu theo hạn lưu" chạy quá giờ', body: 'Việc đã bị dừng và sẽ chạy lại ở lần sau. Lặp lại nhiều lần thì gửi kèm khi báo lỗi.', link: '/system?tab=storage', action: 'Xem sức khoẻ' },
   // v0.1.46 (F-21) — gh/health.py _eval_network: chép đúng OPEN_LAN_TITLE/OPEN_LAN_BODY/ACCESS_LINK; thẻ đích focus=access.
-  'network.open_lan': { key: 'network.open_lan', kind: 'network.open_lan', severity: 'warn', title: 'Cổng đang mở cho cả mạng', body: 'Mọi máy cùng mạng (Wi-Fi văn phòng, khách…) đều thấy trang đăng nhập Gen-Harness. Bấm để xem lệnh chọn cách truy cập (chạy trên máy chủ): Tailscale (khuyên dùng), chỉ máy này, hoặc giữ mở cho mạng nội bộ.', link: '/system?tab=storage&focus=access', action: 'Chọn cách truy cập' },
+  'network.open_lan': { key: 'network.open_lan', kind: 'network.open_lan', severity: 'warn', title: 'Cổng đang mở cho cả mạng', body: 'Mọi máy cùng mạng (Wi-Fi văn phòng, khách…) đều thấy trang đăng nhập GenOS. Bấm để xem lệnh chọn cách truy cập (chạy trên máy chủ): Tailscale (khuyên dùng), chỉ máy này, hoặc giữ mở cho mạng nội bộ.', link: '/system?tab=storage&focus=access', action: 'Chọn cách truy cập' },
   // v0.1.53 (F-99) — gh/health.py _eval_nightly (NIGHTLY_BODY/NIGHTLY_LINGER/NIGHTLY_ENABLE, HEALTH_LINK, ACTIONS): thân ghép
   // từ chuỗi cố định; số ngày / bước linger do healthView tính khi suy từ khối `nightly`.
   'host.nightly': { key: 'host.nightly', kind: 'host.nightly', severity: 'warn', title: 'Lịch tự cập nhật đêm chưa chạy 3 ngày', body: 'Máy chủ không tự lên bản mới. Trên máy chủ chạy: genh auto-update status · Sau đó bật lại lịch: genh auto-update enable', link: '/system?tab=storage&focus=health', action: 'Xem cách bật lại' },
-  'host.autostart': { key: 'host.autostart', kind: 'host.autostart', severity: 'warn', title: 'Máy chủ có thể không tự chạy lại Gen-Harness khi bật lại máy', body: 'Docker chưa bật tự chạy khi mở máy — chạy một lần trên máy chủ: sudo systemctl enable docker · Lịch tự cập nhật và nút Cập nhật ngay chỉ chạy khi có người đăng nhập — chạy một lần: sudo loginctl enable-linger $USER · Chạy xong thì chạy genh status để cảnh báo tự hết', link: '/system?tab=storage', action: 'Xem cách bật' },
+  'host.autostart': { key: 'host.autostart', kind: 'host.autostart', severity: 'warn', title: 'Máy chủ có thể không tự chạy lại GenOS khi bật lại máy', body: 'Docker chưa bật tự chạy khi mở máy — chạy một lần trên máy chủ: sudo systemctl enable docker · Lịch tự cập nhật và nút Cập nhật ngay chỉ chạy khi có người đăng nhập — chạy một lần: sudo loginctl enable-linger $USER · Chạy xong thì chạy genh status để cảnh báo tự hết', link: '/system?tab=storage', action: 'Xem cách bật' },
 };
 
 /** Hostname của một URL (rỗng/hỏng ⇒ ''). */
@@ -591,7 +591,7 @@ function createMockState(opts: MockOptions = {}, broadcast: (type: string, data:
         const ago = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
         list.push(
           { id: randomUUID(), kind: 'backup.done', title: 'Sao lưu đã xong', body: 'Bản sao lưu hằng ngày đã được lưu.', link: '/system?tab=storage', created_at: ago(35), read: false },
-          { id: randomUUID(), kind: 'user.reactivated', title: 'Chào mừng tới Gen-Harness', body: 'Thiết lập đã xong — thông báo mới sẽ hiện ở chuông này.', link: null, created_at: ago(60 * 26), read: true },
+          { id: randomUUID(), kind: 'user.reactivated', title: 'Chào mừng tới GenOS', body: 'Thiết lập đã xong — thông báo mới sẽ hiện ở chuông này.', link: null, created_at: ago(60 * 26), read: true },
         );
       }
     }

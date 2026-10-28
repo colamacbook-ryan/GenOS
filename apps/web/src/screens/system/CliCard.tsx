@@ -133,7 +133,7 @@ export function ClaudeRiskNotice() {
       <Icon name="ph ph-warning" size={16} color="var(--color-warn)" />
       <div className="risk-box__text">
         <strong>Sếp tự quyết rủi ro:</strong> Anthropic quy định đăng nhập gói Claude (Free/Pro/Max) dành cho cá nhân dùng
-        Claude Code thông thường; dùng qua một ứng dụng tự động như Gen-Harness có thể bị hạn chế hoặc khoá tài khoản. Muốn an
+        Claude Code thông thường; dùng qua một ứng dụng tự động như GenOS có thể bị hạn chế hoặc khoá tài khoản. Muốn an
         toàn, dùng khoá API (Claude Console) thay thế. Xem{' '}
         <a href={CLAUDE_TERMS_URL} target="_blank" rel="noopener noreferrer">
           điều khoản Claude Code

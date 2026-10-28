@@ -20,7 +20,7 @@ export function ForcePasswordPage() {
   const [leaving, setLeaving] = useState(false);
 
   useEffect(() => {
-    document.title = 'Đặt mật khẩu mới · Gen-Harness';
+    document.title = 'Đặt mật khẩu mới · GenOS';
   }, []);
 
   if (me.data && !me.data.must_change_password) return <Navigate to="/" replace />;

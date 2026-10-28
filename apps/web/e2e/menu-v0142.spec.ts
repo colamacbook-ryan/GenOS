@@ -78,7 +78,7 @@ test.describe('v0.1.42 · menu', () => {
   test('4. Logo hiện phiên bản thật (GET /system/about), không còn "v2.2"', async ({ page }) => {
     await loginAsOwner(page);
     await page.goto('/overview');
-    await expect(page.locator('.sb-logo__sub')).toHaveText(/^Gen-Harness · v\d+\.\d+\.\d+/);
+    await expect(page.locator('.sb-logo__sub')).toHaveText(/^v\d+\.\d+\.\d+/);
     await expect(page.locator('.sb-logo')).not.toContainText('v2.2');
   });
 

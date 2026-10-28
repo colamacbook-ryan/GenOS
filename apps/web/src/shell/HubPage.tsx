@@ -30,7 +30,7 @@ export function HubPage({ base, title, label, tabs }: { base: string; title: str
   const { pathname } = useLocation();
   const [params] = useSearchParams();
   useEffect(() => {
-    document.title = `${title} · Gen-Harness`;
+    document.title = `${title} · GenOS`;
   }, [title]);
 
   const keys = screenKeys(nav.data);
