@@ -11,8 +11,8 @@ import { loginAsOwner, openDesign, OWNER, resetMock, resultsDir, settle, setUiPr
  *
  * v0.1.42 (F-7, F-67): thanh bên (một menu 6 mục + Nâng cao) và header (viên tự trị/khiên chỉ ở Nâng cao) đã cố ý
  * khác thiết kế gốc ⇒ vùng sidebar/header của mọi kịch bản và nội dung Tổng quan chỉ còn KIỂM KHÓI (vẽ được, đúng
- * cấu trúc, không tràn ngang, header vẫn cao 58px) — vẫn cắt ảnh hai bên lưu lại để người xem so bằng mắt. Nội dung
- * các màn còn giữ nguyên bố cục (inbox, raw…) vẫn so pixel như cũ. `design.clicks` là nhãn trong file THIẾT KẾ.
+ * cấu trúc, không tràn ngang, header vẫn cao 58px) — vẫn cắt ảnh hai bên lưu lại để người xem so bằng mắt. Từ v0.1.78
+ * (một shell, trang có tab) không màn nào còn so pixel nội dung với thiết kế gốc — chờ vẽ lại thiết kế theo menu mới; `contentUntil` giữ cho lúc đó. `design.clicks` là nhãn trong file THIẾT KẾ.
  */
 interface Scenario {
   name: string;
@@ -56,7 +56,7 @@ const SCENARIOS: Scenario[] = [
     appPath: '/inbox',
     design: { clicks: ['Hàng đợi & Hành động', 'Hộp thư ý nghĩa'] },
     sidebar: 'full',
-    contentUntil: '.ib-card >> nth=0',
+    // v0.1.78 (G0): Hộp thư nằm trong trang Tình báo có thanh tab riêng ⇒ nội dung lệch khỏi thiết kế gốc, chỉ kiểm khói.
   },
   {
     name: 'inbox-1280',
@@ -64,7 +64,7 @@ const SCENARIOS: Scenario[] = [
     appPath: '/inbox',
     design: { clicks: ['Hàng đợi & Hành động', 'Hộp thư ý nghĩa'] },
     sidebar: 'full',
-    contentUntil: '.ib-card >> nth=0',
+    // v0.1.78 (G0): Hộp thư nằm trong trang Tình báo có thanh tab riêng ⇒ nội dung lệch khỏi thiết kế gốc, chỉ kiểm khói.
   },
   {
     name: 'workbench-1440',
@@ -228,7 +228,7 @@ const SCENARIOS: Scenario[] = [
     appPath: '/raw',
     design: { clicks: ['Tầng dữ liệu', 'Kho dữ liệu thô'] },
     sidebar: 'full',
-    contentUntil: '.screen-desc',
+    // v0.1.78 (G0/G9): Kho thô thành tab của Quản trị › Nâng cao + bảng thu cột ⇒ chỉ kiểm khói (như overview từ v0.1.42).
   },
   {
     name: 'raw-1280',
@@ -236,7 +236,7 @@ const SCENARIOS: Scenario[] = [
     appPath: '/raw',
     design: { clicks: ['Tầng dữ liệu', 'Kho dữ liệu thô'] },
     sidebar: 'full',
-    contentUntil: '.screen-desc',
+    // v0.1.78 (G0/G9): Kho thô thành tab của Quản trị › Nâng cao + bảng thu cột ⇒ chỉ kiểm khói (như overview từ v0.1.42).
   },
   {
     name: 'rules-1440',
