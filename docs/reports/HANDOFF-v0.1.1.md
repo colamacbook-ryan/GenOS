@@ -1,4 +1,4 @@
-# Bàn giao GenOS — hiện trạng + việc dở (cập nhật 28/10/2026, bản NHÁP v0.1.78 chưa phát hành; bản đã phát hành mới nhất v0.1.77)
+# Bàn giao GenOS — hiện trạng + việc dở (cập nhật 28/10/2026, bản NHÁP v0.1.79 chưa phát hành; bản đã phát hành mới nhất v0.1.78)
 
 File này nay chỉ ghi **hiện trạng + việc dở** (tên cũ `HANDOFF-v0.1.1.md` giữ nguyên vì mã nguồn có chú thích trỏ tới).
 Lịch sử từng bản nằm ở [CHANGELOG.md](../../CHANGELOG.md) (3–5 dòng/bản) và `docs/releases/vX.Y.Z.md` (chi tiết, chuyển nguyên từ HANDOFF cũ):
@@ -6,6 +6,12 @@ mục "Lỗi cần sửa", "Chia việc", "Kiểm tra tích hợp" của v0.1.1/
 chú thích trong mã trỏ "HANDOFF mục vX.Y.Z" thì đọc tệp `docs/releases/vX.Y.Z.md` tương ứng.
 Tiến độ, bản phản ứng (hotfix) và **mục Nợ**: [ROADMAP](../ROADMAP.md). Vận hành hằng ngày: [runbook](../runbook.md).
 Ghi chú vận hành riêng của Sếp (máy, tài khoản, địa chỉ, việc riêng) nằm ở repo Brain › Project/gen-harness (riêng tư) — không ghi vào repo công khai này.
+
+## v0.1.79 — NHÁP, chờ phát hành (nhánh `claude/v0179` gộp G1, F1, F2; `VERSION` = v0.1.79)
+
+- **Làm gì**: trang Tình báo 4 tab + chấm Đúng/Sai tại chỗ, lọc sự cố hệ thống khỏi Tình báo, genh `--port`, chữ GenOS/header. Không migration. Chi tiết: [v0.1.79.md](../releases/v0.1.79.md).
+- **Còn dở**: G5 Bắt đầu, G3 Tôi, G4 Toàn cảnh, G2a/G2b Cần quyết, G7, G8; dedupe «Bối cảnh nhóm» ở thẻ khoá; cột Nhóm/Người cho bảng Tín hiệu (API cần trả tên); dọn `IntelScreen`, comment `OwnerShell`.
+- **Boss cần làm**: xem [v0.1.79.md](../releases/v0.1.79.md#việc-boss-phải-làm).
 
 ## v0.1.78 — NHÁP, chờ phát hành (nhánh `claude/v0178` gộp G0, G6, G9; `VERSION` = v0.1.78)
 

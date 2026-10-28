@@ -7,6 +7,13 @@ Ngày = ngày Release trên GitHub theo giờ Việt Nam; tiêu đề trong `doc
 (v0.1.32–v0.1.34, v0.1.40, v0.1.46) hoặc vài ngày (v0.1.47, v0.1.48: làm 03/10, phát hành 09/10).
 Việc sửa nóng không đổi số bản (PR #46, #48, #53, #55, #58, #59) ghi ở [ROADMAP › Bản phản ứng](docs/ROADMAP.md).
 
+## v0.1.79 — (28/10/2026) Trang Tình báo: chấm Đúng/Sai tại chỗ, Chạy thử, Thiết lập; sửa genh --port
+- **Trang Tình báo** (trang chủ của Sếp) có tab Hôm nay · Tín hiệu · Chạy thử 14 ngày · Thiết lập: bấm Đúng / Sai (3 lý do) / Không cần báo ngay trên từng tín hiệu; Thiết lập Tình báo và chạy thử chuyển từ Bộ não AI sang đây.
+- **Sự cố hệ thống** (Zalo im, hết model…) không còn chiếm ô Cảnh báo của Tình báo — chỉ ở chip sức khoẻ và chuông.
+- **genh:** `--port` có tác dụng thật; cài lại không còn báo nhầm cổng bận khi cổng do chính bản cài giữ.
+- **Chữ:** Hỏi Gen và thông báo nói GenOS; Thiết lập xong «Vào Tình báo»; tiêu đề header đủ chữ ở điện thoại. Không migration.
+- Chi tiết + việc Boss phải làm: [docs/releases/v0.1.79.md](docs/releases/v0.1.79.md).
+
 ## v0.1.78 — (28/10/2026) Một giao diện, menu theo vai; sửa chữ trên Zalo
 - **Một giao diện thay hai:** bỏ Mặt tiền `/owner`; menu mới Tình báo · Cần quyết · Việc · Toàn cảnh · Tôi · Đội ngũ · Quản trị (Bắt đầu, Kết nối, Người & quyền, Sao lưu & cập nhật, Tổ chức, Nhật ký, Nâng cao). Trang chủ là Tình báo. Mọi link cũ tự chuyển sang chỗ mới. Màn dữ liệu, Bản đồ quan hệ, Hồ sơ sống, Đánh giá con người nay có lối vào từ menu.
 - **Chip sức khoẻ ở đầu trang:** sự cố hệ thống (Zalo im, hết model…) gom về một chỗ.

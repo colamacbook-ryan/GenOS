@@ -1,13 +1,13 @@
 import { expect, test, type Page } from '@playwright/test';
-import { enterPin, expectPhoneNav, loginAsOwner, p3Hook, resetMock } from './support';
+import { expectPhoneNav, loginAsOwner, resetMock } from './support';
 
 /**
- * v0.1.59 (G3) — màn TÌNH BÁO (/owner) trên máy chủ giả (tất định; mã PIN 246810; KHÔNG gọi Gen-hub / Kho thật):
- *  - "Việc phải quyết": bấm "Duyệt" một nháp → ngăn DraftDecide → "Duyệt và gửi" → hộp mã PIN → nháp biến mất và số giảm;
- *  - ngày đầu (`mode: 'nochannel'`) → đúng MỘT [data-testid=first-run-card], không chồng EmptyState;
- *  - bản tin chưa có (brief rỗng) vẫn hiện số (kpis + số liệu lúc này);
- *  - 390px không cuộn ngang, thứ tự đọc đúng, số 28px ở khối đầu.
- * Chế độ dữ liệu: p3Hook(request, 'owner', 'data', { mode }) — trả về 'full' sau mỗi ca.
+ * v0.1.79 (G1) — TRANG TÌNH BÁO (`/intel`, trang chủ của Sếp) trên máy chủ giả (tất định; `test/mock-intel.ts`):
+ *  - Hôm nay: tín hiệu mở xếp 🔴🟠⚪, mỗi dòng có "Việc Sếp cần làm", 3 dòng đầu Cần quyết + link /decide;
+ *  - bấm một dòng → ngăn chi tiết (bằng chứng đã che) → Đúng / Sai ▾ (3 lý do) / Không cần báo gọi đúng API; chuyển trạng thái;
+ *  - tab Tín hiệu: bảng đủ cột, lọc theo mức/trạng thái, mở thẳng bằng ?tin=; tab Chạy thử + Thiết lập có mặt;
+ *  - 390px: không cuộn ngang, ngăn chi tiết thành cả màn, Quay lại đóng.
+ * (Bản v0.1.59 của tệp này kiểm Mặt tiền cũ — IntelScreen — nay không còn được gắn vào trang; xem docs/releases v0.1.79.)
  */
 
 async function noHorizontalScroll(page: Page): Promise<void> {
@@ -15,131 +15,116 @@ async function noHorizontalScroll(page: Page): Promise<void> {
   expect(over).toBeLessThanOrEqual(0);
 }
 
-const count = async (page: Page): Promise<number> => Number.parseInt((await page.getByTestId('intel-decide-count').innerText()).replace(/\D/g, ''), 10);
-
-test.describe('v0.1.59 · Tình báo', () => {
+test.describe('v0.1.79 · Trang Tình báo', () => {
   test.beforeEach(async ({ page }) => {
     await resetMock(page.request, 'finished');
-    await p3Hook(page.request, 'owner', 'data', { mode: 'full' });
-    await p3Hook(page.request, 'owner', 'reset');
     await loginAsOwner(page);
   });
-  test.afterEach(async ({ page }) => {
-    await p3Hook(page.request, 'owner', 'data', { mode: 'full' });
-    await p3Hook(page.request, 'owner', 'reset');
-  });
 
-  test('bấm "Duyệt" nháp ở Việc phải quyết → ngăn → "Duyệt và gửi" → hộp PIN → nháp biến mất và số giảm', async ({ page }) => {
+  test('Hôm nay: tín hiệu theo mức 🔴🟠⚪, "Việc Sếp cần làm", 3 dòng Cần quyết + link /decide; bốn tab của Sếp', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
-    await page.goto('/owner');
-    await expect(page.getByTestId('intel-decide-count')).toBeVisible();
-    const before = await count(page);
-    expect(before).toBeGreaterThan(0);
-    const decide = page.getByTestId('intel-decide');
-    const rows = decide.getByTestId('intel-decide-row-draft');
-    expect(await rows.count()).toBeGreaterThan(0);
-    const title = (await rows.first().locator('.kit-row__title').innerText()).trim();
-
-    await rows.first().getByRole('button', { name: 'Duyệt', exact: true }).click();
-    const sheet = page.getByRole('dialog', { name: 'Duyệt bản nháp' });
-    await expect(sheet).toBeVisible();
-    await expect(sheet.getByTestId('owner-draft-text')).toBeVisible();
-    await sheet.getByRole('button', { name: 'Duyệt và gửi' }).click();
-    await enterPin(page);
-
-    await expect(sheet).toBeHidden();
-    await expect(page.getByTestId('intel-decide-count')).toHaveText(String(before - 1));
-    await expect(decide.getByText(title, { exact: true })).toHaveCount(0);
-    // v0.1.78: thanh dưới/nhãn đếm của Mặt tiền đã bỏ — trang Cần quyết (Chờ Sếp quyết) cũng không còn nháp vừa duyệt (cùng nguồn).
-    await page.goto('/decide');
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Cần quyết');
-    await expect(page.locator('.hub__panel [aria-busy="true"]')).toHaveCount(0);
-    await expect(page.locator('.hub__panel')).not.toContainText(title);
+    const errors: string[] = [];
+    page.on('pageerror', (e) => errors.push(String(e)));
+    await page.goto('/intel');
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Tình báo');
+    for (const name of ['Hôm nay', 'Tín hiệu', 'Chạy thử 14 ngày', 'Thiết lập', 'Tổng quan', 'Hộp thư']) await expect(page.getByRole('tab', { name })).toBeVisible();
+    await expect(page.getByTestId('intel-level-red').getByTestId('intel-signal-line')).toHaveCount(2);
+    await expect(page.getByTestId('intel-level-amber').getByTestId('intel-signal-line')).toHaveCount(2);
+    await expect(page.getByTestId('intel-level-grey').getByTestId('intel-signal-line')).toHaveCount(1);
+    const order = await page.evaluate(() => ['red', 'amber', 'grey'].map((l) => (document.querySelector(`[data-testid="intel-level-${l}"]`) as HTMLElement).getBoundingClientRect().top));
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    await expect(page.getByTestId('intel-level-red')).toContainText('Việc Sếp cần làm: Gọi số cũ xác minh, chưa chuyển tiền');
+    const decide = page.getByRole('region', { name: 'Cần Sếp quyết' });
+    await expect(decide.getByTestId('intel-ask-row')).toHaveCount(2);
+    await expect(decide).toContainText('Cần Sếp quyết (2)');
+    await decide.getByTestId('intel-decide-all').click();
+    await expect(page).toHaveURL(/\/decide$/);
+    expect(errors).toEqual([]);
     expect(await page.locator('body').innerText()).not.toContain('[object Object]');
   });
 
-  test('đề xuất của Gen ở Việc phải quyết: "Xem" mở ngăn, chưa ghi gì cho tới khi Sếp bấm Xác nhận', async ({ page }) => {
-    await p3Hook(page.request, 'core', 'setDrafts', []); // chỉ còn đề xuất ⇒ hiện đủ trong ba dòng đầu
+  test('bấm một dòng → ngăn chi tiết có bằng chứng; Sai ▾ hỏi 3 lý do và gửi đúng; Không cần báo; Đã xong', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
-    await page.goto('/owner');
-    const rows = page.getByTestId('intel-decide-row-proposal');
-    await expect(rows).toHaveCount(2);
-    await expect(page.getByTestId('intel-decide-count')).toHaveText('2');
-    await rows.first().getByRole('button', { name: 'Xem' }).click();
-    const sheet = page.getByRole('dialog', { name: 'Đề xuất của Gen' });
-    await expect(sheet.getByTestId('owner-proposal-summary')).toBeVisible();
-    await expect(sheet.getByRole('button', { name: 'Xác nhận' })).toBeVisible();
-    await page.keyboard.press('Escape');
-    await expect(sheet).toBeHidden();
-    await expect(page.getByTestId('intel-decide-count')).toHaveText('2'); // chỉ xem, chưa xác nhận ⇒ số không đổi
+    await page.goto('/intel');
+    await page.getByRole('button', { name: 'Người mới gửi STK lạ, yêu cầu chuyển khoản', exact: true }).click();
+    const drawer = page.getByRole('complementary', { name: 'Chi tiết tín hiệu' });
+    await expect(drawer).toBeVisible();
+    await expect(page).toHaveURL(/\/intel\?tin=sg-1$/);
+    await expect(drawer).toContainText('Em chuyển khoản vào •••456 giúp anh nhé');
+    await expect(drawer.getByTestId('intel-drawer-action')).toContainText('Gọi số cũ xác minh');
+
+    await drawer.getByRole('button', { name: 'Sai ▾' }).click();
+    const grp = drawer.getByRole('group', { name: 'Vì sao báo sai?' });
+    await expect(grp.getByRole('button')).toHaveText(['Khách vẫn mua', 'Không gấp', 'NV lo rồi', 'Huỷ']);
+    const req = page.waitForRequest((r) => r.url().endsWith('/signals/sg-1/feedback') && r.method() === 'POST');
+    await grp.getByRole('button', { name: 'Sai: Không gấp' }).click();
+    expect((await req).postDataJSON()).toEqual({ verdict: 'wrong', reason: 'not_urgent' });
+    await expect(drawer.getByText('Đã chấm Sai')).toBeVisible();
+
+    await drawer.getByRole('button', { name: 'Đóng chi tiết tín hiệu' }).click();
+    await expect(drawer).toBeHidden();
+    await page.getByRole('button', { name: 'Báo đúng: Khách Anh Tuấn doạ huỷ đơn' }).click();
+    await expect(page.getByTestId('intel-level-red').getByText('Đã chấm Đúng')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Lời hứa giao 20 bao xi măng trước 15h', exact: true }).click();
+    const d2 = page.getByRole('complementary', { name: 'Chi tiết tín hiệu' });
+    const noNeed = page.waitForRequest((r) => r.url().endsWith('/signals/sg-3/feedback') && r.method() === 'POST');
+    await d2.getByRole('button', { name: 'Không cần báo' }).click();
+    expect((await noNeed).postDataJSON()).toEqual({ verdict: 'unimportant' });
+    const done = page.waitForRequest((r) => r.url().endsWith('/signals/sg-3/transition') && r.method() === 'POST');
+    await d2.getByRole('button', { name: 'Đã xong' }).click();
+    expect((await done).postDataJSON()).toEqual({ to: 'resolved' });
+    await expect(page.getByTestId('intel-level-amber').getByTestId('intel-signal-line')).toHaveCount(1);
   });
 
-  test('ngày đầu (nochannel) → đúng MỘT first-run-card, không tile / tin / khách, giữ hàng 1', async ({ page }) => {
-    await p3Hook(page.request, 'owner', 'data', { mode: 'nochannel' });
+  test('tab Tín hiệu: bảng đủ cột, lọc theo mức và trạng thái, mở thẳng bằng ?tin=', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto('/intel?tab=signals');
+    await expect(page.getByRole('tab', { name: 'Tín hiệu' })).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByTestId('intel-signal-row')).toHaveCount(5);
+    await expect(page.getByRole('columnheader')).toHaveText(['Mã', 'Mức', 'Loại', 'Tiêu đề', 'Việc Sếp cần làm', 'Độ chắc', 'Trạng thái', 'Lúc', 'Chấm']);
+    await page.getByLabel('Mức').selectOption('red');
+    await expect(page.getByTestId('intel-signal-row')).toHaveCount(2);
+    await page.getByLabel('Mức').selectOption('');
+    await page.getByLabel('Trạng thái').selectOption('resolved');
+    await expect(page.getByTestId('intel-signal-row')).toHaveCount(1);
+    await expect(page.getByTestId('intel-signal-row')).toContainText('Gửi báo giá cho cô Hà');
+    await page.goto('/intel?tab=signals&tin=sg-2');
+    await expect(page.getByRole('complementary', { name: 'Chi tiết tín hiệu' })).toContainText('Khách Anh Tuấn doạ huỷ đơn');
+    expect(await page.locator('body').innerText()).not.toContain('[object Object]');
+  });
+
+  test('tab Chạy thử 14 ngày và Thiết lập có nội dung; Cài đặt › Bộ não AI chỉ còn link sang Tình báo', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto('/intel?tab=trial');
+    await expect(page.getByRole('region', { name: 'Chạy thử 14 ngày', exact: true })).toContainText('Đã chấm 4/10 lượt');
+    await page.getByRole('tab', { name: 'Thiết lập' }).click();
+    await expect(page.getByRole('region', { name: 'Thiết lập Tình báo' })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Khoá, xác minh và cảnh báo' })).toBeVisible();
+    await page.goto('/system?tab=brain');
+    const moved = page.getByTestId('brain-intel-moved');
+    await expect(moved).toContainText('Tình báo đã chuyển sang trang Tình báo');
+    await moved.getByRole('link').click();
+    await expect(page).toHaveURL(/\/intel\?tab=setup$/);
+  });
+
+  test('390px: không cuộn ngang; mở tín hiệu = cả màn có nút Đúng/Sai; Quay lại đóng', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto('/owner');
-    await expect(page.getByTestId('intel-hero')).toBeVisible();
-    await expect(page.locator('[data-testid=first-run-card]')).toHaveCount(1);
-    await expect(page.getByTestId('first-run-connect')).toHaveText('Nối Zalo');
-    for (const id of ['intel-tile-hot', 'intel-tile-messages', 'intel-feed', 'intel-care', 'intel-key']) await expect(page.getByTestId(id)).toHaveCount(0);
-    await expect(page.locator('.gh-state--empty')).toHaveCount(0); // không chồng EmptyState
-    await expect(page.getByTestId('intel-summary')).toContainText('Bản tin đầu tiên lúc 07:30');
+    await page.goto('/intel');
+    await expect(page.getByTestId('intel-level-red')).toBeVisible();
     await noHorizontalScroll(page);
-  });
-
-  test('bản tin chưa có vẫn hiện số: câu "Bản tin đầu tiên lúc 07:30…" + tile lấy từ số liệu lúc này', async ({ page }) => {
-    await p3Hook(page.request, 'owner', 'scenario', { mode: 'empty', only: 'brief' });
-    await page.setViewportSize({ width: 1440, height: 900 });
-    await page.goto('/owner');
-    await expect(page.getByTestId('intel-summary')).toHaveText('Bản tin đầu tiên lúc 07:30. Dưới đây là số liệu lúc này.');
-    await expect(page.getByTestId('intel-brief-history')).toHaveCount(0);
-    for (const id of ['intel-tile-hot', 'intel-tile-opps']) {
-      await expect(page.getByTestId(id)).toBeVisible();
-      await expect(page.getByTestId(id)).toContainText(/\d/);
-    }
-    await expect(page.getByTestId('intel-tile-promises')).toBeVisible(); // v0.1.76: đã có bộ ghi lời hứa ⇒ ô hiện, có số
-    await expect(page.getByTestId('intel-tile-promises')).toContainText(/\d/);
-    await expect(page.getByTestId('intel-tile-messages')).toBeVisible();
-    await expect(page.locator('[data-testid=first-run-card]')).toHaveCount(0);
-  });
-
-  test('390px: không cuộn ngang; thứ tự đọc tóm tắt → Việc phải quyết → tile → Điểm chính → Tin quan trọng → Khách cần chăm; số 28px', async ({ page }) => {
-    await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto('/owner');
-    await expect(page.getByTestId('intel-decide-count')).toBeVisible();
-    await expect(page.getByTestId('intel-care-row').first()).toBeVisible();
+    await expectPhoneNav(page);
+    await page.getByRole('button', { name: 'Người mới gửi STK lạ, yêu cầu chuyển khoản', exact: true }).click();
+    const drawer = page.getByRole('complementary', { name: 'Chi tiết tín hiệu' });
+    await expect(drawer).toBeVisible();
+    const box = await drawer.boundingBox();
+    expect(box!.width).toBeGreaterThanOrEqual(388);
+    await expect(drawer.getByRole('button', { name: 'Đúng' })).toBeVisible();
     await noHorizontalScroll(page);
-    await expectPhoneNav(page); // v0.1.78: thanh dưới đã bỏ — ngăn kéo danh mục thay thế
-    const order = await page.evaluate(() => {
-      const y = (id: string) => (document.querySelector(`[data-testid="${id}"]`) as HTMLElement | null)?.getBoundingClientRect().top ?? -1;
-      return ['intel-summary', 'intel-decide', 'intel-tile-messages', 'intel-key', 'intel-feed', 'intel-care'].map(y);
-    });
-    expect(order.every((v) => v >= 0)).toBe(true);
-    expect([...order].sort((a, b) => a - b)).toEqual(order);
-    const sizes = await page.evaluate(() => {
-      const fs = (id: string) => getComputedStyle(document.querySelector(`[data-testid="${id}"]`) as Element).fontSize;
-      const up = (id: string) => getComputedStyle(document.querySelector(`[data-testid="${id}"]`) as Element).textTransform;
-      return { big: fs('intel-decide-count'), summary: fs('intel-summary'), hello: fs('intel-hello'), sub: fs('intel-hero-sub'), upper: up('intel-summary') };
-    });
-    expect(sizes).toEqual({ big: '28px', summary: '18px', hello: '14px', sub: '12px', upper: 'none' });
-    // vùng chạm ≥ 44px: nút "Duyệt" và dòng Điểm chính
-    const hit = await page.getByTestId('intel-decide-approve').first().boundingBox();
-    expect(hit!.height).toBeGreaterThanOrEqual(44);
-    const keyRow = await page.locator('.intel-keyrow__main').first().boundingBox();
-    expect(keyRow!.height).toBeGreaterThanOrEqual(44);
-  });
-
-  test('dải nguồn AI không hiện khi nguồn AI đã chạy; tin quan trọng → ?tin=; ô lời hứa quá hạn hiện (đã theo dõi); không có Chi phí trợ lý Gen', async ({ page }) => {
-    await page.setViewportSize({ width: 1440, height: 900 });
-    await page.goto('/owner');
-    await expect(page.getByTestId('intel-decide-count')).toBeVisible();
-    await expect(page.getByTestId('intel-ai-strip')).toHaveCount(0);
-    expect(await page.locator('main').innerText()).not.toMatch(/Chi phí trợ lý Gen|Chi phí AI/);
-    const first = page.getByTestId('intel-feed-row').first();
-    await expect(first).toBeVisible();
-    const href = await first.getByRole('link').getAttribute('href');
-    expect(href).toMatch(/^\/owner\/thong-tin\?tin=/);
-    await expect(page.getByTestId('intel-tile-promises')).toBeVisible();
-    await expect(page.getByTestId('intel-tile-promises')).toContainText('Lời hứa quá hạn');
+    await drawer.getByRole('button', { name: 'Đóng chi tiết tín hiệu' }).click();
+    await expect(drawer).toBeHidden();
+    await page.goto('/intel?tab=signals');
+    await expect(page.getByTestId('intel-signal-row').first()).toBeVisible();
+    await noHorizontalScroll(page);
   });
 });

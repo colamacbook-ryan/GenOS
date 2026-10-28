@@ -915,3 +915,12 @@ func TestEnableWatchdogSchedule_TonTrongOwnerTat(t *testing.T) {
 		t.Fatalf("xoá khi không có tệp không phải lỗi: %v", err)
 	}
 }
+
+// Review v0.1.79: --port ngoài 1–65535 bị chặn ngay, trước khi đụng docker hay thư mục cài.
+func TestRunInstallRejectsInvalidPort(t *testing.T) {
+	for _, p := range []string{"0", "-1", "70000"} {
+		if code := runInstall([]string{"--port", p, "--install-dir", t.TempDir()}); code != 2 {
+			t.Errorf("--port %s: mã thoát %d, muốn 2", p, code)
+		}
+	}
+}

@@ -39,10 +39,10 @@ test.describe('v0.1.59 · Thông tin (máy tính 1440)', () => {
 
   test('danh sách theo mức: Khẩn đứng đầu, nút lọc có số đếm, chân "Gen đã lọc N tin rác/trùng", không chữ kỹ thuật', async ({ page }) => {
     await page.goto(FEED);
-    // v0.1.78: /owner/thong-tin chuyển hướng sang Tình báo › tab Tín hiệu.
-    await expect(page).toHaveURL(/\/intel\?tab=signals$/);
+    // v0.1.78: /owner/thong-tin chuyển hướng sang Tình báo › tab Thông tin (v0.1.79: tab Tín hiệu là bảng tín hiệu mới).
+    await expect(page).toHaveURL(/\/intel\?tab=feed$/);
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Tình báo');
-    await expect(page.getByRole('tab', { name: 'Tín hiệu' })).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByRole('tab', { name: 'Thông tin' })).toHaveAttribute('aria-selected', 'true');
     await expect(rows(page).first()).toBeVisible();
     // Dòng đầu là tin Khẩn: huy hiệu mức + nhãn việc + người · nhóm · kênh
     const first = rows(page).first();

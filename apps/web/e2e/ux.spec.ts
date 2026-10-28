@@ -78,12 +78,12 @@ test.describe('UX v0.1.28', () => {
     // Lưu xong quay về Mặt tiền (bước 4 đã xong ở máy chủ).
     await expect(page).toHaveURL(/\/intel$/);
 
-    // Thiết lập một màn: bước 4 xong ⇒ /setup tới thẳng bước Xong; "Vào Mặt tiền" ghi Hoàn tất, bước 5–11 chưa làm ⇒ "để sau" (mặc định).
+    // Thiết lập một màn: bước 4 xong ⇒ /setup tới thẳng bước Xong; "Vào Tình báo" ghi Hoàn tất, bước 5–11 chưa làm ⇒ "để sau" (mặc định).
     await page.goto('/setup');
     await expect(page.getByRole('heading', { name: 'Xong rồi, thưa Sếp' })).toBeVisible();
     await expect(page.getByTestId('setup-done-ai')).toContainText('Đã chạy');
     await expect(page.getByText('Mọi thứ đã sẵn sàng')).toHaveCount(0);
-    await page.getByRole('button', { name: /Vào Mặt tiền/ }).click();
+    await page.getByRole('button', { name: /Vào Tình báo/ }).click();
     await expect(page).toHaveURL(/\/intel$/);
     const state = (await apiCall(page, 'GET', '/setup/state')) as { finished: boolean; steps: Array<{ n: number; status: string }> };
     expect(state.finished).toBe(true);

@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { Badge, Button, Switch } from '@gen-harness/ui';
-import { errorDetail, errorText } from '../../lib/errorText';
-import { useMe } from '../../lib/queries';
-import { toast } from '../../lib/toast';
-import { personTypeLabel } from '../people/peopleModel';
-import { CardError, InlineError, Panel, SkeletonLines } from '../common';
+import { errorDetail, errorText } from '../lib/errorText';
+import { useMe } from '../lib/queries';
+import { toast } from '../lib/toast';
+import { personTypeLabel } from '../screens/people/peopleModel';
+import { CardError, InlineError, Panel, SkeletonLines } from '../screens/common';
 import { useBulkContexts, useConfirmKeyCustomers, useConfirmStaff, useIntelSetup, useSetKeyCustomer, useSetStaff } from './intelQueries';
 import { contextLabel, vnTime, type IntelSetup } from './intelModel';
 
@@ -32,6 +32,7 @@ export function IntelSetupCard() {
         aside={s ? <StepRail s={s} /> : undefined}
         label="Thiết lập Tình báo"
         bodyClass="intel-setup"
+        genTarget="intel.setup.steps"
       >
         {q.isPending ? (
           <SkeletonLines rows={4} padding="0" />

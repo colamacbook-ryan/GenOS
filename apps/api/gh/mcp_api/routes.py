@@ -71,7 +71,7 @@ async def _check_server_endpoint(endpoint: str, transport: str, *, has_token: bo
                    "Internet; http:// chỉ dùng được trong mạng nội bộ)")
         else:
             msg = ("Địa chỉ máy chủ MCP trỏ vào vùng mạng bị cấm (siêu dữ liệu đám mây, 0.0.0.0, multicast hoặc dịch "
-                   "vụ nội bộ của Gen-Harness)")
+                   "vụ nội bộ của GenOS)")
         raise field_errors({"endpoint": msg}) from e
     except McpError:
         return

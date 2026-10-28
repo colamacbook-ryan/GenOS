@@ -53,6 +53,31 @@ func ResolvePort(port int) int {
 	return port
 }
 
+// ResolvePortFor chọn cổng thật cho bản cài installDir: cờ --port truyền tường minh
+// (> 0, kể cả 8443) thắng; còn lại (không truyền cờ) lấy GH_PORT trong .env cạnh compose.yaml — đó là
+// cổng compose THẬT SỰ bind, nên `genh status/doctor/open…` chạy không kèm --port vẫn
+// đúng với bản cài `--port N`. Không có → machine.DefaultPort. Chỉ ĐỌC, không tạo tệp.
+func ResolvePortFor(installDir string, flagPort int) int {
+	if flagPort > 0 {
+		return flagPort
+	}
+	return PortFromEnvFile(installDir)
+}
+
+// PortFromEnvFile đọc GH_PORT đã ghi của bản cài (machine.DefaultPort nếu chưa có).
+func PortFromEnvFile(installDir string) int {
+	composePath := os.Getenv(compose.EnvOverrideVar)
+	if composePath == "" && installDir != "" {
+		composePath = filepath.Join(installDir, "deploy", "compose.yaml")
+	}
+	if composePath != "" {
+		if p := access.ReadPort(composePath); p > 0 {
+			return p
+		}
+	}
+	return machine.DefaultPort
+}
+
 // ConfigDir trả về thư mục cấu hình/bí mật của bản cài (Bước 4 ghi vào đây).
 func (e *Env) ConfigDir() string {
 	return filepath.Join(e.InstallDir, "config")

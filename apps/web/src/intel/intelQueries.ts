@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { PersonType } from '@gen-harness/contracts';
-import { apiClient } from '../../lib/api';
-import { api } from '../../lib/api';
+import { apiClient } from '../lib/api';
+import { api } from '../lib/api';
 import type { IntelBudget, IntelConsole, IntelMode, IntelRamp, IntelSetup, WrongReason } from './intelModel';
 
 /** v0.1.76 (T11): thẻ "Tình báo". Thao tác cần PIN ⇒ máy chủ trả 423 ⇒ hộp PIN chung tự mở rồi gửi lại (lib/api.ts). */
@@ -9,6 +9,9 @@ export const qkIntel = {
   console: ['intel', 'console'] as const,
   budget: ['intel', 'budget'] as const,
   setup: ['intel', 'setup'] as const,
+  /** v0.1.79 (G1): danh sách + chi tiết tín hiệu + hàng Cần quyết (mọi khoá bắt đầu bằng `['intel', 'signals']` / `['intel', 'asks']`). */
+  signals: ['intel', 'signals'] as const,
+  asks: ['intel', 'asks'] as const,
 };
 
 const req = <T>(path: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET', body?: unknown, signal?: AbortSignal) =>
@@ -41,6 +44,8 @@ function useIntelWrite<V, R = unknown>(fn: (v: V) => Promise<R>) {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: qkIntel.console });
       void qc.invalidateQueries({ queryKey: qkIntel.setup });
+      void qc.invalidateQueries({ queryKey: qkIntel.signals });
+      void qc.invalidateQueries({ queryKey: qkIntel.asks });
       void qc.invalidateQueries({ queryKey: ['system', 'health'] });
     },
   });
@@ -85,9 +90,9 @@ export const useConfirmKeyCustomers = () => useIntelWrite(() => req('/intel/setu
 export const useSetKeyCustomer = () =>
   useIntelWrite(({ entityId, factId }: { entityId: string; factId: string | null }) =>
     factId ? req(`/me/profile/items/${encodeURIComponent(factId)}`, 'DELETE') : req('/me/profile/items', 'POST', { section: 'key_relations', object_entity_id: entityId }));
-/** Chấm dòng bóng: Đúng, hoặc Sai kèm 1 trong 3 lý do (`biz.signal_feedback.reason`). Chỉ Owner (máy chủ kiểm). */
+/** Chấm một tín hiệu: Đúng, Sai kèm 1 trong 3 lý do (`biz.signal_feedback.reason`), hoặc "Không cần báo" (`unimportant`). Chỉ Owner (máy chủ kiểm). */
 export const useSignalFeedback = () =>
-  useIntelWrite(({ id, verdict, reason }: { id: string; verdict: 'correct' | 'wrong'; reason?: WrongReason }) =>
+  useIntelWrite(({ id, verdict, reason }: { id: string; verdict: 'correct' | 'wrong' | 'unimportant'; reason?: WrongReason }) =>
     req(`/signals/${encodeURIComponent(id)}/feedback`, 'POST', { verdict, ...(reason ? { reason } : {}) }));
 export const useConfirmStaff = () => useIntelWrite(() => req('/intel/setup/staff-confirmed', 'POST', {}));
 /** Đánh dấu / bỏ đánh dấu nhân viên — đúng đường "Đánh dấu là nhân viên" của hồ sơ (`PATCH /profile/{id}`, Owner + mã PIN: 423 ⇒ hộp PIN

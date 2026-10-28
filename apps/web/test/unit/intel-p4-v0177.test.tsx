@@ -3,11 +3,11 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import { IntelCard } from '../../src/screens/system/IntelCard';
-import { IntelSetupCard } from '../../src/screens/system/IntelSetupCard';
+import { IntelCard } from '../../src/intel/IntelCard';
+import { IntelSetupCard } from '../../src/intel/IntelSetupCard';
 import { queryClient } from '../../src/lib/queryClient';
 import { qk } from '../../src/lib/queries';
-import { rampBannerText, reasonText, setupPendingText, type IntelConsole, type IntelRampState, type IntelSetup } from '../../src/screens/system/intelModel';
+import { rampBannerText, reasonText, setupPendingText, type IntelConsole, type IntelRampState, type IntelSetup } from '../../src/intel/intelModel';
 
 /** v0.1.77 (P4): banner chạy thử R4, dòng bóng + nút Sai 3 lý do, bước 3 "Khách chủ chốt" (R2) — đúng API, tiếng Việt có dấu, lỗi thân thiện. */
 
@@ -112,19 +112,19 @@ describe('intelModel v0.1.77', () => {
 describe('<IntelCard> chạy thử R4 + nút Sai 3 lý do', () => {
   it('banner chạy thử hiện; hết thử thì không có banner', async () => {
     mockApi(consoleState(), setup());
-    const { unmount } = renderCard(<IntelCard />);
+    const { unmount } = renderCard(<IntelCard part="trial" />);
     expect(await screen.findByTestId('intel-ramp-banner')).toHaveTextContent('Chạy thử lại 14 ngày (từ 26/10)');
     unmount();
     queryClient.clear();
     mockApi(consoleState({ ramp: ramp({ in_trial: false }) }), setup());
-    renderCard(<IntelCard />);
-    await screen.findByRole('region', { name: 'Tình báo' });
+    renderCard(<IntelCard part="trial" />);
+    await screen.findByRole('region', { name: 'Chạy thử 14 ngày' });
     await waitFor(() => expect(screen.queryByTestId('intel-ramp-banner')).toBeNull());
   });
 
   it('dòng bóng: hiện loại, giờ "đáng lẽ báo ngay", lý do bằng chữ (không mã máy); mục đã chấm hiện nhãn', async () => {
     mockApi(consoleState(), setup());
-    renderCard(<IntelCard />);
+    renderCard(<IntelCard part="trial" />);
     const row = await screen.findByTestId('intel-shadow');
     expect(row).toHaveTextContent('Khách chê / doạ bỏ');
     expect(row).toHaveTextContent('Chị Mai chê công khai');
@@ -137,7 +137,7 @@ describe('<IntelCard> chạy thử R4 + nút Sai 3 lý do', () => {
 
   it('bấm Đúng ⇒ POST feedback verdict correct, không kèm lý do', async () => {
     const calls = mockApi(consoleState(), setup());
-    renderCard(<IntelCard />);
+    renderCard(<IntelCard part="trial" />);
     const row = await screen.findByTestId('intel-shadow');
     await userEvent.click(within(row).getByRole('button', { name: 'Báo đúng: Chị Mai chê công khai' }));
     await waitFor(() => expect(calls.find((c) => c.url === '/signals/s1/feedback')).toMatchObject({ method: 'POST', body: { verdict: 'correct' } }));
@@ -146,7 +146,7 @@ describe('<IntelCard> chạy thử R4 + nút Sai 3 lý do', () => {
 
   it('bấm Sai ⇒ hỏi 3 lý do; chọn lý do ⇒ POST feedback verdict wrong + reason; Huỷ ⇒ không gửi', async () => {
     const calls = mockApi(consoleState(), setup());
-    renderCard(<IntelCard />);
+    renderCard(<IntelCard part="trial" />);
     const row = await screen.findByTestId('intel-shadow');
     await userEvent.click(within(row).getByRole('button', { name: 'Báo sai: Chị Mai chê công khai' }));
     const grp = within(row).getByRole('group', { name: 'Vì sao báo sai?' });
@@ -160,7 +160,7 @@ describe('<IntelCard> chạy thử R4 + nút Sai 3 lý do', () => {
 
   it('lỗi máy chủ khi chấm: chữ thân thiện + Chi tiết kỹ thuật, không render object', async () => {
     mockApi(consoleState(), setup(), (c) => (c.url === '/signals/s1/feedback' ? json(422, { status: 422, code: 'VALIDATION', title: 'Lý do chỉ dùng khi bấm “Sai”', detail: 'reason chỉ cho wrong' }) : undefined));
-    renderCard(<IntelCard />);
+    renderCard(<IntelCard part="trial" />);
     const row = await screen.findByTestId('intel-shadow');
     await userEvent.click(within(row).getByRole('button', { name: 'Báo đúng: Chị Mai chê công khai' }));
     const alert = await within(row).findByRole('alert');
@@ -174,15 +174,15 @@ describe('<IntelCard> chạy thử R4 + nút Sai 3 lý do', () => {
     delete old.ramp;
     delete old.shadow_items;
     mockApi(old, setup());
-    renderCard(<IntelCard />);
-    await screen.findByRole('region', { name: 'Tình báo' });
+    renderCard(<IntelCard part="trial" />);
+    await screen.findByRole('region', { name: 'Chạy thử 14 ngày' });
     expect(screen.queryByTestId('intel-ramp-banner')).toBeNull();
     expect(screen.queryByTestId('intel-shadow')).toBeNull();
   });
 
   it('bốn cổng thường mở: có lựa chọn "Nhắn ngay từ sớm" (regular_push_enabled = true)', async () => {
     mockApi(consoleState(), setup());
-    renderCard(<IntelCard />);
+    renderCard(<IntelCard part="trial" />);
     const row = await screen.findByTestId('intel-mode');
     expect(within(row).getByRole('radio', { name: 'Nhắn ngay từ sớm' })).toBeInTheDocument();
     expect(within(row).queryByText('Đầu bản tin (bản này)')).toBeNull();

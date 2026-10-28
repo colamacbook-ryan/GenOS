@@ -210,12 +210,12 @@ async def test_brief_empty_org(owner: Api) -> None:
     nxt = datetime.fromisoformat(d["next_at"].replace("Z", "+00:00"))
     assert d["next_at"].endswith("Z") and nxt > datetime.now(UTC)
     keys = [s["key"] for s in d["live"]["sections"]]
-    assert keys == ["tasks_due", "hot_customers", "drafts_pending", "incidents"]     # Facebook/Kho chỉ khi có
+    # v0.1.79 (G1): "incidents" (sự cố hệ thống) không còn ở Tình báo; Facebook/Kho chỉ khi có
+    assert keys == ["tasks_due", "hot_customers", "drafts_pending"]
     assert {s["key"]: s["group"] for s in d["live"]["sections"]} == {
-        "tasks_due": "decide", "hot_customers": "key", "drafts_pending": "decide", "incidents": "alert"}
+        "tasks_due": "decide", "hot_customers": "key", "drafts_pending": "decide"}
     assert {s["key"]: s["to"] for s in d["live"]["sections"]} == {
-        "tasks_due": "/owner/viec", "hot_customers": "/owner/quan-he", "drafts_pending": "/owner/viec",
-        "incidents": "/system?tab=storage&focus=health"}
+        "tasks_due": "/owner/viec", "hot_customers": "/owner/quan-he", "drafts_pending": "/owner/viec"}
     assert all(s["count"] == 0 and s["state"] == "empty" for s in d["live"]["sections"])
 
 
@@ -278,7 +278,7 @@ async def test_brief_latest_sections_groups_and_front_links(owner: Api, db: Any)
     assert lt["summary"] == "Sáng nay Sếp có 3 nháp chờ duyệt." and lt["needs_api_key"] is False
     secs = {s["key"]: s for s in lt["sections"]}
     assert {k: s["group"] for k, s in secs.items()} == {
-        "tasks_due": "decide", "drafts_pending": "decide", "incidents": "alert", "hot_customers": "key",
+        "tasks_due": "decide", "drafts_pending": "decide", "hot_customers": "key",
         "calendar_today": "key", "mail_reply": "decide", "gtasks_open": "decide", "facebook": "key", "kho": "key",
         "la": "key"}
     assert secs["tasks_due"]["to"] == "/owner/viec" and secs["drafts_pending"]["to"] == "/owner/viec"
@@ -368,26 +368,47 @@ async def test_brief_only_shows_own_conversations(owner: Api, client: Any, db: A
     assert (await owner.get(f"/owner/brief?id={theirs}")).status_code == 404
 
 
-async def test_brief_alerts_cap_order_and_safe_links(owner: Api, db: Any) -> None:
+async def _alert(db: Any, org: Any, code: str, *, kind: str, level: str, title: str, alert_type: str = "x",
+                 privacy: str = "chat_ok", status: str = "open", hrs: int = 0) -> None:
+    await db.execute(text("""INSERT INTO biz.alerts (org_id, code, alert_type, priority, title, status, kind, level,
+                                                     privacy, evidence_n, created_at)
+                             VALUES (:o, :c, :t, 'P2', :ti, :s, :k, :l, :p, 1, now() - make_interval(hours => :h))"""),
+                     {"o": org, "c": code, "t": alert_type, "ti": title, "s": status, "k": kind, "l": level,
+                      "p": privacy, "h": hrs})
+
+
+async def test_brief_alerts_are_intel_signals_not_system_incidents(owner: Api, db: Any) -> None:
+    """v0.1.79 (G1): ô Cảnh báo của Tình báo chỉ có tín hiệu thật (🔴 trước 🟠, mới trước, ≤ 5); sự cố hệ thống
+    (`ops.health_alerts`, `biz.alerts` kind=system) KHÔNG lọt vào — ở API, không chỉ ẩn ở giao diện."""
     org = await _org(db)
-    rows = [("a1", "warn", 5, "/system?tab=brain"), ("a2", "bad", 4, None), ("a3", "warn", 3, "https://evil.example"),
-            ("a4", "bad", 2, "/connections"), ("a5", "warn", 1, None), ("a6", "bad", 0, None)]
-    for key, sev, hrs, link in rows:
-        await db.execute(text("""INSERT INTO ops.health_alerts (org_id, key, kind, severity, title, link, raised_at)
-                                 VALUES (:o, :k, 'x', :s, :t, :l, now() - make_interval(hours => :h))"""),
-                         {"o": org, "k": key, "s": sev, "t": f"Sự cố {key}", "l": link, "h": hrs})
-    await db.execute(text("""INSERT INTO ops.health_alerts (org_id, key, kind, severity, title, cleared_at)
-                             VALUES (:o, 'old', 'x', 'bad', 'Đã xử lý', now())"""), {"o": org})
+    for code, kind, level, hrs in [("S1", "xung_dot_khieu_nai", "amber", 5), ("S2", "rui_ro_lua_dao", "red", 4),
+                                   ("S3", "co_hoi_ket_noi", "amber", 3), ("S4", "viec_han", "red", 2),
+                                   ("S5", "quan_he_nong_nguoi", "amber", 1), ("S6", "viec_han", "amber", 0)]:
+        await _alert(db, org, code, kind=kind, level=level, title=f"Tín hiệu {code}", hrs=hrs)
+    await _alert(db, org, "X1", kind="xung_dot_khieu_nai", level="grey", title="Mức xám", hrs=0)
+    await _alert(db, org, "X2", kind="xung_dot_khieu_nai", level="red", title="Riêng tư", privacy="console_pin")
+    await _alert(db, org, "X3", kind="xung_dot_khieu_nai", level="red", title="Đã xử lý", status="resolved")
+    await _alert(db, org, "SYS", kind="system", level="red", title="Hết chuỗi model",
+                 alert_type="model_chain_exhausted")
+    await db.execute(text("""INSERT INTO ops.health_alerts (org_id, key, kind, severity, title)
+                             VALUES (:o, 'agent.session:zalo', 'agent.session', 'bad', :t)"""),
+                     {"o": org, "t": "Tài khoản Zalo của Gen đã im 15 phút"})
     await db.commit()
-    al = (await owner.get("/owner/brief")).json()["alerts"]
-    assert len(al) == 5 and [a["key"] for a in al] == ["a6", "a4", "a2", "a5", "a3"]      # bad trước, mới trước
+    d = (await owner.get("/owner/brief")).json()
+    al = d["alerts"]
+    assert [a["title"] for a in al] == ["Tín hiệu S4", "Tín hiệu S2", "Tín hiệu S6", "Tín hiệu S5", "Tín hiệu S3"]
     assert all(set(a) == {"key", "title", "severity", "raised_at", "to"} for a in al)
-    by = {a["key"]: a for a in al}
-    assert by["a3"]["to"] == "/system?tab=storage&focus=health" and by["a4"]["to"] == "/connections"
-    assert by["a2"]["severity"] == "bad" and by["a5"]["severity"] == "warn"
-    # mục "Sự cố" của live đếm cùng nguồn
-    live = {s["key"]: s for s in (await owner.get("/owner/brief")).json()["live"]["sections"]}
-    assert live["incidents"]["count"] == 6
+    assert [a["severity"] for a in al] == ["bad", "bad", "warn", "warn", "warn"]
+    assert all(a["to"] == "/intel?tab=signals" for a in al)
+    assert "incidents" not in {s["key"] for s in d["live"]["sections"]}
+
+
+async def test_brief_hides_incident_section_in_stored_brief(owner: Api, db: Any) -> None:
+    org, uid = await _org(db), await _owner_id(db)
+    await conversation(db, org, uid, _brief_content(), title="Bản tin Gen · sáng 10/10")
+    await db.commit()
+    keys = [s["key"] for s in (await owner.get("/owner/brief")).json()["latest"]["sections"]]
+    assert "incidents" not in keys and "tasks_due" in keys
 
 
 async def test_brief_ai_ready_and_channels_connected(owner: Api, db: Any) -> None:

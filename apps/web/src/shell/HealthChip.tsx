@@ -48,7 +48,7 @@ export function HealthChip() {
         onClick={() => setOpen((o) => !o)}
       >
         <Pill icon={view.tone === 'ok' ? 'ph ph-check-circle' : 'ph ph-warning-circle'} iconColor={TONE[view.tone]}>
-          {view.text}
+          <span className="hd-health__txt">{view.text}</span>
         </Pill>
       </button>
       {open ? (

@@ -252,7 +252,7 @@ export async function loginGoogleInSetup(page: Page): Promise<void> {
 
 /**
  * Đi tới bước 3 (Xong) của Thiết lập một màn BẰNG GIAO DIỆN, từ mock `fresh`: mở /setup?token=…, điền Tài khoản, rồi Nguồn AI
- * ("Làm sau" khi `skipAi`, không thì đăng nhập Google). Dừng ở bước Xong (chưa bấm nút nào) để test chọn "Vào Mặt tiền" /
+ * ("Làm sau" khi `skipAi`, không thì đăng nhập Google). Dừng ở bước Xong (chưa bấm nút nào) để test chọn "Vào Tình báo" /
  * "Nối Zalo ngay".
  */
 export async function setupOneToDone(page: Page, opts: { skipAi?: boolean } = {}): Promise<void> {
@@ -272,10 +272,10 @@ export async function setupOneToDone(page: Page, opts: { skipAi?: boolean } = {}
   await expect(page.getByRole('heading', { name: 'Xong rồi, thưa Sếp' })).toBeVisible();
 }
 
-/** Thiết lập một màn từ đầu tới hết: `setupOneToDone` rồi "Vào Mặt tiền" ⇒ /owner. */
+/** Thiết lập một màn từ đầu tới hết: `setupOneToDone` rồi "Vào Tình báo" ⇒ /owner. */
 export async function finishSetupOne(page: Page, opts: { skipAi?: boolean } = {}): Promise<void> {
   await setupOneToDone(page, opts);
-  await page.getByRole('button', { name: /Vào Mặt tiền/ }).click();
+  await page.getByRole('button', { name: /Vào Tình báo/ }).click();
   await expect(page).toHaveURL(/\/intel$/);
 }
 

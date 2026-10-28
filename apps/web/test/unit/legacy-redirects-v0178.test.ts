@@ -20,7 +20,7 @@ describe('bảng chuyển hướng', () => {
   it('bảng chính: Mặt tiền + route Console cũ → route mới', () => {
     const t = (p: string, search = '') => resolveLegacy(p, search, '');
     expect(t('/owner')).toBe('/intel');
-    expect(t('/owner/thong-tin')).toBe('/intel?tab=signals');
+    expect(t('/owner/thong-tin')).toBe('/intel?tab=feed');
     expect(t('/owner/quan-he')).toBe('/panorama?tab=relations');
     expect(t('/owner/phan-tich')).toBe('/panorama?tab=trends');
     expect(t('/owner/viec')).toBe('/decide');
@@ -43,7 +43,7 @@ describe('bảng chuyển hướng', () => {
   });
 
   it('giữ query và băm của link cũ; `tab` cũ bị bỏ trừ màn tự dùng ?tab= (Hộp thư, Plugin)', () => {
-    expect(resolveLegacy('/owner/thong-tin', '?tin=A1', '')).toBe('/intel?tab=signals&tin=A1');
+    expect(resolveLegacy('/owner/thong-tin', '?tin=A1', '')).toBe('/intel?tab=feed&tin=A1');
     expect(resolveLegacy('/owner/quan-he', '?list=hot&nguoi=P9', '')).toBe('/panorama?tab=relations&list=hot&nguoi=P9');
     expect(resolveLegacy('/overview', '?gen=coach', '')).toBe('/intel?tab=overview&gen=coach');
     // Review v0.1.78: tham số lặp giữ đủ (append, không ghi đè).

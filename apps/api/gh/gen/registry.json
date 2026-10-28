@@ -521,6 +521,120 @@
       }
     },
     {
+      "id": "system.brain.intel_moved",
+      "screen": "system",
+      "label": "Dòng \"Tình báo đã chuyển sang trang Tình báo\"",
+      "description": "Từ v0.1.79 thiết lập Tình báo, chạy thử 14 ngày và các thao tác khoá/PIN của Tình báo nằm ở trang Tình báo; dòng này dẫn sang đó",
+      "dynamic": null,
+      "params": {
+        "tab": "brain"
+      }
+    },
+    {
+      "id": "intel.today.decide",
+      "screen": "intel",
+      "label": "Khối \"Cần Sếp quyết\" (3 dòng đầu)",
+      "description": "Ba việc đầu đang chờ chữ ký của Sếp ở trang Tình báo; nút \"Xem tất cả\" sang trang Cần quyết",
+      "dynamic": null,
+      "params": null,
+      "permission": "system.manage"
+    },
+    {
+      "id": "intel.today.signals",
+      "screen": "intel",
+      "label": "Khối \"Tín hiệu đang mở\"",
+      "description": "Tín hiệu đang mở xếp theo mức Khẩn / Đầu bản tin / Để biết, mỗi dòng có \"Việc Sếp cần làm\" và nút Đúng / Sai / Không cần báo",
+      "dynamic": null,
+      "params": null,
+      "permission": "system.manage"
+    },
+    {
+      "id": "intel.today.setup_banner",
+      "screen": "intel",
+      "label": "Dải nhắc \"Thiết lập Tình báo chưa xong\"",
+      "description": "Hiện khi chưa gán bối cảnh nhóm, khai nhân viên hoặc khách chủ chốt; nút \"Làm ngay\" sang tab Thiết lập",
+      "dynamic": null,
+      "params": null,
+      "permission": "system.manage"
+    },
+    {
+      "id": "intel.signals.table",
+      "screen": "intel",
+      "label": "Bảng \"Mọi tín hiệu\"",
+      "description": "Mọi tín hiệu Gen nghe được: mã, mức, loại, tiêu đề, việc Sếp cần làm, độ chắc, trạng thái; bấm dòng mở ngăn chi tiết",
+      "dynamic": null,
+      "params": {
+        "tab": "signals"
+      },
+      "permission": "system.manage"
+    },
+    {
+      "id": "intel.signals.filters",
+      "screen": "intel",
+      "label": "Bộ lọc tín hiệu",
+      "description": "Lọc bảng tín hiệu theo mức, trạng thái, loại",
+      "dynamic": null,
+      "params": {
+        "tab": "signals"
+      },
+      "permission": "system.manage"
+    },
+    {
+      "id": "intel.signal.drawer",
+      "screen": "intel",
+      "label": "Ngăn chi tiết tín hiệu",
+      "description": "Chuyện gì, vì sao, độ chắc, việc Sếp cần làm, bằng chứng đã che; nút chấm và chuyển trạng thái (chỉ hiện sau khi bấm một tín hiệu)",
+      "dynamic": null,
+      "params": {
+        "tab": "signals"
+      },
+      "permission": "system.manage"
+    },
+    {
+      "id": "intel.signal.verdict_block",
+      "screen": "intel",
+      "label": "Nút chấm Đúng / Sai / Không cần báo",
+      "description": "Sếp chấm tín hiệu Gen báo có đúng không (Sai chọn 1 trong 3 lý do: khách vẫn mua, không gấp, nhân viên lo rồi); các lượt chấm nuôi chạy thử 14 ngày",
+      "dynamic": null,
+      "params": {
+        "tab": "signals"
+      },
+      "permission": "system.manage"
+    },
+    {
+      "id": "intel.trial.card",
+      "screen": "intel",
+      "label": "Thẻ \"Chạy thử 14 ngày\"",
+      "description": "Trạng thái chạy thử của bốn cổng thường: còn mấy ngày, Sếp đã chấm bao nhiêu lượt, loại nào đủ để nhắn ngay; dòng \"đáng lẽ báo ngay\" chờ chấm; chọn chạy thật hoặc chạy thử (đổi cần mã PIN)",
+      "dynamic": null,
+      "params": {
+        "tab": "trial"
+      },
+      "permission": "system.manage"
+    },
+    {
+      "id": "intel.setup.steps",
+      "screen": "intel",
+      "label": "Thẻ \"Thiết lập Tình báo\"",
+      "description": "Ba bước để Gen hiểu đúng: gán bối cảnh nhóm, khai nhân viên, khai khách chủ chốt (việc ghi cần mã PIN)",
+      "dynamic": null,
+      "params": {
+        "tab": "setup"
+      },
+      "permission": "system.manage"
+    },
+    {
+      "id": "intel.setup.controls",
+      "screen": "intel",
+      "label": "Thẻ \"Khoá, xác minh và cảnh báo\"",
+      "description": "Khoá / mở khoá trợ lý, mở khoá gửi tin khách hôm nay, kênh phụ, tắt báo lừa đảo-an toàn, xác minh số tài khoản, gán bối cảnh nhóm hàng loạt (cần mã PIN)",
+      "dynamic": null,
+      "params": {
+        "tab": "setup"
+      },
+      "permission": "system.manage"
+    },
+    {
       "id": "system.storage.health",
       "screen": "system",
       "label": "Sức khoẻ hệ thống",
@@ -832,7 +946,7 @@
       "id": "help.version",
       "screen": "help",
       "label": "Phiên bản đang chạy",
-      "description": "Phiên bản Gen-Harness, tổ chức, múi giờ, vai trò",
+      "description": "Phiên bản GenOS, tổ chức, múi giờ, vai trò",
       "dynamic": null,
       "params": null
     },

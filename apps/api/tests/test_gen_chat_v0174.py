@@ -165,7 +165,7 @@ async def test_system_prompt_uses_diplomat_persona_not_gen(chat: Chat) -> None:
 
 def test_channel_prompt_is_pure_and_names_persona() -> None:
     p = diplomat.Persona(uuid.uuid4(), "Heo", "vui vẻ", "Trợ lý")
-    s = channel_prompt("Bạn là Gen — trợ lý quản trị trong Gen-Harness Console. Gen ĐỌC. Gen nhớ. Gen-hub.", p, "whatsapp")
+    s = channel_prompt("Bạn là Gen — trợ lý quản trị trong GenOS Console. Gen ĐỌC. Gen nhớ. Gen-hub.", p, "whatsapp")
     assert s.startswith("Tên của bạn là Heo.") and "Bạn là Heo — trợ lý quản trị." in s and "KÊNH WHATSAPP" in s
     assert "Gen nhớ" in s and "Gen-hub" in s and GEN_WORD.search(s) is None
 

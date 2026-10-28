@@ -23,7 +23,7 @@ const ADV = '/admin/advanced';
 export const LEGACY_REDIRECTS: Readonly<Record<string, LegacyTarget>> = {
   // ── Mặt tiền Owner (v0.1.55–59) ──
   '/owner': { to: '/intel' },
-  '/owner/thong-tin': { to: '/intel', tab: 'signals' },
+  '/owner/thong-tin': { to: '/intel', tab: 'feed' },  // v0.1.79 (G1): Thông tin = dòng tin cũ, tab riêng; tab Tín hiệu là bảng tín hiệu mới
   '/owner/quan-he': { to: '/panorama', tab: 'relations' },
   '/owner/phan-tich': { to: '/panorama', tab: 'trends' },
   '/owner/viec': { to: '/decide' },

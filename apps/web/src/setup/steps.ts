@@ -72,7 +72,7 @@ export const SETUP_STEPS: StepMeta[] = [
   },
   {
     n: 12, key: 'finish', title: 'Hoàn tất', required: true, built: true,
-    content: 'Tóm tắt những gì đã bật. Tiến độ lần sàng lọc đầu tiên theo thời gian thực: bản ghi thô đã gom · đang phân loại · đã vào kho sạch. Nút Vào Console (mở trang chủ theo vai trò — Owner là Mặt tiền).',
+    content: 'Tóm tắt những gì đã bật. Tiến độ lần sàng lọc đầu tiên theo thời gian thực: bản ghi thô đã gom · đang phân loại · đã vào kho sạch. Nút Vào Console (mở trang chủ theo vai trò — Owner là Tình báo).',
     doneWhen: 'Bấm nút',
   },
 ];

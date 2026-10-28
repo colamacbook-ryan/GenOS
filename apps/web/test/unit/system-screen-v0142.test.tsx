@@ -169,4 +169,22 @@ describe('BrainTab', () => {
     await waitFor(() => expect(calls.some((u) => u.includes('/providers'))).toBe(true));
     expect(calls.some((u) => u.includes('/cli/profiles'))).toBe(false);
   });
+
+  it('v0.1.79 (G1): Tình báo đã chuyển sang trang Tình báo — Bộ não AI chỉ còn một dòng link, không gọi API Tình báo', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    qc.setQueryData(qk.me, me('owner'));
+    calls.length = 0;
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter>
+          <BrainTab />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByRole('link', { name: 'Tình báo đã chuyển sang trang Tình báo' })).toHaveAttribute('href', '/intel?tab=setup');
+    await waitFor(() => expect(calls.some((u) => u.includes('/providers'))).toBe(true));
+    expect(screen.queryByRole('region', { name: 'Thiết lập Tình báo' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Chạy thử 14 ngày' })).toBeNull();
+    expect(calls.some((u) => u.includes('/intel/console') || u.includes('/intel/setup'))).toBe(false);
+  });
 });

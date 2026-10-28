@@ -75,7 +75,7 @@ async def test_nhap_prompt_renames_gen_but_keeps_product_terms(owner_api: Api, r
     await core.handle(ocmd("nhap", "nhắc tôi gọi anh Nam", via="zalo"), ctx)
     s = sys_of(router)
     assert "Bạn là Heo — trợ lý quản trị." in s and "Bạn là Gen" not in s and "Tên của bạn là Heo." in s
-    assert "Nguyên tắc: Heo ĐỌC" in s and "Gen-Harness" not in s.split("Bạn là Heo")[1][:60]
+    assert "Nguyên tắc: Heo ĐỌC" in s and "GenOS" not in s.split("Bạn là Heo")[1][:60]
     assert "Gen nhớ" in s and "Gen-hub" in s                                          # tên tính năng / sản phẩm giữ nguyên
 
 
@@ -95,7 +95,7 @@ async def test_console_gen_prompt_is_unchanged() -> None:
                                role_name="Owner", role_id=uuid.uuid4(), team_id=None, session_id=uuid.uuid4(),
                                pin_verified_until=None, addressing={}, permissions={})
     p = system_prompt(user, TurnInput(turn_id=uuid.uuid4(), conversation_id=uuid.uuid4(), text="x", route="/", screen_key=None), [])
-    assert p.startswith("Bạn là Gen — trợ lý quản trị trong Gen-Harness Console.") and "Heo" not in p
+    assert p.startswith("Bạn là Gen — trợ lý quản trị trong GenOS Console.") and "Heo" not in p
 
 
 def test_fixed_texts_use_the_given_name() -> None:

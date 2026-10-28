@@ -596,7 +596,7 @@ def _missing_error(suffix: str) -> ApiError:
     if scope is None:
         return conflict("HUB_TOOL_MISSING", f"Gen-hub chưa cấp tool {suffix} — bấm Kiểm tra ở thẻ Gen-hub")
     return conflict("HUB_TOOL_MISSING", f"Gen-hub chưa cấp quyền {SCOPE_LABELS[scope]} — vào Gen-hub tick thêm quyền "
-                    "cho token của Gen-Harness rồi bấm Kiểm tra ở Kết nối › Gen-hub", f"Thiếu tool {suffix}")
+                    "cho token của GenOS rồi bấm Kiểm tra ở Kết nối › Gen-hub", f"Thiếu tool {suffix}")
 
 
 async def call_hub(db: AsyncSession, redis: Any, client: McpClient, *, user: service.CurrentUser | SystemActor,
@@ -714,7 +714,7 @@ async def generic_call(db: AsyncSession, redis: Any, transport: Any, *, user: se
                                   code="HUB_OWNER_ONLY", msg=msg, detail=msg)
     suffix = suffix_of(tool.name)
     if suffix is None:
-        detail = ("Gen-Harness chỉ đọc qua Gen-hub — tool ghi (gửi mail, tạo lịch, ghi Drive…) không được gọi")
+        detail = ("GenOS chỉ đọc qua Gen-hub — tool ghi (gửi mail, tạo lịch, ghi Drive…) không được gọi")
         if write_suffix_of(tool.name) is not None:
             # v0.1.50: ghi Kho có đúng một đường — đề xuất của Gen, Sếp Xác nhận + nhập mã PIN (không gọi trực tiếp).
             detail = ("Chỉ đọc qua Gen-hub ở đường này — ghi vào Kho chỉ đi qua đề xuất của Gen: Sếp bấm Xác nhận và "

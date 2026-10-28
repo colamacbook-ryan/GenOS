@@ -201,7 +201,7 @@ AUTOSTART_FIX = {
 #: KHÔNG hứa "đợi tới đêm": thiếu linger thì lịch đêm không chạy, tắt tự cập nhật thì không có lần chạy đêm nào.
 AUTOSTART_DONE = "Chạy xong thì chạy genh status để cảnh báo tự hết"
 #: Tiêu đề cảnh báo phòng trước (máy VẪN đang chạy — chỉ là khi bật lại sẽ không tự lên); cùng câu ở tài liệu/web/test.
-AUTOSTART_TITLE = "Máy chủ có thể không tự chạy lại Gen-Harness khi bật lại máy"
+AUTOSTART_TITLE = "Máy chủ có thể không tự chạy lại GenOS khi bật lại máy"
 #: Mỗi câu kết thúc bằng lệnh — KHÔNG thêm dấu chấm sau lệnh (Sếp chép nguyên dòng: "docker." / "$USER." chạy sẽ lỗi).
 AUTOSTART_SEP = " · "
 
@@ -886,7 +886,7 @@ async def _eval_bridge(db: AsyncSession, org_id: uuid.UUID, redis: Any, now: dat
     if st is not None and st["state"] == "silent":
         await raise_once(db, org_id, key="bridge.silent", kind="bridge.silent", severity="bad",
                          title=f"Bộ nhận tin Zalo/WhatsApp đã ngừng {st['silent_minutes']} phút",
-                         body="Tin khách đang KHÔNG vào được Gen-Harness và bản nháp đã duyệt có thể hết hạn trước khi "
+                         body="Tin khách đang KHÔNG vào được GenOS và bản nháp đã duyệt có thể hết hạn trước khi "
                               "gửi, dù thẻ kênh vẫn ghi \"Đang kết nối\". Bấm để xem cách khởi động lại.",
                          link=HEALTH_LINK, redis=redis)
     else:
@@ -1032,7 +1032,7 @@ async def _eval_nightly(db: AsyncSession, org_id: uuid.UUID, redis: Any, now: da
 ACCESS_LINK = "/system?tab=storage&focus=access"
 OPEN_LAN_TITLE = "Cổng đang mở cho cả mạng"
 # Thẻ đích chỉ có LỆNH chạy trên máy chủ (không có nút chọn một chạm) ⇒ "Bấm để xem lệnh…", không hứa "Bấm để chọn".
-OPEN_LAN_BODY = ("Mọi máy cùng mạng (Wi-Fi văn phòng, khách…) đều thấy trang đăng nhập Gen-Harness. Bấm để xem lệnh "
+OPEN_LAN_BODY = ("Mọi máy cùng mạng (Wi-Fi văn phòng, khách…) đều thấy trang đăng nhập GenOS. Bấm để xem lệnh "
                  "chọn cách truy cập (chạy trên máy chủ): Tailscale (khuyên dùng), chỉ máy này, hoặc giữ mở cho mạng "
                  "nội bộ.")
 
@@ -1078,7 +1078,7 @@ OFFSITE_FAILED_BODY = {
                "thử lại",
     "GH-EB04": "Không ghi được vào ổ ngoài — kiểm tra ổ còn chỗ trống và cho phép ghi",
     "GH-EB05": "Máy chủ đang cập nhật/khôi phục nên lần sao lưu ra ổ ngoài bị bỏ qua — sẽ thử lại sau",
-    "GH-EB06": "Dịch vụ Gen-Harness chưa chạy nên chưa sao lưu ra ổ ngoài được",
+    "GH-EB06": "Dịch vụ GenOS chưa chạy nên chưa sao lưu ra ổ ngoài được",
     "GH-EB07": "Nơi lưu không hợp lệ — chọn lại thư mục trên ổ USB/NAS",
     # v0.1.53 (F-97): cùng câu với gh/system_api/offsite.py ERROR_MESSAGES — sửa quyền, không phải cắm ổ/thử lại.
     "GH-E94C": "Máy chủ không xoá được tệp yêu cầu — chưa làm gì. Nhờ người quản trị kiểm quyền thư mục run/request "
