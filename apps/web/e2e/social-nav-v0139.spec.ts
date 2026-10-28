@@ -16,6 +16,8 @@ test.describe('v0.1.39 · lối vào trang Tài khoản mạng xã hội', () =>
     await loginAsOwner(page);
     await page.goto('/overview');
     const nav = page.getByRole('navigation', { name: 'Danh mục màn hình' });
+    // v0.1.78: Kết nối nằm trong Quản trị (thu gọn mặc định).
+    await nav.getByRole('button', { name: /Quản trị/ }).click();
     await expect(nav.getByRole('link', { name: /Kết nối/ })).toBeVisible();
     await expect(nav.getByRole('link', { name: /Mạng xã hội/ })).toHaveCount(0);
     await page.goto('/social');

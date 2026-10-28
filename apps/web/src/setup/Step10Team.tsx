@@ -139,7 +139,7 @@ export function Step10Team({ meta, description, onBack, onSaved, formRef, onSkip
           </div>
           <p className="muted-note">
             Sếp một mình dùng được ngay. Khi có quản lý, vận hành hay nhân viên cùng làm, Sếp mời họ — mỗi người chỉ thấy phần việc được giao. Không bắt buộc:
-            mời lúc nào cũng được ở Đội ngũ › Người dùng.
+            mời lúc nào cũng được ở Quản trị › Người & quyền.
           </p>
           <Button variant="secondary" icon="ph ph-user-plus" className="btn-27" onClick={() => setFormOpen(true)}>
             Mời ngay

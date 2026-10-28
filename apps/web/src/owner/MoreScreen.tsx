@@ -63,7 +63,7 @@ export function MoreScreen() {
   const followUp = useQuery({ queryKey: FOLLOW_UP_KEY, queryFn: ({ signal }) => api.setup.followUp(signal), enabled: owner });
   const coach = useCoachToday(owner);
   useEffect(() => {
-    document.title = 'Cài đặt · Gen-Harness';
+    document.title = 'Cài đặt · GenOS';
   }, []);
 
   const logout = async () => {

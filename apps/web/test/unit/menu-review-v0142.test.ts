@@ -12,9 +12,9 @@ import { itemTitle } from '../../src/shell/navModel';
 
 describe('Góc nhìn đã lưu', () => {
   it('hiện ở Nâng cao và ở các màn nghiệp vụ có bộ lọc; không ở Hôm nay/Kết nối/Cài đặt', () => {
-    for (const k of ['inbox', 'workbench', 'tasks', 'directory', 'deals', 'documents', 'search', 'people', 'care'])
+    for (const k of ['inbox', 'workbench', 'tasks', 'directory', 'deals', 'documents', 'search', 'people', 'care', 'decide', 'work', 'panorama', 'team'])
       expect(showSavedViews(k, false), k).toBe(true);
-    for (const k of ['overview', 'connections', 'team', 'system', 'opportunity', null]) expect(showSavedViews(k, false)).toBe(false);
+    for (const k of ['overview', 'connections', 'intel', 'me', 'backup', 'system', 'opportunity', null]) expect(showSavedViews(k, false)).toBe(false);
     expect(showSavedViews('raw', true)).toBe(true);
   });
 

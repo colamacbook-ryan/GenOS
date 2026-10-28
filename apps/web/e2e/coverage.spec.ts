@@ -66,7 +66,7 @@ test.describe('Gen — thẻ đề xuất có xác nhận', () => {
     await expect(item).toContainText('Nhắc việc: Gọi lại anh Bảo');
     await expect(item).toContainText('TSK-0999 · P2');
     await item.click();
-    await expect(page).toHaveURL(/\/tasks$/);
+    await expect(page).toHaveURL(/\/work$/); // v0.1.78: /tasks chuyển hướng sang trang Việc
     await expect(bell).toHaveAccessibleName('Thông báo — 1 chưa đọc');
   });
 

@@ -32,7 +32,7 @@ const tabLabel = (text: string, n: number | null): ReactNode =>
 
 export function WorkScreen(): JSX.Element {
   useEffect(() => {
-    document.title = 'Việc · Gen-Harness';
+    document.title = 'Việc · GenOS';
   }, []);
   const tz = useOrgTimezone() || DEFAULT_TZ;
   const wide = useMediaQuery('(min-width: 760px)');

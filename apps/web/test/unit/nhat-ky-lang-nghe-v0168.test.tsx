@@ -100,9 +100,9 @@ afterEach(() => {
 });
 
 describe('logic thuần', () => {
-  it('màn có trong danh mục, thuộc Tầng dữ liệu, không nằm trong screens.json (màn bổ sung)', () => {
+  it('màn có trong danh mục, là con ẩn của Quản trị › Nâng cao (tab Nhật ký lắng nghe)', () => {
     const s = SCREEN_BY_KEY.listenlog;
-    expect(s).toMatchObject({ domain: 'tech', parent: 'Tầng dữ liệu', name: 'Nhật ký lắng nghe', extra: true });
+    expect(s).toMatchObject({ domain: 'admin', parent: 'Nâng cao', name: 'Nhật ký lắng nghe', navHidden: true });
     expect(s.description).toMatch(/hệ thống đã làm gì|sàng lọc/);
   });
 

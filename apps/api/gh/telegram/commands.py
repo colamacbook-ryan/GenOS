@@ -46,7 +46,7 @@ log = logging.getLogger("gh.telegram.commands")
 VIA: oc.Via = "telegram"
 PURPOSE = oc.purpose_of(VIA)  # "gen.telegram"
 #: Các loại lệnh Telegram hiểu — phải khớp lõi chung (`oc.KINDS`).
-KINDS = ("start", "tro_giup", "help", "hom_nay", "viec", "suc_khoe", "nhap", "hoi")
+KINDS = ("start", "tro_giup", "help", "hom_nay", "viec", "bat_dau", "suc_khoe", "nhap", "hoi")
 #: v0.1.76: lệnh riêng của Telegram (kênh phụ), không thuộc lõi chung.
 TELEGRAM_ONLY_KINDS = (inbound.LOCK_KIND,)
 LOCKED_TEXT = ("Đã KHOÁ trợ lý: kênh quản trị và chế độ hỗ trợ nhóm đã tắt, tin đang chờ gửi đã huỷ. "

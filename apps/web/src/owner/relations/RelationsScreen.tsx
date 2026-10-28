@@ -56,7 +56,7 @@ export function RelationsScreen(): JSX.Element {
   const insights = useOwnerInsights('week', ['messages_in']);
 
   useEffect(() => {
-    document.title = 'Quan hệ · Gen-Harness';
+    document.title = 'Quan hệ · GenOS';
   }, []);
 
   const queries = { care, hot, bridges, matches } as const;

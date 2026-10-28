@@ -51,18 +51,19 @@ def screens(nav: list[dict]) -> set[str]:  # type: ignore[type-arg]
     return out
 
 
-BIZ_EXTRA = {"tasks", "documents", "deals"}
-_MANAGER = BIZ_EXTRA | {"overview", "inbox", "workbench", "tasks", "directory", "documents", "profile", "opportunity",
-                        "deals", "search", "graph", "notebook", "supply", "system"}
-_OPERATOR = _MANAGER - {"system"}
+# v0.1.78: màn cũ là con ẩn của trang mới ⇒ mỗi vai thấy (các) khoá màn cũ như trước + mục thanh bên chứa chúng.
+_LEGACY_DAILY = {"overview", "inbox", "workbench", "tasks", "directory", "documents", "profile", "opportunity", "deals",
+                 "search", "graph", "notebook", "supply"}
+_MANAGER = _LEGACY_DAILY | {"system", "intel", "decide", "work", "panorama", "log"}
+_OPERATOR = _MANAGER - {"system", "log"}
 EXPECTED = {
     "owner": set(navigation.all_screen_keys()),
     "manager": _MANAGER,
     "operator": _OPERATOR,
     "agent_staff": _OPERATOR - {"overview"},
-    "auditor": BIZ_EXTRA | {"overview", "inbox", "directory", "graph", "profile", "notebook", "opportunity", "supply",
-                            "search", "connections", "listenlog", "raw", "rules", "clean", "identity", "agents", "api",
-                            "mcp", "plugins", "system"},
+    "auditor": (_LEGACY_DAILY - {"workbench"}) | {"intel", "work", "panorama", "log", "connections", "backup", "org",
+                                                 "access", "advanced", "listenlog", "raw", "rules", "clean", "identity",
+                                                 "agents", "api", "mcp", "plugins", "system"},
 }
 
 
@@ -81,9 +82,8 @@ async def test_navigation_filtered_by_role(owner_api, client, db, role: str) -> 
     assert screens(nav) == EXPECTED[role]
     assert "people" not in screens(nav) or role == "owner"
     if role == "owner":
-        # v0.1.42: số màn KHÔNG ẩn; DB test chưa có nhân viên ⇒ Đánh giá/Chăm sóc ẩn (14 → 12).
-        # v0.1.68: thêm Nhật ký lắng nghe ⇒ Nâng cao 10 → 11.
-        assert [d["count"] for d in nav] == [12, 11]
+        # v0.1.78: số mục thanh bên KHÔNG ẩn; DB test chưa có nhân viên ⇒ Đội ngũ ẩn (6 → 5); Quản trị 7 trang con.
+        assert [d["count"] for d in nav] == [5, 7]
     assert "team" not in screens(nav) or role == "owner"
 
 

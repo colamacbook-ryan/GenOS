@@ -1,73 +1,186 @@
 [
   {
-    "key": "overview",
+    "key": "intel",
     "domain": "Việc hằng ngày",
     "parent": null,
+    "name": "Tình báo",
+    "en": "Sáng nay có gì, tín hiệu nào cần để ý",
+    "title": "Tình báo",
+    "subtitle": "Hôm nay · tín hiệu cần để ý"
+  },
+  {
+    "key": "decide",
+    "domain": "Việc hằng ngày",
+    "parent": null,
+    "name": "Cần quyết",
+    "en": "Nháp tin và đề xuất chờ Sếp quyết",
+    "title": "Cần quyết",
+    "subtitle": "Nháp tin và đề xuất chờ Sếp quyết"
+  },
+  {
+    "key": "work",
+    "domain": "Việc hằng ngày",
+    "parent": null,
+    "name": "Việc",
+    "en": "Việc đến hạn và lời hứa",
+    "title": "Việc",
+    "subtitle": "Việc đến hạn và lời hứa"
+  },
+  {
+    "key": "panorama",
+    "domain": "Việc hằng ngày",
+    "parent": null,
+    "name": "Toàn cảnh",
+    "en": "Người, nhóm, quan hệ, cơ hội",
+    "title": "Toàn cảnh",
+    "subtitle": "Người, nhóm, quan hệ, cơ hội"
+  },
+  {
+    "key": "me",
+    "domain": "Việc hằng ngày",
+    "parent": null,
+    "name": "Tôi",
+    "en": "Hồ sơ của Sếp, Gen nhớ gì về Sếp",
+    "title": "Tôi",
+    "subtitle": "Hồ sơ của Sếp, Gen nhớ gì về Sếp"
+  },
+  {
+    "key": "team",
+    "domain": "Việc hằng ngày",
+    "parent": null,
+    "name": "Đội ngũ",
+    "en": "Đánh giá nhân viên, chất lượng chăm sóc",
+    "title": "Đội ngũ",
+    "subtitle": "Đánh giá nhân viên, chất lượng chăm sóc"
+  },
+  {
+    "key": "overview",
+    "domain": "Việc hằng ngày",
+    "parent": "Tình báo",
     "name": "Hôm nay",
     "en": "Cần Sếp xử lý · 4 số chính",
     "title": "Hôm nay",
     "subtitle": "Cần Sếp xử lý · 4 số chính",
-    "badge": "9"
+    "hidden": true
   },
   {
     "key": "inbox",
     "domain": "Việc hằng ngày",
-    "parent": "Hộp thư & Việc",
+    "parent": "Tình báo",
     "name": "Hộp thư",
     "en": "Tin quan trọng đã được sắp xếp",
     "title": "Hộp thư",
     "subtitle": "Tin quan trọng đã được sắp xếp · cái gì quan trọng nhất lúc này",
-    "badge": "28"
+    "hidden": true
   },
   {
     "key": "workbench",
     "domain": "Việc hằng ngày",
-    "parent": "Hộp thư & Việc",
+    "parent": "Cần quyết",
     "name": "Bàn làm việc",
     "en": "Soạn & duyệt tin trả lời",
     "title": "Bàn làm việc",
     "subtitle": "Workbench · soạn, duyệt, hành động",
-    "badge": "6"
+    "hidden": true
+  },
+  {
+    "key": "tasks",
+    "domain": "Việc hằng ngày",
+    "parent": "Việc",
+    "name": "Việc & Nhắc hẹn",
+    "en": "Việc cần làm và lời nhắc",
+    "title": "Việc & Nhắc hẹn",
+    "subtitle": "Tasks & Reminders · việc đến hạn và lời hứa",
+    "hidden": true
   },
   {
     "key": "directory",
     "domain": "Việc hằng ngày",
-    "parent": "Khách & Cơ hội",
+    "parent": "Toàn cảnh",
     "name": "Khách & Nhóm",
     "en": "Nhóm theo kênh · lọc khách",
     "title": "Khách & Nhóm",
     "subtitle": "Danh sách nhóm theo kênh và con người có bộ lọc",
-    "badge": null
+    "hidden": true
   },
   {
     "key": "opportunity",
     "domain": "Việc hằng ngày",
-    "parent": "Khách & Cơ hội",
+    "parent": "Toàn cảnh",
     "name": "Bảng cơ hội",
     "en": "Cơ hội bán hàng đang theo",
     "title": "Bảng cơ hội",
     "subtitle": "Opportunity Board · pipeline sống từ chat",
-    "badge": "41"
+    "hidden": true
+  },
+  {
+    "key": "deals",
+    "domain": "Việc hằng ngày",
+    "parent": "Toàn cảnh",
+    "name": "Deal & Vụ việc",
+    "en": "Thương vụ và vụ việc",
+    "title": "Deal & Vụ việc",
+    "subtitle": "Deals & Cases · đã chốt và đang xử lý",
+    "hidden": true
+  },
+  {
+    "key": "documents",
+    "domain": "Việc hằng ngày",
+    "parent": "Toàn cảnh",
+    "name": "Tài liệu",
+    "en": "Báo giá, hợp đồng, tệp",
+    "title": "Tài liệu",
+    "subtitle": "Documents · báo giá, hợp đồng, tệp đã trao đổi",
+    "hidden": true
   },
   {
     "key": "search",
     "domain": "Việc hằng ngày",
-    "parent": "Khách & Cơ hội",
+    "parent": "Toàn cảnh",
     "name": "Kho hội thoại",
     "en": "Tìm trong mọi hội thoại",
     "title": "Kho hội thoại",
     "subtitle": "Knowledge & Search · tìm mẫu, không chỉ tìm câu",
-    "badge": null
+    "hidden": true
   },
   {
     "key": "profile",
     "domain": "Việc hằng ngày",
-    "parent": "Khách & Cơ hội",
+    "parent": "Toàn cảnh",
     "name": "Hồ sơ sống",
     "en": "Hồ sơ một người — mở từ danh sách",
     "title": "Hồ sơ sống",
     "subtitle": "Living Profile · vì sao hệ thống nghĩ vậy",
-    "badge": null,
+    "hidden": true
+  },
+  {
+    "key": "graph",
+    "domain": "Việc hằng ngày",
+    "parent": "Toàn cảnh",
+    "name": "Bản đồ quan hệ",
+    "en": "Ai quen ai, qua đâu",
+    "title": "Bản đồ quan hệ",
+    "subtitle": "Relationship Map · ai đang liên quan",
+    "hidden": true
+  },
+  {
+    "key": "notebook",
+    "domain": "Việc hằng ngày",
+    "parent": "Toàn cảnh",
+    "name": "Sổ tay nhận thức",
+    "en": "Ghi chú trợ lý theo từng người",
+    "title": "Sổ tay nhận thức",
+    "subtitle": "AI-trợ lý tự ghi nhận thức lũy tiến cho từng ID người và ID nhóm",
+    "hidden": true
+  },
+  {
+    "key": "supply",
+    "domain": "Việc hằng ngày",
+    "parent": "Toàn cảnh",
+    "name": "Cung ↔ Cầu",
+    "en": "Ghép người cần với người có",
+    "title": "Cung ↔ Cầu",
+    "subtitle": "Ai cần mua, ai cần bán, ghép được với ai",
     "hidden": true
   },
   {
@@ -78,7 +191,7 @@
     "en": "Điểm nhân viên có chứng cứ",
     "title": "Đánh giá con người",
     "subtitle": "People Review · điểm số có chứng cứ",
-    "badge": null
+    "hidden": true
   },
   {
     "key": "care",
@@ -88,127 +201,169 @@
     "en": "Cách nhân viên chăm khách",
     "title": "Chất lượng chăm sóc",
     "subtitle": "Care Quality · cách chăm, không chỉ số lần nhắn",
-    "badge": null
+    "hidden": true
   },
   {
-    "key": "system",
-    "domain": "Việc hằng ngày",
+    "key": "start",
+    "domain": "Quản trị",
     "parent": null,
-    "name": "Cài đặt",
-    "en": "Sao lưu, cập nhật, tổ chức, bộ não AI, quyền, nhật ký",
-    "title": "Cài đặt",
-    "subtitle": "Settings · sao lưu, cập nhật, tổ chức, bộ não AI, quyền, nhật ký",
-    "badge": null
+    "name": "Bắt đầu",
+    "en": "Việc thiết lập và kiểm tra kết nối",
+    "title": "Bắt đầu",
+    "subtitle": "Việc thiết lập và kiểm tra kết nối"
+  },
+  {
+    "key": "connections",
+    "domain": "Quản trị",
+    "parent": null,
+    "name": "Kết nối",
+    "en": "Bộ não AI, Zalo, Facebook, Gen-hub…",
+    "title": "Kết nối",
+    "subtitle": "Connections · bộ não AI, kênh, Facebook, Gen-hub, MCP"
+  },
+  {
+    "key": "access",
+    "domain": "Quản trị",
+    "parent": null,
+    "name": "Người & quyền",
+    "en": "Người dùng Console và quyền hạn",
+    "title": "Người & quyền",
+    "subtitle": "Người dùng Console và quyền hạn"
+  },
+  {
+    "key": "backup",
+    "domain": "Quản trị",
+    "parent": null,
+    "name": "Sao lưu & cập nhật",
+    "en": "Máy có an toàn không, bản mới",
+    "title": "Sao lưu & cập nhật",
+    "subtitle": "Máy có an toàn không, bản mới"
+  },
+  {
+    "key": "org",
+    "domain": "Quản trị",
+    "parent": null,
+    "name": "Tổ chức",
+    "en": "Tên, giờ, xưng hô",
+    "title": "Tổ chức",
+    "subtitle": "Tên, giờ, xưng hô"
+  },
+  {
+    "key": "log",
+    "domain": "Quản trị",
+    "parent": null,
+    "name": "Nhật ký",
+    "en": "Ai đã làm gì",
+    "title": "Nhật ký",
+    "subtitle": "Ai đã làm gì"
+  },
+  {
+    "key": "advanced",
+    "domain": "Quản trị",
+    "parent": null,
+    "name": "Nâng cao",
+    "en": "Dữ liệu, agent, model, MCP",
+    "title": "Nâng cao",
+    "subtitle": "Dữ liệu, agent, model, MCP"
   },
   {
     "key": "raw",
-    "domain": "Nâng cao",
-    "parent": "Tầng dữ liệu",
+    "domain": "Quản trị",
+    "parent": "Nâng cao",
     "name": "Kho dữ liệu thô",
     "en": "Tin gốc các kênh gom về",
     "title": "Kho dữ liệu thô",
     "subtitle": "Raw Lake · mọi bridge gom hết về đây trước khi phân loại",
-    "badge": "18k"
+    "hidden": true
+  },
+  {
+    "key": "listenlog",
+    "domain": "Quản trị",
+    "parent": "Nâng cao",
+    "name": "Nhật ký lắng nghe",
+    "en": "Mọi kênh đang nghe, hệ thống đã làm gì",
+    "title": "Nhật ký lắng nghe",
+    "subtitle": "Listening Log · tin và sự kiện của mọi kênh trên một dòng thời gian",
+    "hidden": true
   },
   {
     "key": "rules",
-    "domain": "Nâng cao",
-    "parent": "Tầng dữ liệu",
+    "domain": "Quản trị",
+    "parent": "Nâng cao",
     "name": "Quy tắc sàng lọc",
     "en": "Lọc, phân loại, chấm điểm",
     "title": "Quy tắc sàng lọc",
     "subtitle": "Refinery Rules · Sếp định nghĩa cách core agent đánh giá",
-    "badge": null
+    "hidden": true
   },
   {
     "key": "clean",
-    "domain": "Nâng cao",
-    "parent": "Tầng dữ liệu",
+    "domain": "Quản trị",
+    "parent": "Nâng cao",
     "name": "Kho sạch",
     "en": "Dữ liệu đã lọc & bộ nhớ làm việc",
     "title": "Kho sạch & Trí nhớ",
     "subtitle": "Dữ liệu đã phân loại và trí nhớ tạm theo ID",
-    "badge": null
+    "hidden": true
   },
   {
     "key": "identity",
-    "domain": "Nâng cao",
-    "parent": "Tầng dữ liệu",
+    "domain": "Quản trị",
+    "parent": "Nâng cao",
     "name": "Hợp nhất danh tính",
     "en": "Gộp một người nhiều tài khoản",
     "title": "Hợp nhất danh tính",
     "subtitle": "Identity Resolution · một người, nhiều kênh",
-    "badge": "12"
+    "hidden": true
   },
   {
     "key": "agents",
-    "domain": "Nâng cao",
-    "parent": "Agent & Model",
+    "domain": "Quản trị",
+    "parent": "Nâng cao",
     "name": "Danh tính Agent",
     "en": "Tên, giọng, phạm vi trợ lý",
     "title": "Danh tính Agent",
     "subtitle": "Agent Identity · danh tính do Sếp định nghĩa",
-    "badge": null
+    "hidden": true
   },
   {
     "key": "api",
-    "domain": "Nâng cao",
-    "parent": "Agent & Model",
+    "domain": "Quản trị",
+    "parent": "Nâng cao",
     "name": "API & Model",
     "en": "Khoá API và model cho trợ lý",
     "title": "API & Model",
     "subtitle": "Khoá API, endpoint và tham số cho từng agent",
-    "badge": null
+    "hidden": true
   },
   {
     "key": "mcp",
-    "domain": "Nâng cao",
-    "parent": "Agent & Model",
+    "domain": "Quản trị",
+    "parent": "Nâng cao",
     "name": "MCP Hub",
     "en": "Máy chủ MCP bên ngoài",
     "title": "MCP Hub",
     "subtitle": "Máy chủ MCP bên ngoài mà agent được phép gọi",
-    "badge": "7"
-  },
-  {
-    "key": "graph",
-    "domain": "Nâng cao",
-    "parent": null,
-    "name": "Bản đồ quan hệ",
-    "en": "Ai quen ai, qua đâu",
-    "title": "Bản đồ quan hệ",
-    "subtitle": "Relationship Map · ai đang liên quan",
-    "badge": null
-  },
-  {
-    "key": "notebook",
-    "domain": "Nâng cao",
-    "parent": "Bản đồ quan hệ",
-    "name": "Sổ tay nhận thức",
-    "en": "Ghi chú trợ lý theo từng người",
-    "title": "Sổ tay nhận thức",
-    "subtitle": "AI-trợ lý tự ghi nhận thức lũy tiến cho từng ID người và ID nhóm",
-    "badge": null
-  },
-  {
-    "key": "supply",
-    "domain": "Nâng cao",
-    "parent": null,
-    "name": "Cung ↔ Cầu",
-    "en": "Ghép người cần với người có",
-    "title": "Cung ↔ Cầu",
-    "subtitle": "Ai cần mua, ai cần bán, ghép được với ai",
-    "badge": "27"
+    "hidden": true
   },
   {
     "key": "plugins",
-    "domain": "Nâng cao",
-    "parent": null,
+    "domain": "Quản trị",
+    "parent": "Nâng cao",
     "name": "Plugin & Tiện ích",
     "en": "Plugin nền và plugin cài thêm",
     "title": "Plugin & Tiện ích",
     "subtitle": "Plugin nền DSH và plugin cài thêm từ bên ngoài",
-    "badge": "11",
+    "hidden": true
+  },
+  {
+    "key": "system",
+    "domain": "Quản trị",
+    "parent": "Nâng cao",
+    "name": "Cài đặt",
+    "en": "Sao lưu, cập nhật, tổ chức, bộ não AI, quyền, nhật ký",
+    "title": "Cài đặt",
+    "subtitle": "Settings · sao lưu, cập nhật, tổ chức, bộ não AI, quyền, nhật ký",
     "hidden": true
   }
 ]

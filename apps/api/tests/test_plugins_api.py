@@ -16,8 +16,10 @@ async def test_list_plugins_shows_chassis(owner_api) -> None:  # type: ignore[no
     assert {p["package"] for p in items if p["can_disable"]} == {"@gen/channel-zalo", "@gen/channel-whatsapp"}
     assert all(p["health"] == "healthy" and p["breaker"]["state"] == "closed" for p in items)
     nav = (await api.get("/navigation")).json()
-    plug = [n for n in nav[1]["groups"] if n["key"] == "plugins"][0]
-    # F-41 (v0.1.42): màn Plugin đóng băng — có trong cây nhưng ẩn, không badge; API /plugins vẫn chạy.
+    advanced = [n for n in nav[1]["groups"] if n["key"] == "advanced"][0]
+    plug = [n for n in advanced["children"] if n["key"] == "plugins"][0]
+    # F-41 (v0.1.42): màn Plugin đóng băng — có trong cây (v0.1.78: con ẩn của Nâng cao), không badge;
+    # API /plugins vẫn chạy.
     assert plug.get("hidden") is True and plug["badge"] is None
 
 

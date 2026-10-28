@@ -540,7 +540,7 @@ export function RiskWarningDialog({
         <div className="risk-box" role="note">
           <Icon name="ph ph-warning" size={16} color="var(--color-warn)" />
           <div className="risk-box__text">
-            Gen-Harness kết nối {channel.name} như một thiết bị đăng nhập của chính Sếp, không qua cổng chính thức cho doanh nghiệp.{' '}
+            GenOS kết nối {channel.name} như một thiết bị đăng nhập của chính Sếp, không qua cổng chính thức cho doanh nghiệp.{' '}
             {channel.name} có thể tạm khoá hoặc hạn chế tài khoản nếu thấy hoạt động bất thường.
           </div>
         </div>

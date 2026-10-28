@@ -88,7 +88,7 @@ test.describe('v0.1.41 — Gen giữ hội thoại, Hội thoại cũ, Bản tin
     await expect(item).toBeVisible();
     await item.click();
 
-    await expect(page).toHaveURL(/\/overview$/);
+    await expect(page).toHaveURL(/\/intel\?tab=overview$/); // v0.1.78: /overview chuyển hướng sang Tình báo › Tổng quan
     await expect(panel(page)).toBeVisible();
     const msg = panel(page).locator('.gen-msg--briefing');
     await expect(msg).toContainText('Bản tin');
@@ -120,7 +120,7 @@ test.describe('v0.1.41 — Gen giữ hội thoại, Hội thoại cũ, Bản tin
 
     // Bản tin không có khoá API: nút gợi ý mở thẳng API & Model (nơi "Thêm nhà cung cấp").
     await panel(page).locator('.gen-msg--briefing').getByRole('button', { name: 'Mở nơi dán khoá' }).click();
-    await expect(page).toHaveURL(/\/api$/);
+    await expect(page).toHaveURL(/\/admin\/advanced\?tab=api$/); // v0.1.78: API & Model là tab của Quản trị › Nâng cao
     await noObjectText(page);
   });
 

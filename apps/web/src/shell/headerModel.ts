@@ -37,8 +37,36 @@ export const SAVED_VIEW_SCREENS: ReadonlySet<string> = new Set([
   'search',
   'people',
   'care',
+  // v0.1.78: trang có tab nhúng các màn trên (bộ lọc nằm trên URL).
+  'decide',
+  'work',
+  'panorama',
+  'team',
 ]);
 
 export function showSavedViews(key: string | null | undefined, advanced: boolean, savedCount = 0): boolean {
   return advanced || (!!key && (SAVED_VIEW_SCREENS.has(key) || savedCount > 0));
+}
+
+/**
+ * v0.1.78 (G0): chip "Hệ thống" ở header — gom sự cố hệ thống (Zalo im, Hết chuỗi model, sao lưu quá hạn, ổ đĩa…) từ
+ * `GET /system/health › issues` vào MỘT chỗ, để chúng không chiếm ô cảnh báo của Tình báo. Hàm thuần.
+ */
+export interface HealthChipView {
+  tone: 'ok' | 'warn' | 'bad';
+  text: string;
+  count: number;
+}
+
+export function healthChipView(issues: ReadonlyArray<{ severity: string }> | null | undefined): HealthChipView {
+  const list = Array.isArray(issues) ? issues : [];
+  if (!list.length) return { tone: 'ok', text: 'Hệ thống ổn', count: 0 };
+  const bad = list.some((i) => i.severity === 'bad');
+  return { tone: bad ? 'bad' : 'warn', text: list.length === 1 ? '1 sự cố' : `${list.length} sự cố`, count: list.length };
+}
+
+/** Đường dẫn trong app của một sự cố (`link` từ máy chủ) — chỉ nhận đường bắt đầu bằng một dấu `/`; không thì về trang Sức khoẻ. */
+export const HEALTH_FALLBACK_PATH = '/admin/backup?focus=health';
+export function healthIssueLink(link: string | null | undefined): string {
+  return typeof link === 'string' && /^\/(?!\/)/.test(link) ? link : HEALTH_FALLBACK_PATH;
 }

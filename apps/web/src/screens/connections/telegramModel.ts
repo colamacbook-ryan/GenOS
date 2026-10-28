@@ -67,7 +67,7 @@ export function telegramTechDetail(x: { error_code?: string | null; message?: st
 export const BOTFATHER_STEPS: readonly string[] = [
   'Mở Telegram trên điện thoại, tìm @BotFather (có dấu tích xanh) và bấm Bắt đầu (Start).',
   'Gửi lệnh /newbot cho BotFather.',
-  'Đặt tên hiển thị cho bot, vd "Gen-Harness của Sếp".',
+  'Đặt tên hiển thị cho bot, vd "GenOS của Sếp".',
   'Đặt tên đăng nhập cho bot, phải kết thúc bằng "bot", vd genharness_sep_bot.',
   'BotFather gửi lại token dạng 123456789:AAH… — chép nguyên dòng, dán vào ô Token bên dưới.',
   'Mở bot vừa tạo, bấm Bắt đầu (Start) và gửi một tin bất kỳ, rồi bấm "Tìm chat_id".',
@@ -84,7 +84,7 @@ export function telegramKicker(t: Pick<TelegramConfig, 'configured' | 'briefing'
 
 /** Câu cảnh báo cố định của thẻ. */
 export const TELEGRAM_WARNING =
-  'Token là chìa khoá của bot — không gửi cho ai. Gen-Harness lưu mã hoá. Qua Telegram Gen chỉ đọc và đề xuất; mọi thao tác ghi Sếp vẫn xác nhận (kèm mã PIN) trong Console — không bao giờ gõ mã PIN vào Telegram.';
+  'Token là chìa khoá của bot — không gửi cho ai. GenOS lưu mã hoá. Qua Telegram Gen chỉ đọc và đề xuất; mọi thao tác ghi Sếp vẫn xác nhận (kèm mã PIN) trong Console — không bao giờ gõ mã PIN vào Telegram.';
 
 // ─── v0.1.64 — Nhận tin từ Sếp (Telegram 2 chiều) ───────────────────────────────────────────────────────────────
 

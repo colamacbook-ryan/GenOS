@@ -276,15 +276,33 @@ export async function setupOneToDone(page: Page, opts: { skipAi?: boolean } = {}
 export async function finishSetupOne(page: Page, opts: { skipAi?: boolean } = {}): Promise<void> {
   await setupOneToDone(page, opts);
   await page.getByRole('button', { name: /Vào Mặt tiền/ }).click();
-  await expect(page).toHaveURL(/\/owner$/);
+  await expect(page).toHaveURL(/\/intel$/);
 }
 
 /**
- * Đang ở Mặt tiền (/owner$) và trang đầu là Tình báo: mục `owner-nav-intel` (thanh trái, máy tính) hoặc `owner-tabbar-intel`
- * (thanh dưới, điện thoại) đang sáng (aria-current="page").
+ * Đang ở trang đầu của Owner: Tình báo (/intel; trước v0.1.78 là Mặt tiền /owner).
  */
 export async function expectOwnerFront(page: Page): Promise<void> {
-  await expect(page).toHaveURL(/\/owner$/);
-  const intel = page.locator('[data-testid="owner-nav-intel"]:visible, [data-testid="owner-tabbar-intel"]:visible').first();
-  await expect(intel).toHaveAttribute('aria-current', 'page');
+  // v0.1.78: Mặt tiền gộp vào một shell — trang đầu của Owner là Tình báo (/intel); thanh bên (máy tính) tô sáng mục Tình báo.
+  await expect(page).toHaveURL(/\/intel$/);
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Tình báo');
+  const side = page.getByRole('navigation', { name: 'Danh mục màn hình' }).getByRole('link', { name: /^Tình báo/ });
+  if (await side.isVisible()) await expect(side).toHaveAttribute('aria-current', 'page');
+}
+
+/**
+ * v0.1.78 — thay cho thanh dưới 5 mục của Mặt tiền cũ (`owner-tabbar`, đã bỏ theo quyết định của Sếp): trên điện thoại một shell dùng
+ * ngăn kéo danh mục. Kiểm: không còn thanh dưới; nút ☰ mở ngăn kéo có đủ 6 mục hằng ngày + Quản trị (mục cấp 1), mỗi mục cao ≥ 36px;
+ * đóng bằng Esc. Gọi khi chưa mở ngăn chi tiết/hộp thoại nào.
+ */
+export async function expectPhoneNav(page: Page): Promise<void> {
+  await expect(page.getByTestId('owner-tabbar')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Mở danh mục' }).click();
+  const nav = page.getByRole('navigation', { name: 'Danh mục màn hình' });
+  await expect(nav).toBeVisible();
+  const level1 = nav.locator('[data-level1]');
+  await expect(level1).toHaveCount(7);
+  for (const item of await level1.all()) expect((await item.boundingBox())!.height).toBeGreaterThanOrEqual(36);
+  await page.keyboard.press('Escape');
+  await expect(nav).toBeHidden();
 }

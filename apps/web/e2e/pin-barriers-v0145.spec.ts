@@ -96,7 +96,7 @@ test.describe('v0.1.45 — PIN đúng chỗ hạ rào', () => {
     await page.getByRole('button', { name: 'Tiếp tục', exact: true }).click();
     await req;
     await expect(page.getByRole('dialog', { name: 'Mã PIN xác nhận thao tác' })).toHaveCount(0);
-    await expect(page).toHaveURL(/\/guide$/);
+    await expect(page).toHaveURL(/\/admin\/start$/);
   });
 
   test('/guide/9 sau Hoàn tất: đổi mức thì hỏi PIN rồi lưu', async ({ page }) => {
@@ -109,6 +109,6 @@ test.describe('v0.1.45 — PIN đúng chỗ hạ rào', () => {
     await page.getByRole('button', { name: 'Tiếp tục', exact: true }).click();
     await enterOwnerPin(page);
     await req;
-    await expect(page).toHaveURL(/\/guide$/);
+    await expect(page).toHaveURL(/\/admin\/start$/);
   });
 });

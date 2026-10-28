@@ -56,7 +56,7 @@ describe('Hướng dẫn thiết lập (/guide)', () => {
 
     renderGuide([5, 7]);
     expect(screen.getByRole('heading', { name: 'Hướng dẫn thiết lập' })).toBeInTheDocument();
-    expect(document.title).toBe('Hướng dẫn thiết lập · Gen-Harness');
+    expect(document.title).toBe('Hướng dẫn thiết lập · GenOS');
     expect(screen.getByText('Đã xong 2/9 việc')).toBeInTheDocument();
     expect(screen.getAllByText('Đã xong')).toHaveLength(2);
     // Việc chưa xong đầu tiên (06) mở sẵn; việc đã xong thì nút đổi thành "Làm lại / chỉnh".
@@ -78,8 +78,8 @@ describe('Hướng dẫn thiết lập (/guide)', () => {
     // data-gen-target vẫn theo số bước.
     expect(cards[7]).toHaveAttribute('data-gen-target', 'guide.item:13');
     const team = cards.find((c) => within(c).queryByText('Mời người trong đội'))!;
-    // v0.1.42 (F-7): người dùng ở Đội ngũ.
-    expect(within(team).getByRole('link', { name: /Hoặc làm ở Đội ngũ › Người dùng/ })).toHaveAttribute('href', '/team');
+    // v0.1.78 (G0): người dùng ở Quản trị › Người & quyền.
+    expect(within(team).getByRole('link', { name: /Hoặc làm ở Quản trị › Người & quyền/ })).toHaveAttribute('href', '/admin/access');
     const fb = cards[7];
     expect(within(fb).getByText('Kết nối Facebook')).toBeInTheDocument();
     expect(within(fb).getByRole('link', { name: /Mở trang Tài khoản mạng xã hội/ })).toHaveAttribute('href', '/social');

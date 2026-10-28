@@ -21,7 +21,7 @@ export interface PickerOption {
 /** Nhãn của người đang đăng nhập trong mọi ô chọn người. */
 export const ME_LABEL = 'Tôi';
 /** Gợi ý khi danh sách rỗng — đường dẫn đầy đủ cho người CÓ quyền; người không có quyền được bảo nhờ Owner. */
-export const EMPTY_USERS_TEXT = 'Chưa có người dùng nào khác — mời thêm ở Đội ngũ › Người dùng';
+export const EMPTY_USERS_TEXT = 'Chưa có người dùng nào khác — mời thêm ở Quản trị › Người & quyền';
 export const EMPTY_USERS_TEXT_ASK = 'Chưa có người dùng nào khác — nhờ Owner mời thêm người dùng';
 /** Danh sách người bị cắt ở trần của API (`truncated: true`) — báo rõ thay vì im lặng thiếu người. */
 export const TRUNCATED_USERS_TEXT = 'Chỉ hiện 500 người đầu theo tên — người cần tìm có thể nằm ngoài danh sách này';

@@ -209,8 +209,8 @@ describe('buộc đổi mật khẩu (must_change_password)', () => {
     });
     const router = renderAt('/inbox', [
       { path: '/change-password', element: <ForcePasswordPage /> },
-      // v0.1.55 (G5): Owner "/" ⇒ Mặt tiền /owner.
-      { path: '/owner', element: <div>Mặt tiền</div> },
+      // v0.1.78 (G0): "/" ⇒ Tình báo (một shell, mọi vai).
+      { path: '/intel', element: <div>Tình báo</div> },
       {
         path: '/',
         element: <AppShell />,
@@ -230,11 +230,11 @@ describe('buộc đổi mật khẩu (must_change_password)', () => {
     await user.type(screen.getByLabelText('Mật khẩu mới'), 'mat-khau-rieng-cua-sep');
     await user.type(screen.getByLabelText('Nhập lại mật khẩu mới'), 'mat-khau-rieng-cua-sep');
     await user.click(screen.getByRole('button', { name: /Lưu mật khẩu mới/ }));
-    expect(await screen.findByText('Mặt tiền')).toBeInTheDocument();
-    expect(router.state.location.pathname).toBe('/owner');
+    expect(await screen.findByText('Tình báo')).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe('/intel');
   });
 
-  it('không bị buộc thì trang /change-password tự về "/" rồi màn đầu tiên (Owner ⇒ Mặt tiền /owner)', async () => {
+  it('không bị buộc thì trang /change-password tự về "/" rồi màn đầu tiên (⇒ Tình báo /intel)', async () => {
     stubApi((url) =>
       url.endsWith('/auth/me') ? { status: 200, body: ME } : url.endsWith('/navigation') ? { status: 200, body: buildNavigation() } : undefined,
     );
@@ -242,9 +242,9 @@ describe('buộc đổi mật khẩu (must_change_password)', () => {
       { path: '/change-password', element: <ForcePasswordPage /> },
       { path: '/', element: <HomeRedirect /> },
       { path: '/overview', element: <div>Tổng quan</div> },
-      { path: '/owner', element: <div>Mặt tiền</div> },
+      { path: '/intel', element: <div>Tình báo</div> },
     ]);
-    expect(await screen.findByText('Mặt tiền')).toBeInTheDocument();
-    expect(router.state.location.pathname).toBe('/owner');
+    expect(await screen.findByText('Tình báo')).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe('/intel');
   });
 });

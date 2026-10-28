@@ -7,6 +7,14 @@ Ngày = ngày Release trên GitHub theo giờ Việt Nam; tiêu đề trong `doc
 (v0.1.32–v0.1.34, v0.1.40, v0.1.46) hoặc vài ngày (v0.1.47, v0.1.48: làm 03/10, phát hành 09/10).
 Việc sửa nóng không đổi số bản (PR #46, #48, #53, #55, #58, #59) ghi ở [ROADMAP › Bản phản ứng](docs/ROADMAP.md).
 
+## v0.1.78 — (28/10/2026) Một giao diện, menu theo vai; sửa chữ trên Zalo
+- **Một giao diện thay hai:** bỏ Mặt tiền `/owner`; menu mới Tình báo · Cần quyết · Việc · Toàn cảnh · Tôi · Đội ngũ · Quản trị (Bắt đầu, Kết nối, Người & quyền, Sao lưu & cập nhật, Tổ chức, Nhật ký, Nâng cao). Trang chủ là Tình báo. Mọi link cũ tự chuyển sang chỗ mới. Màn dữ liệu, Bản đồ quan hệ, Hồ sơ sống, Đánh giá con người nay có lối vào từ menu.
+- **Chip sức khoẻ ở đầu trang:** sự cố hệ thống (Zalo im, hết model…) gom về một chỗ.
+- **Chữ trên Zalo/Telegram:** hết lỗi cắt «(STK ......»; «Vì sao» lấy lý do thật (không còn câu chung chung); tiêu đề có tên người; `/viec` trả việc Sếp cần làm thật, danh sách thiết lập chuyển sang `/bat_dau`; câu trợ giúp đúng luật «OK».
+- **Tên GenOS** trên logo, tiêu đề trang và câu chữ web (thay Gen-Harness).
+- **Nâng cao › Dữ liệu:** bảng Kho thô vừa khung; Quy tắc sàng lọc và Kho sạch gắn nhãn «đường lọc cũ», chỉ đọc. Không migration.
+- Chi tiết + việc Boss phải làm: [docs/releases/v0.1.78.md](docs/releases/v0.1.78.md).
+
 ## v0.1.77 — (26/10/2026) Bước 1 Tình báo: bảng ưu tiên mới cho bốn cổng thường, chạy thử 14 ngày
 - **Migration `0045`, trên v0.1.76.** Mức 🔴🟠⚪ của bốn loại thường (khách chê công khai/doạ bỏ, lời hứa khách sắp vỡ, cơ hội lớn sắp trôi, sự cố gấp) tính theo bảng ưu tiên: ảnh hưởng × độ gấp, qua cửa «bằng chứng» và «thẩm quyền» (nhân viên đang lo, khách đòi gặp chủ, khách chủ chốt, giờ làm). Lừa đảo/an toàn **không đổi**.
 - **Sửa lỗi từ v0.1.76:** tin 🔴 lừa đảo/an toàn có thể không tới Zalo khi hai job đánh giá cùng tin trong một phút — nay luôn gửi đúng một tin.

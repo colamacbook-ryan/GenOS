@@ -67,8 +67,8 @@ describe('Header (F-67, F-63)', () => {
     renderWith(<Header crumbs={CRUMBS} />);
     expect(await screen.findByText(/2 kênh · 5 nhóm/)).toBeInTheDocument();
     expect(screen.queryByText('Soạn sẵn chờ duyệt')).toBeNull();
-    // v0.1.43 (F-62): nút kính lúp cùng tên với màn /search.
-    expect(screen.getByRole('button', { name: 'Kho hội thoại' })).toBeInTheDocument();
+    // v0.1.78: nút kính lúp mở Toàn cảnh › Tìm (đường cũ /search chuyển hướng tới đó).
+    expect(screen.getByRole('button', { name: 'Tìm trong mọi hội thoại' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Tìm theo ý định' })).toBeNull();
     expect(screen.queryByText('78%')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Góc nhìn đã lưu' })).toBeNull();
@@ -99,16 +99,17 @@ describe('Header (F-67, F-63)', () => {
 });
 
 describe('Logo + menu tài khoản (F-67, F-63)', () => {
-  it('logo hiện "Gen-Harness · v0.1.42" từ /system/about; không còn "v2.2"', async () => {
+  it('logo hiện "v0.1.42, tên GenOS" từ /system/about; không còn "v2.2"', async () => {
     renderWith(<Sidebar activeKey="overview" />, 'owner', (qc) => qc.setQueryData(qk.navigation, buildNavigation()));
-    expect(await screen.findByTestId('logo-version')).toHaveTextContent('Gen-Harness · v0.1.42');
+    expect(await screen.findByTestId('logo-version')).toHaveTextContent(/^v0\.1\.42$/);
+    expect(document.querySelector('.sb-logo__name')).toHaveTextContent('GenOS');
     expect(document.body.textContent).not.toContain('v2.2');
   });
 
   it('/system/about lỗi → bỏ dòng phiên bản', async () => {
     about = () => new Response(JSON.stringify({ status: 500, code: 'INTERNAL', title: 'Lỗi' }), { status: 500, headers: { 'Content-Type': 'application/problem+json' } });
     renderWith(<Sidebar activeKey="overview" />, 'owner', (qc) => qc.setQueryData(qk.navigation, buildNavigation()));
-    await screen.findByText('GEN‑HARNESS');
+    await screen.findByText('GenOS');
     await new Promise((r) => setTimeout(r, 30));
     expect(screen.queryByTestId('logo-version')).toBeNull();
     expect(document.body.textContent).not.toContain('v2.2');
@@ -119,14 +120,14 @@ describe('Logo + menu tài khoản (F-67, F-63)', () => {
       new Response(JSON.stringify({ org_name: 'x', timezone: 'Asia/Ho_Chi_Minh', role: { code: 'owner', name: 'Owner' }, ...v }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     about = body({ version: null, image_version: 'dev', genh_version: null });
     const r = renderWith(<Sidebar activeKey="overview" />, 'owner', (qc) => qc.setQueryData(qk.navigation, buildNavigation()));
-    await screen.findByText('GEN‑HARNESS');
+    await screen.findByText('GenOS');
     await new Promise((res) => setTimeout(res, 30));
     expect(screen.queryByTestId('logo-version')).toBeNull();
     expect(document.body.textContent).not.toContain('dev');
     r.unmount();
     about = body({ version: 'v0.1.42', image_version: 'v0.1.41', genh_version: 'v0.1.42' });
     renderWith(<Sidebar activeKey="overview" />, 'owner', (qc) => qc.setQueryData(qk.navigation, buildNavigation()));
-    expect(await screen.findByTestId('logo-version')).toHaveTextContent('Gen-Harness · v0.1.42');
+    expect(await screen.findByTestId('logo-version')).toHaveTextContent(/^v0\.1\.42$/);
   });
 
   it('menu tài khoản không còn "Phụ đề tiếng Anh"', async () => {
@@ -144,7 +145,7 @@ describe('Đội ngũ', () => {
     expect(await screen.findByRole('heading', { name: 'Đội ngũ' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Đánh giá con người/ })).toHaveAttribute('href', '/people');
     expect(screen.getByRole('link', { name: /Chất lượng chăm sóc/ })).toHaveAttribute('href', '/care');
-    expect(screen.queryByRole('note')).toBeNull();
+    // v0.1.78: TeamScreen không còn route (Đội ngũ mới là /team với tab) — thanh bên không còn ẩn mục con, nên không kiểm ghi chú ở đây.
   });
 
   it('chưa có nhân viên: vẫn có liên kết (không ngõ cụt), ghi chú nói cách đánh dấu nhân viên ở hồ sơ + link Khách & Nhóm (v0.1.64)', async () => {

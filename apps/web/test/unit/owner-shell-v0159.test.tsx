@@ -8,23 +8,15 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { Navigate, RouterProvider, createMemoryRouter, useLocation, type RouteObject } from 'react-router-dom';
+import { RouterProvider, createMemoryRouter, useLocation } from 'react-router-dom';
 import { hasIcon } from '@gen-harness/ui';
 import { useGenStore } from '../../src/gen/genStore';
-import { BackToFront } from '../../src/owner/BackToFront';
 import { AskGenScreen, closeAskGen, openAskGen, useAskGenStore } from '../../src/owner/AskGenScreen';
 import { MoreScreen } from '../../src/owner/MoreScreen';
-import { OwnerShell } from '../../src/owner/OwnerShell';
-import { AnalyticsScreen } from '../../src/owner/analytics/AnalyticsScreen';
-import { FeedScreen } from '../../src/owner/feed/FeedScreen';
-import { IntelScreen } from '../../src/owner/intel/IntelScreen';
-import { RelationsScreen } from '../../src/owner/relations/RelationsScreen';
-import { WorkScreen } from '../../src/owner/work/WorkScreen';
 import { FirstRunCard } from '../../src/owner/parts';
-import { useUiStore } from '../../src/lib/uiStore';
 import {
   ADVANCED_SETTINGS_PATH,
   OWNER_NAV,
@@ -44,7 +36,6 @@ import {
   safeLink,
 } from '../../src/owner/ownerModel';
 import { ownerEndpoints } from '@gen-harness/contracts';
-import { routes } from '../../src/router';
 import { createMock as createOwnerMock } from '../mock-owner';
 import type { P2Ctx } from '../mock-phase2';
 
@@ -182,39 +173,6 @@ function mountScreen(ui: React.ReactElement, path = '/owner', qc: QueryClient = 
     </QueryClientProvider>,
   );
   return router;
-}
-
-const SHELL_ROUTES: RouteObject[] = [
-  {
-    path: '/owner',
-    element: <OwnerShell />,
-    children: [
-      { index: true, element: <IntelScreen /> },
-      { path: 'thong-tin', element: <FeedScreen /> },
-      { path: 'quan-he', element: <RelationsScreen /> },
-      { path: 'phan-tich', element: <AnalyticsScreen /> },
-      { path: 'viec', element: <WorkScreen /> },
-      { path: 'gen', element: <AskGenScreen /> },
-      { path: 'them', element: <MoreScreen /> },
-      { path: '*', element: <Navigate to="/owner" replace /> },
-    ],
-  },
-  { path: '/', element: <Where /> },
-  { path: '/guide/viec-sep', element: <Where /> },
-  { path: '/guide/5', element: <Where /> },
-  { path: '/help', element: <Where /> },
-  { path: '/login', element: <Where /> },
-  { path: '/change-password', element: <Where /> },
-];
-
-function mountShell(path: string) {
-  const router = createMemoryRouter(SHELL_ROUTES, { initialEntries: [path] });
-  const { unmount } = render(
-    <QueryClientProvider client={client()}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>,
-  );
-  return { router, unmount };
 }
 
 /** Không màn nào được để lộ object thô ra chữ. */
@@ -467,233 +425,6 @@ describe('Cài đặt (/owner/them) — v0.1.59: 4 khối', () => {
 
 // ── khung ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-describe('OwnerShell', () => {
-  it('máy tính (≥ 760px): thanh trái 5 trụ cột + Cài đặt đúng testid, vạch ngăn trước Cài đặt, không có thanh dưới', async () => {
-    mountShell('/owner');
-    const rail = await screen.findByRole('navigation', { name: 'Mặt tiền' });
-    const links = within(rail).getAllByRole('link');
-    expect(links.map((l) => l.textContent)).toEqual(['Tình báo', 'Thông tin', 'Quan hệ', 'Phân tích', 'Việc', 'Cài đặt']);
-    for (const key of ['intel', 'feed', 'relations', 'analytics', 'work', 'settings']) {
-      expect(within(rail).getByTestId(`owner-nav-${key}`)).toBeInTheDocument();
-    }
-    expect(within(rail).getByTestId('owner-nav-intel')).toHaveAttribute('aria-current', 'page');
-    expect(within(rail).getByTestId('owner-nav-feed')).not.toHaveAttribute('aria-current');
-    // vạch ngăn nằm ngay trước Cài đặt
-    expect(within(rail).getByRole('separator').nextElementSibling).toBe(within(rail).getByTestId('owner-nav-settings'));
-    expect(screen.queryByTestId('owner-tabbar')).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Tình báo');
-    expect(screen.getByTestId('owner-ask-gen')).toBeInTheDocument();
-    expect(screen.getByTestId('owner-avatar-menu')).toBeInTheDocument();
-    // G3 thay khung tạm bằng màn Tình báo thật: ô đầu tiên là "Việc phải quyết".
-    expect(await screen.findByTestId('owner-frame-intel')).toHaveTextContent('Việc phải quyết');
-  });
-
-  it('< 760px: thanh dưới đúng 5 nút đúng testid, không có thanh trái; bấm chuyển màn', async () => {
-    setViewport(true);
-    const { router } = mountShell('/owner');
-    const bar = await screen.findByTestId('owner-tabbar');
-    const items = within(bar).getAllByRole('link');
-    expect(items).toHaveLength(5);
-    expect(items.map((i) => i.textContent)).toEqual(['Tình báo', 'Thông tin', 'Quan hệ', 'Phân tích', 'Việc']);
-    for (const key of ['intel', 'feed', 'relations', 'analytics', 'work']) expect(within(bar).getByTestId(`owner-tabbar-${key}`)).toBeInTheDocument();
-    expect(within(bar).queryByTestId('owner-tabbar-settings')).not.toBeInTheDocument();
-    expect(screen.queryByRole('navigation', { name: 'Mặt tiền' })).not.toBeInTheDocument();
-    await userEvent.click(within(bar).getByTestId('owner-tabbar-relations'));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/owner/quan-he'));
-    expect(within(bar).getByTestId('owner-tabbar-relations')).toHaveAttribute('aria-current', 'page');
-    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Quan hệ');
-  });
-
-  it('số đếm: Thông tin = urgent_open, Việc = decide (mỗi nút tối đa một số)', async () => {
-    setViewport(true);
-    server.todayNav = { urgent_open: 3, decide: 4 };
-    mountShell('/owner');
-    const bar = await screen.findByTestId('owner-tabbar');
-    await waitFor(() => expect(within(screen.getByTestId('owner-tabbar-feed')).getByText('3')).toBeInTheDocument());
-    expect(within(screen.getByTestId('owner-tabbar-work')).getByText('4')).toBeInTheDocument();
-    for (const key of ['intel', 'relations', 'analytics']) expect(within(screen.getByTestId(`owner-tabbar-${key}`)).queryByText(/^\d+\+?$/)).toBeNull();
-    expect(within(bar).getAllByText(/^\d+\+?$/)).toHaveLength(2);
-    noRawObjects();
-  });
-
-  it('thanh trái cũng có số đếm; chạm trần 999 ⇒ "999+"', async () => {
-    server.todayNav = { urgent_open: 1500, decide: 2 };
-    mountShell('/owner');
-    const feed = await screen.findByTestId('owner-nav-feed');
-    await waitFor(() => expect(within(feed).getByText('999+')).toBeInTheDocument());
-    expect(within(screen.getByTestId('owner-nav-work')).getByText('2')).toBeInTheDocument();
-    expect(within(screen.getByTestId('owner-nav-intel')).queryByText(/\d/)).toBeNull();
-  });
-
-  it('thiếu today.nav (máy chủ cũ) ⇒ khung vẫn dựng, không có số', async () => {
-    server.todayNav = null;
-    mountShell('/owner');
-    await screen.findByTestId('owner-nav-feed');
-    await waitFor(() => expect(server.calls.some((u) => u.includes('/owner/today'))).toBe(true));
-    expect(within(screen.getByTestId('owner-nav-feed')).queryByText(/\d/)).toBeNull();
-    expect(within(screen.getByTestId('owner-nav-work')).queryByText(/\d/)).toBeNull();
-  });
-
-  it('mọi đường /owner/* render trong khung (tiêu đề là h1, có nút Hỏi Gen và menu ảnh đại diện); đường lạ về /owner', async () => {
-    const cases: Array<[string, string, string]> = [
-      ['/owner', 'Tình báo', 'owner-frame-intel'],
-      ['/owner/thong-tin', 'Thông tin', 'owner-frame-feed'],
-      ['/owner/quan-he', 'Quan hệ', 'owner-frame-relations'],
-      ['/owner/phan-tich', 'Phân tích', 'owner-frame-analytics'],
-      ['/owner/viec', 'Việc', 'owner-frame-work'],
-      ['/owner/gen', 'Hỏi Gen', 'owner-gen-panel'],
-      ['/owner/them', 'Cài đặt', 'owner-more'],
-    ];
-    for (const [path, title, testId] of cases) {
-      const { unmount } = mountShell(path);
-      expect(await screen.findByRole('heading', { level: 1, name: title }), path).toBeInTheDocument();
-      expect(await screen.findByTestId(testId), path).toBeInTheDocument();
-      expect(screen.getByTestId('owner-ask-gen')).toBeInTheDocument();
-      expect(screen.getByTestId('owner-avatar-menu')).toBeInTheDocument();
-      noRawObjects();
-      unmount();
-    }
-    const router = mountShell('/owner/khong-co-trang-nay').router;
-    await waitFor(() => expect(router.state.location.pathname).toBe('/owner'));
-    expect(await screen.findByTestId('owner-frame-intel')).toBeInTheDocument();
-  });
-
-  it('nút Hỏi Gen mở ngăn (hộp thoại), Esc đóng; ngăn nhúng khung chat Gen', async () => {
-    mountShell('/owner');
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    await userEvent.click(await screen.findByTestId('owner-ask-gen'));
-    const dlg = await screen.findByRole('dialog', { name: 'Hỏi Gen' });
-    expect(within(dlg).getByLabelText('Gen — trợ lý quản trị')).toBeInTheDocument();
-    expect(within(dlg).getByLabelText('Câu hỏi cho Gen')).toBeInTheDocument();
-    expect(useAskGenStore.getState().open).toBe(true);
-    await userEvent.keyboard('{Escape}');
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-    expect(useAskGenStore.getState().open).toBe(false);
-  });
-
-  it('nút × của khung Gen trong ngăn đóng ngăn; mở lại được', async () => {
-    mountShell('/owner');
-    await userEvent.click(await screen.findByTestId('owner-ask-gen'));
-    const dlg = await screen.findByRole('dialog', { name: 'Hỏi Gen' });
-    await userEvent.click(within(dlg).getByRole('button', { name: 'Đóng khung Gen' }));
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-    await userEvent.click(screen.getByTestId('owner-ask-gen'));
-    expect(await screen.findByRole('dialog', { name: 'Hỏi Gen' })).toBeInTheDocument();
-  });
-
-  it('Gen tắt: ngăn Hỏi Gen giải thích + link Bộ não AI (không có khung chat)', async () => {
-    server.me = ME({ features: { gen: false } });
-    mountShell('/owner');
-    await userEvent.click(await screen.findByTestId('owner-ask-gen'));
-    const dlg = await screen.findByRole('dialog', { name: 'Hỏi Gen' });
-    expect(within(dlg).getByText('Gen đang tắt')).toBeInTheDocument();
-    expect(within(dlg).getByRole('link', { name: 'Mở Bộ não AI' })).toHaveAttribute('href', '/system?tab=brain');
-    expect(within(dlg).queryByLabelText('Câu hỏi cho Gen')).not.toBeInTheDocument();
-  });
-
-  it('ở trang /owner/gen: nút Hỏi Gen chỉ đưa con trỏ vào ô nhập, không mở ngăn thứ hai', async () => {
-    mountShell('/owner/gen');
-    const input = await screen.findByLabelText('Câu hỏi cho Gen');
-    await userEvent.click(screen.getByTestId('owner-ask-gen'));
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    expect(screen.getAllByLabelText('Câu hỏi cho Gen')).toHaveLength(1);
-    expect(input).toHaveFocus();
-  });
-
-  it('openAskGen(prefill) khi đang ở một màn: ngăn mở và câu được ĐIỀN SẴN vào ô nhập của Gen, không gửi', async () => {
-    mountShell('/owner/thong-tin');
-    await screen.findByTestId('owner-frame-feed');
-    act(() => openAskGen('Soạn giúp tôi tin trả lời khách hỏi giá'));
-    const dlg = await screen.findByRole('dialog', { name: 'Hỏi Gen' });
-    await waitFor(() => expect(within(dlg).getByLabelText('Câu hỏi cho Gen')).toHaveValue('Soạn giúp tôi tin trả lời khách hỏi giá'));
-    expect(useGenStore.getState().messages).toHaveLength(0);
-    expect(server.calls.some((u) => u.includes('/gen/ask') || u.includes('/gen/turns'))).toBe(false);
-    act(() => closeAskGen());
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-  });
-
-  it('menu ảnh đại diện: Cài đặt · Trợ giúp · Đổi giao diện sáng/tối · Đăng xuất; đổi giao diện dùng lại uiStore', async () => {
-    const { router } = mountShell('/owner');
-    await userEvent.click(await screen.findByTestId('owner-avatar-menu'));
-    const menu = await screen.findByRole('menu', { name: 'Tài khoản' });
-    expect(within(menu).getAllByRole('menuitem').map((m) => m.textContent)).toEqual([
-      'Cài đặt', 'Trợ giúp', expect.stringContaining('Đổi giao diện sáng/tối'), 'Đăng xuất',
-    ]);
-    // đổi giao diện: tối (mặc định) ⇒ sáng, lưu theo người dùng; menu đóng
-    await userEvent.click(within(menu).getByRole('menuitem', { name: /Đổi giao diện sáng\/tối/ }));
-    expect(useUiStore.getState().themeByUser.u1).toBe('light');
-    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
-    // Cài đặt → /owner/them
-    await userEvent.click(screen.getByTestId('owner-avatar-menu'));
-    await userEvent.click(within(await screen.findByRole('menu', { name: 'Tài khoản' })).getByRole('menuitem', { name: 'Cài đặt' }));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/owner/them'));
-  });
-
-  it('menu ảnh đại diện: Esc đóng; Trợ giúp → /help', async () => {
-    const { router } = mountShell('/owner');
-    await userEvent.click(await screen.findByTestId('owner-avatar-menu'));
-    await screen.findByRole('menu', { name: 'Tài khoản' });
-    await userEvent.keyboard('{Escape}');
-    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
-    await userEvent.click(screen.getByTestId('owner-avatar-menu'));
-    await userEvent.click(within(await screen.findByRole('menu', { name: 'Tài khoản' })).getByRole('menuitem', { name: 'Trợ giúp' }));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/help'));
-  });
-
-  it('menu ảnh đại diện: Đăng xuất gọi đăng xuất rồi về trang đăng nhập', async () => {
-    const { router } = mountShell('/owner');
-    await userEvent.click(await screen.findByTestId('owner-avatar-menu'));
-    await userEvent.click(within(await screen.findByRole('menu', { name: 'Tài khoản' })).getByRole('menuitem', { name: 'Đăng xuất' }));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/login'));
-    expect(server.calls.some((u) => u.includes('/auth/logout'))).toBe(true);
-  });
-
-  it('vai khác Owner mở /owner/* ⇒ chuyển "/"', async () => {
-    server.me = ME({}, 'operator');
-    const { router } = mountShell('/owner/quan-he');
-    await waitFor(() => expect(router.state.location.pathname).toBe('/'));
-    expect(server.calls.some((u) => u.includes('/owner/'))).toBe(false);          // không gọi API Owner
-  });
-
-  it('mật khẩu tạm ⇒ /change-password', async () => {
-    server.me = ME({ must_change_password: true });
-    const { router } = mountShell('/owner');
-    await waitFor(() => expect(router.state.location.pathname).toBe('/change-password'));
-  });
-
-  it('không tải được tài khoản ⇒ lỗi thân thiện + Chi tiết kỹ thuật', async () => {
-    server.meFails = true;
-    mountShell('/owner');
-    expect(await screen.findByTestId('owner-shell-error')).toHaveTextContent('Chi tiết kỹ thuật');
-  });
-
-  it('đang hỏi tài khoản ⇒ khung chờ owner-boot', async () => {
-    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => undefined)));
-    mountShell('/owner');
-    expect(await screen.findByTestId('owner-boot')).toBeInTheDocument();
-  });
-
-  it('?gen=coach: Gen bật ⇒ ở lại Tình báo (/owner), bỏ tham số, mở ngăn Hỏi Gen (nơi có thẻ Hôm nay của Sếp)', async () => {
-    const { router } = mountShell('/owner/viec?gen=coach');
-    await waitFor(() => expect(router.state.location.pathname).toBe('/owner'));
-    expect(router.state.location.search).toBe('');
-    expect(await screen.findByRole('dialog', { name: 'Hỏi Gen' })).toBeInTheDocument();
-  });
-
-  it('?gen=coach với Gen tắt ⇒ /guide/viec-sep như hiện nay', async () => {
-    server.me = ME({ features: { gen: false } });
-    const { router } = mountShell('/owner?gen=coach');
-    await waitFor(() => expect(router.state.location.pathname).toBe('/guide/viec-sep'));
-  });
-
-  it('?gen=<mã hội thoại> (Bản tin từ chuông) ⇒ mở Hỏi Gen (trang /owner/gen vẫn mở được)', async () => {
-    const { router } = mountShell('/owner?gen=0192aaaa-bbbb-4ccc-8ddd-eeeeffff0000');
-    await waitFor(() => expect(router.state.location.pathname).toBe('/owner/gen'));
-    expect(router.state.location.search).toBe('');
-    expect(await screen.findByTestId('owner-gen-panel')).toBeInTheDocument();
-  });
-});
-
 describe('Hỏi Gen: hợp đồng openAskGen / closeAskGen', () => {
   it('openAskGen(prefill) đặt composer draft và mở ngăn; closeAskGen đóng', () => {
     expect(useAskGenStore.getState().open).toBe(false);
@@ -737,25 +468,6 @@ describe('FirstRunCard (ngày đầu)', () => {
   });
 });
 
-describe('BackToFront ("← Về Mặt tiền")', () => {
-  it('Owner thấy, bấm về /owner', async () => {
-    const router = mountScreen(<><BackToFront /><Where /></>, '/overview');
-    const link = await screen.findByTestId('back-to-front');
-    expect(link).toHaveAccessibleName('Về Mặt tiền');
-    expect(link).toHaveTextContent('← Về Mặt tiền');
-    await userEvent.click(link);
-    await waitFor(() => expect(router.state.location.pathname).toBe('/owner'));
-  });
-
-  it('vai khác Owner không thấy', async () => {
-    server.me = ME({}, 'manager');
-    mountScreen(<><BackToFront /><Where /></>, '/overview');
-    await waitFor(() => expect(server.calls.some((u) => u.includes('/auth/me'))).toBe(true));
-    await new Promise((r) => setTimeout(r, 30));
-    expect(screen.queryByTestId('back-to-front')).not.toBeInTheDocument();
-  });
-});
-
 describe('biểu tượng', () => {
   it('mọi icon Mặt tiền dùng đều có trong bảng icon của @gen-harness/ui (tên lạ vẽ ra ô trống)', () => {
     const dir = resolve(__dirname, '../../src/owner');
@@ -766,20 +478,5 @@ describe('biểu tượng', () => {
     }
     expect(names.size).toBeGreaterThan(15);
     expect([...names].filter((n) => !hasIcon(n))).toEqual([]);
-  });
-});
-
-describe('cụm route', () => {
-  it('/owner khai báo tay ngoài screens.json, đặt trước "/" (AppShell), có đủ 7 con + đường lạ về /owner', () => {
-    const root = routes[0].children ?? [];
-    const idxOwner = root.findIndex((r) => r.path === '/owner');
-    const idxHome = root.findIndex((r) => r.path === '/');
-    expect(idxOwner).toBeGreaterThanOrEqual(0);
-    expect(idxOwner).toBeLessThan(idxHome);
-    const kids = root[idxOwner].children ?? [];
-    expect(kids.map((k) => (k.index ? 'index' : k.path))).toEqual(['index', 'thong-tin', 'quan-he', 'phan-tich', 'viec', 'gen', 'them', '*']);
-    const consolePaths = (root[idxHome].children ?? []).map((c) => c.path);
-    expect(consolePaths).not.toContain('owner');
-    expect(consolePaths.at(-1)).toBe('*');
   });
 });

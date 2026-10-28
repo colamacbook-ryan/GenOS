@@ -52,7 +52,7 @@ export function GuideStepPage() {
   const guide = GUIDE_BY_N[n];
 
   useEffect(() => {
-    if (guide) document.title = `${guide.title} · Hướng dẫn thiết lập · Gen-Harness`;
+    if (guide) document.title = `${guide.title} · Hướng dẫn thiết lập · GenOS`;
   }, [guide]);
 
   const Step = STEPS[n];

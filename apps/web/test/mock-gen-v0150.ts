@@ -118,7 +118,7 @@ export function createMock(opts: GenV0150Options) {
 
   // ── Kịch bản + xác nhận cho mock-gen ──────────────────────────────────────────────────────────────────
   const PHIEN_RECORD: Record<string, string> = {
-    'Chủ đề': 'Gen-Harness v0.1.50 — Gen nhớ và ghi Kho có mã PIN',
+    'Chủ đề': 'GenOS v0.1.50 — Gen nhớ và ghi Kho có mã PIN',
     Ngày: '2026-10-09',
     'Đã chốt': 'Gen nhớ tối đa 30 ghi chú; ghi Kho chỉ khi Sếp Xác nhận và nhập mã PIN',
     'Việc tiếp': 'Sếp duyệt đề xuất PHIEN đầu tiên của Gen',

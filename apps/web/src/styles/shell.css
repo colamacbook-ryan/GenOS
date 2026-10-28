@@ -247,3 +247,18 @@
   /* 375px: nhường chỗ cho tiêu đề. */
   .hd-right .hd-saved { display: none; }
 }
+
+/* v0.1.78 (G0): chip sức khoẻ hệ thống ở header + vùng nhúng màn Mặt tiền cũ. */
+.hd-health { position: relative; display: flex; }
+.hd-health__menu {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 30; width: min(340px, calc(100vw - 24px));
+  display: flex; flex-direction: column; gap: 10px; padding: 12px;
+  background: var(--color-surface); border: 1px solid var(--color-divider); border-radius: 10px;
+}
+.hd-health__item { display: flex; gap: 8px; align-items: flex-start; min-width: 0; }
+.hd-health__text { min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; }
+.hd-health__title { color: var(--color-text); overflow-wrap: anywhere; }
+.hd-health__link, .hd-health__all { color: var(--color-accent-300); font-size: 12px; }
+.hd-health__empty { margin: 0; font-size: 12.5px; color: var(--color-neutral-400); }
+.owner-embed { background: transparent; min-width: 0; }
+.hub__panel { min-width: 0; }

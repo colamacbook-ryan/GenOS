@@ -51,6 +51,9 @@ export const MOCK_OWNER = { email: 'owner@genesis.local', password: 'matkhau-rat
 
 /** Badge values shown in the design, served so the shell can be compared with it. */
 const DESIGN_BADGES: Record<string, { value: string; tone: 'ok' | 'warn' | 'bad' }> = {
+  intel: { value: '9', tone: 'bad' },
+  decide: { value: '6', tone: 'warn' },
+  work: { value: '3', tone: 'bad' },
   overview: { value: '9', tone: 'bad' },
   inbox: { value: '28', tone: 'warn' },
   workbench: { value: '6', tone: 'warn' },
@@ -142,7 +145,7 @@ function restoreMatrix(): void {
   for (const [k, v] of Object.entries(MATRIX_DEFAULT)) MATRIX[k] = [...v] as [string, string, string, string, string];
 }
 const SCREEN_PERMISSION: Record<string, string[]> = {
-  overview: ['overview.read'], inbox: ['queue.read'], workbench: ['action.draft', 'action.approve'],
+  overview: ['overview.read'], inbox: ['queue.read'], tasks: ['queue.read'], deals: ['opportunity.read'], workbench: ['action.draft', 'action.approve'],
   directory: ['profile.read'], graph: ['profile.read'], profile: ['profile.read'], notebook: ['profile.read'],
   documents: ['profile.read'],
   opportunity: ['opportunity.read'], supply: ['opportunity.read'], search: ['opportunity.read'],
@@ -150,8 +153,12 @@ const SCREEN_PERMISSION: Record<string, string[]> = {
   listenlog: ['data.read'], raw: ['data.read'], rules: ['data.read'], clean: ['data.read'], identity: ['data.read'],
   agents: ['system.read'], api: ['system.read'], mcp: ['system.read'], plugins: ['system.read'],
   system: ['system.read', 'audit.read'],
-  // v0.1.42: Kết nối (system.read), Đội ngũ (roles.manage).
-  connections: ['system.read'], team: ['roles.manage'],
+  connections: ['system.read'],
+  // v0.1.78 (G0): mục thanh bên mới — khớp apps/api/gh/auth/rbac.py SCREEN_PERMISSION.
+  intel: ['overview.read', 'queue.read'], decide: ['action.draft', 'action.approve'], work: ['queue.read'],
+  panorama: ['profile.read', 'opportunity.read'], me: ['roles.manage'], team: ['people_review.read', 'care.read'],
+  start: ['system.manage'], access: ['system.read'], backup: ['system.read'], org: ['system.read'], log: ['audit.read'],
+  advanced: ['system.read', 'data.read'],
 };
 export function permissionsOf(role: RoleCode): Record<string, string> {
   const i = ROLE_ORDER.indexOf(role);
@@ -163,7 +170,11 @@ export function hiddenScreens(role: RoleCode): Set<string> {
   // Q4 (docs/PLAN.md): Auditor VẪN thấy màn "Đánh giá con người" trong danh mục (nhánh log — nhật ký ai đã
   // xem), dù phạm vi chung `people_review.read` của Auditor là 'none' như Manager. Đây là ngoại lệ nội dung
   // (che điểm/chứng cứ ở tầng route), không phải ẩn hẳn màn như Manager — khác `care` (Q4 không nói tới `care`).
-  if (role === 'auditor') hidden.delete('people');
+  // v0.1.78: "Đánh giá con người" là tab của trang Đội ngũ (`team`) ⇒ giữ cả trang cho Auditor (tab Chăm sóc vẫn ẩn).
+  if (role === 'auditor') {
+    hidden.delete('people');
+    hidden.delete('team');
+  }
   return hidden;
 }
 /** Which realtime events a connection may receive (docs/api/phase-2.md § WebSocket). */
@@ -199,7 +210,7 @@ export function buildNavigation(
     name,
     en,
     icon,
-    badge: badges ? (DESIGN_BADGES[key] ?? null) : null,
+    badge: badges && !navHidden(key) ? (DESIGN_BADGES[key] ?? null) : null,
     children: [],
     ...(navHidden(key) ? { hidden: true } : {}),
   });
@@ -230,7 +241,7 @@ export function buildNavigation(
         label: d.label,
         crumb: d.crumb,
         icon: d.icon,
-        tone: d.id === 'business' ? ('ok' as const) : ('accent' as const),
+        tone: d.id === 'daily' ? ('ok' as const) : ('accent' as const),
         collapsed: d.collapsedByDefault,
         count,
         groups,
@@ -323,11 +334,11 @@ const HEALTH_KIND_DEFAULTS: Record<string, Omit<HealthIssue, 'raised_at' | 'body
   'offsite.failed': { key: 'offsite.failed', kind: 'offsite.failed', severity: 'warn', title: 'Sao lưu ra ổ ngoài chưa thành công', body: "Chưa thấy ổ USB/NAS — cắm lại ổ rồi bấm 'Sao lưu ra ổ ngoài ngay'", link: '/system?tab=storage&focus=offsite', action: 'Xem bản sao ngoài máy' },
   'job.timeout': { key: 'job.timeout:retention_sweep', kind: 'job.timeout', severity: 'warn', title: 'Việc nền "dọn dữ liệu theo hạn lưu" chạy quá giờ', body: 'Việc đã bị dừng và sẽ chạy lại ở lần sau. Lặp lại nhiều lần thì gửi kèm khi báo lỗi.', link: '/system?tab=storage', action: 'Xem sức khoẻ' },
   // v0.1.46 (F-21) — gh/health.py _eval_network: chép đúng OPEN_LAN_TITLE/OPEN_LAN_BODY/ACCESS_LINK; thẻ đích focus=access.
-  'network.open_lan': { key: 'network.open_lan', kind: 'network.open_lan', severity: 'warn', title: 'Cổng đang mở cho cả mạng', body: 'Mọi máy cùng mạng (Wi-Fi văn phòng, khách…) đều thấy trang đăng nhập Gen-Harness. Bấm để xem lệnh chọn cách truy cập (chạy trên máy chủ): Tailscale (khuyên dùng), chỉ máy này, hoặc giữ mở cho mạng nội bộ.', link: '/system?tab=storage&focus=access', action: 'Chọn cách truy cập' },
+  'network.open_lan': { key: 'network.open_lan', kind: 'network.open_lan', severity: 'warn', title: 'Cổng đang mở cho cả mạng', body: 'Mọi máy cùng mạng (Wi-Fi văn phòng, khách…) đều thấy trang đăng nhập GenOS. Bấm để xem lệnh chọn cách truy cập (chạy trên máy chủ): Tailscale (khuyên dùng), chỉ máy này, hoặc giữ mở cho mạng nội bộ.', link: '/system?tab=storage&focus=access', action: 'Chọn cách truy cập' },
   // v0.1.53 (F-99) — gh/health.py _eval_nightly (NIGHTLY_BODY/NIGHTLY_LINGER/NIGHTLY_ENABLE, HEALTH_LINK, ACTIONS): thân ghép
   // từ chuỗi cố định; số ngày / bước linger do healthView tính khi suy từ khối `nightly`.
   'host.nightly': { key: 'host.nightly', kind: 'host.nightly', severity: 'warn', title: 'Lịch tự cập nhật đêm chưa chạy 3 ngày', body: 'Máy chủ không tự lên bản mới. Trên máy chủ chạy: genh auto-update status · Sau đó bật lại lịch: genh auto-update enable', link: '/system?tab=storage&focus=health', action: 'Xem cách bật lại' },
-  'host.autostart': { key: 'host.autostart', kind: 'host.autostart', severity: 'warn', title: 'Máy chủ có thể không tự chạy lại Gen-Harness khi bật lại máy', body: 'Docker chưa bật tự chạy khi mở máy — chạy một lần trên máy chủ: sudo systemctl enable docker · Lịch tự cập nhật và nút Cập nhật ngay chỉ chạy khi có người đăng nhập — chạy một lần: sudo loginctl enable-linger $USER · Chạy xong thì chạy genh status để cảnh báo tự hết', link: '/system?tab=storage', action: 'Xem cách bật' },
+  'host.autostart': { key: 'host.autostart', kind: 'host.autostart', severity: 'warn', title: 'Máy chủ có thể không tự chạy lại GenOS khi bật lại máy', body: 'Docker chưa bật tự chạy khi mở máy — chạy một lần trên máy chủ: sudo systemctl enable docker · Lịch tự cập nhật và nút Cập nhật ngay chỉ chạy khi có người đăng nhập — chạy một lần: sudo loginctl enable-linger $USER · Chạy xong thì chạy genh status để cảnh báo tự hết', link: '/system?tab=storage', action: 'Xem cách bật' },
 };
 
 /** Hostname của một URL (rỗng/hỏng ⇒ ''). */
@@ -584,7 +595,7 @@ function createMockState(opts: MockOptions = {}, broadcast: (type: string, data:
         const ago = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
         list.push(
           { id: randomUUID(), kind: 'backup.done', title: 'Sao lưu đã xong', body: 'Bản sao lưu hằng ngày đã được lưu.', link: '/system?tab=storage', created_at: ago(35), read: false },
-          { id: randomUUID(), kind: 'user.reactivated', title: 'Chào mừng tới Gen-Harness', body: 'Thiết lập đã xong — thông báo mới sẽ hiện ở chuông này.', link: null, created_at: ago(60 * 26), read: true },
+          { id: randomUUID(), kind: 'user.reactivated', title: 'Chào mừng tới GenOS', body: 'Thiết lập đã xong — thông báo mới sẽ hiện ở chuông này.', link: null, created_at: ago(60 * 26), read: true },
         );
       }
     }
@@ -1223,7 +1234,8 @@ function createMockState(opts: MockOptions = {}, broadcast: (type: string, data:
     // v0.1.20: như gh/auth/deps.py current_user — mật khẩu tạm thì mọi route khác /auth/* và /account trả 403.
     if (user.mustChange) return problem(res, 403, 'PASSWORD_CHANGE_REQUIRED', 'Cần đặt mật khẩu mới trước khi tiếp tục');
 
-    if (path === '/navigation' && method === 'GET') return reply(200, buildNavigation(user.hidden, opts.badges ?? true, { hasStaff: opts.staff ?? true }));
+    // Như API thật: cây tính theo quyền HIỆN TẠI của vai trò (kể cả khi test đổi ô ma trận bằng hook `grant`), không theo ảnh chụp lúc tạo tài khoản.
+    if (path === '/navigation' && method === 'GET') return reply(200, buildNavigation(hiddenScreens(user.role.code as RoleCode), opts.badges ?? true, { hasStaff: opts.staff ?? true }));
     // v0.1.22 (Đợt B1–B3) — như gh/auth/users.py + gh/system_api/org.py.
     if (path === '/system/about' && method === 'GET') {
       // v0.1.36 (F-46): như gh/system_api/org.py — version = genh_version ?? image_version (giữ tương thích).

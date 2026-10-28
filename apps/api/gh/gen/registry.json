@@ -1,6 +1,30 @@
 {
   "_comment": "Sinh từ packages/contracts/src/genTargets.ts + apps/web/src/guide/guideContent.ts — KHÔNG sửa tay. GEN_WRITE=1 npx vitest run gen-targets",
   "screens": {
+    "intel": {
+      "path": "/intel",
+      "title": "Tình báo"
+    },
+    "decide": {
+      "path": "/decide",
+      "title": "Cần quyết"
+    },
+    "work": {
+      "path": "/work",
+      "title": "Việc"
+    },
+    "panorama": {
+      "path": "/panorama",
+      "title": "Toàn cảnh"
+    },
+    "me": {
+      "path": "/me",
+      "title": "Tôi"
+    },
+    "team": {
+      "path": "/team",
+      "title": "Đội ngũ"
+    },
     "overview": {
       "path": "/overview",
       "title": "Hôm nay"
@@ -41,13 +65,17 @@
       "path": "/profile",
       "title": "Hồ sơ sống"
     },
-    "connections": {
-      "path": "/connections",
-      "title": "Kết nối"
+    "graph": {
+      "path": "/graph",
+      "title": "Bản đồ quan hệ"
     },
-    "team": {
-      "path": "/team",
-      "title": "Đội ngũ"
+    "notebook": {
+      "path": "/notebook",
+      "title": "Sổ tay nhận thức"
+    },
+    "supply": {
+      "path": "/supply",
+      "title": "Cung ↔ Cầu"
     },
     "people": {
       "path": "/people",
@@ -57,9 +85,33 @@
       "path": "/care",
       "title": "Chất lượng chăm sóc"
     },
-    "system": {
-      "path": "/system",
-      "title": "Cài đặt"
+    "start": {
+      "path": "/admin/start",
+      "title": "Bắt đầu"
+    },
+    "connections": {
+      "path": "/admin/connections",
+      "title": "Kết nối"
+    },
+    "access": {
+      "path": "/admin/access",
+      "title": "Người & quyền"
+    },
+    "backup": {
+      "path": "/admin/backup",
+      "title": "Sao lưu & cập nhật"
+    },
+    "org": {
+      "path": "/admin/org",
+      "title": "Tổ chức"
+    },
+    "log": {
+      "path": "/admin/log",
+      "title": "Nhật ký"
+    },
+    "advanced": {
+      "path": "/admin/advanced",
+      "title": "Nâng cao"
     },
     "raw": {
       "path": "/raw",
@@ -93,17 +145,9 @@
       "path": "/mcp",
       "title": "MCP Hub"
     },
-    "graph": {
-      "path": "/graph",
-      "title": "Bản đồ quan hệ"
-    },
-    "notebook": {
-      "path": "/notebook",
-      "title": "Sổ tay nhận thức"
-    },
-    "supply": {
-      "path": "/supply",
-      "title": "Cung ↔ Cầu"
+    "system": {
+      "path": "/system",
+      "title": "Cài đặt"
     },
     "guide": {
       "path": "/guide",
@@ -608,7 +652,7 @@
     },
     {
       "id": "system.users.list",
-      "screen": "team",
+      "screen": "access",
       "label": "Danh sách người dùng",
       "description": "Tên, email, vai trò, trạng thái, lần đăng nhập gần nhất; nút đặt lại mật khẩu, khoá/mở khoá",
       "dynamic": null,
@@ -619,7 +663,7 @@
     },
     {
       "id": "system.users.invite",
-      "screen": "team",
+      "screen": "access",
       "label": "Nút \"Mời người dùng\"",
       "description": "Tạo tài khoản mới với mật khẩu tạm (cần mã PIN)",
       "dynamic": null,
@@ -628,7 +672,7 @@
     },
     {
       "id": "system.users.temp_password",
-      "screen": "team",
+      "screen": "access",
       "label": "Mật khẩu tạm vừa tạo",
       "description": "Hộp hiện mật khẩu tạm một lần sau khi mời / đặt lại mật khẩu",
       "dynamic": null,
@@ -1010,17 +1054,17 @@
       "title": "Mời người trong đội",
       "why": "Cho quản lý, nhân viên cùng dùng Console với quyền hạn riêng — mỗi người chỉ thấy phần được giao.",
       "steps": [
-        "Bấm \"Làm bước này\". Chưa cần mời ai thì bấm \"Để sau\" — mời lúc nào cũng được ở Đội ngũ › Người dùng.",
+        "Bấm \"Làm bước này\". Chưa cần mời ai thì bấm \"Để sau\" — mời lúc nào cũng được ở Quản trị › Người & quyền.",
         "Muốn mời ngay: bấm \"Mời ngay\", rồi \"Thêm người\", điền \"Tên hiển thị\", \"Email\" và chọn \"Vai trò\" (Quản lý, Vận hành, Nhân viên phụ trách, Kiểm soát).",
         "Thêm đủ người rồi bấm \"Tiếp tục\".",
         "Hệ thống hiện mật khẩu tạm của từng người — chép lại và tự gửi cho họ qua Zalo/email riêng (chưa có gửi thư tự động).",
-        "Nhân viên ở máy khác hoặc dùng điện thoại cần Truy cập từ xa: Sếp chạy genh remote tailscale (khuyên dùng) trên máy chủ trước khi gửi. Lời nhắn kèm địa chỉ đăng nhập có ở Đội ngũ › Người dùng (nút \"Mời người dùng\" hoặc \"Đặt lại mật khẩu\") — hộp đó cảnh báo đỏ nếu địa chỉ chỉ mở được trên máy chủ.",
+        "Nhân viên ở máy khác hoặc dùng điện thoại cần Truy cập từ xa: Sếp chạy genh remote tailscale (khuyên dùng) trên máy chủ trước khi gửi. Lời nhắn kèm địa chỉ đăng nhập có ở Quản trị › Người & quyền (nút \"Mời người dùng\" hoặc \"Đặt lại mật khẩu\") — hộp đó cảnh báo đỏ nếu địa chỉ chỉ mở được trên máy chủ.",
         "Bấm \"Đã lưu, sang bước sau\"."
       ],
       "done_when": "Có thêm ít nhất một tài khoản ngoài Sếp.",
       "console": {
-        "label": "Đội ngũ › Người dùng",
-        "to": "/team"
+        "label": "Quản trị › Người & quyền",
+        "to": "/admin/access"
       }
     },
     {

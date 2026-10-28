@@ -94,7 +94,7 @@ describe('mcpModel — scopeRows / missingText (hàm thuần)', () => {
   });
 
   it('missingText: câu đúng khuôn; rỗng / không phải mảng chuỗi ⇒ null', () => {
-    expect(missingText(['đọc lịch', 'đọc mail'])).toBe('Còn thiếu quyền: đọc lịch, đọc mail — vào Gen-hub tick thêm cho token của Gen-Harness rồi bấm Kiểm tra lại.');
+    expect(missingText(['đọc lịch', 'đọc mail'])).toBe('Còn thiếu quyền: đọc lịch, đọc mail — vào Gen-hub tick thêm cho token của GenOS rồi bấm Kiểm tra lại.');
     expect(missingText(['tìm tệp Drive'])).toContain('Còn thiếu quyền: tìm tệp Drive —');
     expect(missingText([])).toBeNull();
     expect(missingText(undefined)).toBeNull();
@@ -142,7 +142,7 @@ describe('Thẻ Gen-hub — Quyền đọc thêm (tuỳ chọn)', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Kiểm tra' }));
     expect(await screen.findByText(/Đã nối Kho · 240 ms/)).toBeInTheDocument();
     expect(
-      await screen.findByText('Còn thiếu quyền: đọc lịch, đọc mail — vào Gen-hub tick thêm cho token của Gen-Harness rồi bấm Kiểm tra lại.'),
+      await screen.findByText('Còn thiếu quyền: đọc lịch, đọc mail — vào Gen-hub tick thêm cho token của GenOS rồi bấm Kiểm tra lại.'),
     ).toBeInTheDocument();
     const box = screen.getByTestId('hub-scopes');
     expect(within(box).getAllByText('Chưa')).toHaveLength(2);

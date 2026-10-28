@@ -172,7 +172,7 @@ export function OverviewScreen() {
   // Lần tải đầu (/system/health đang tải): tạm ẩn thẻ lỗi để không nhảy bố cục (thẻ hiện rồi biến mất khi dải chèn lên).
   const canManage = useCan('system.manage');
   const health = useSystemHealth(canManage);
-  const updateInStrip = Array.isArray(health.data?.issues) && health.data.issues.some((i) => i.kind === 'update.failed');
+  const updateInStrip = canManage && Array.isArray(health.data?.issues) && health.data.issues.some((i) => i.kind === 'update.failed');
   const healthLoading = canManage && health.isLoading;
 
   if (q.isPending) {

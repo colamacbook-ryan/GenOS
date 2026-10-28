@@ -146,7 +146,7 @@ describe('Việc Sếp cần làm (/guide/viec-sep)', () => {
     expect(within(row('Nối Gen-hub')).getByText('Chưa kiểm')).toBeInTheDocument();
     expect(within(row('Có ít nhất 1 nguồn AI chạy được')).getByText('Chưa kiểm')).toBeInTheDocument();
     expect(screen.getByText('Kết quả được lưu lại — Claude tự đọc, Sếp không cần chụp màn hình.')).toBeInTheDocument();
-    expect(document.title).toBe('Việc Sếp cần làm · Hướng dẫn thiết lập · Gen-Harness');
+    expect(document.title).toBe('Việc Sếp cần làm · Hướng dẫn thiết lập · GenOS');
   });
 
   it('Gen-hub: nhập token → Kiểm tra = PATCH /hub/link rồi POST /boss-checks/hub/run; "Đạt" hiện ngay cạnh dòng', async () => {

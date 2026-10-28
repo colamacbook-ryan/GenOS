@@ -1,4 +1,4 @@
-# Bàn giao GenOS — hiện trạng + việc dở (cập nhật 26/10/2026, bản NHÁP v0.1.77 chưa phát hành (trên v0.1.76 NHÁP); bản đã phát hành mới nhất v0.1.75 — GenOS bản đầu, rồi v0.1.74 — bản tính năng trên v0.1.73, rồi v0.1.73 — bản tính năng trên v0.1.72, rồi v0.1.72 trên v0.1.71 (bản vá trên v0.1.70), gộp v0.1.69 + v0.1.70, bản gộp v0.1.68, bản vá v0.1.66 và bản gộp v0.1.65)
+# Bàn giao GenOS — hiện trạng + việc dở (cập nhật 28/10/2026, bản NHÁP v0.1.78 chưa phát hành; bản đã phát hành mới nhất v0.1.77)
 
 File này nay chỉ ghi **hiện trạng + việc dở** (tên cũ `HANDOFF-v0.1.1.md` giữ nguyên vì mã nguồn có chú thích trỏ tới).
 Lịch sử từng bản nằm ở [CHANGELOG.md](../../CHANGELOG.md) (3–5 dòng/bản) và `docs/releases/vX.Y.Z.md` (chi tiết, chuyển nguyên từ HANDOFF cũ):
@@ -6,6 +6,12 @@ mục "Lỗi cần sửa", "Chia việc", "Kiểm tra tích hợp" của v0.1.1/
 chú thích trong mã trỏ "HANDOFF mục vX.Y.Z" thì đọc tệp `docs/releases/vX.Y.Z.md` tương ứng.
 Tiến độ, bản phản ứng (hotfix) và **mục Nợ**: [ROADMAP](../ROADMAP.md). Vận hành hằng ngày: [runbook](../runbook.md).
 Ghi chú vận hành riêng của Sếp (máy, tài khoản, địa chỉ, việc riêng) nằm ở repo Brain › Project/gen-harness (riêng tư) — không ghi vào repo công khai này.
+
+## v0.1.78 — NHÁP, chờ phát hành (nhánh `claude/v0178` gộp G0, G6, G9; `VERSION` = v0.1.78)
+
+- **Làm gì**: một giao diện + menu theo vai, chữ trên Zalo, «đường lọc cũ» chỉ đọc. Không migration. Chi tiết: [v0.1.78.md](../releases/v0.1.78.md).
+- **Còn dở**: gói G1 Tình báo (Đúng/Sai + thiết lập + lọc sự cố hệ thống khỏi ô Cảnh báo), G5 Bắt đầu, G3 Tôi, G4 Toàn cảnh, G2a/G2b Cần quyết, G7 thang mức độ, G8 Đội ngũ (Second Brain `01-projects/genos/spec/UI-IA-REVIEW-v0.1.78.md`); dọn `owner/intel/*`, `owner/feed/*`, `TeamScreen`, `MOVED_TABS`, `OWNER_PATHS`, đích Gen theo khoá màn cũ.
+- **Boss cần làm**: xem [v0.1.78.md](../releases/v0.1.78.md#việc-boss-phải-làm).
 
 ## v0.1.77 — NHÁP, chờ phát hành (nhánh `claude/wip/v0177/p6` gộp P1–P4; `VERSION` = v0.1.77)
 

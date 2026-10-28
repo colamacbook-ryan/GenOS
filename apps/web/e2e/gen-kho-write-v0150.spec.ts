@@ -29,7 +29,7 @@ test('Gen đề xuất ghi Phiên → thẻ đúng bảng + trường → Xác n
   const table = card.getByTestId('gen-kho-table');
   await expect(table.locator('thead th')).toHaveText(['Trường', 'Sẽ ghi']);
   await expect(table.locator('tbody th')).toHaveText(['Chủ đề', 'Ngày', 'Đã chốt', 'Việc tiếp']);
-  await expect(table.locator('tbody tr').first()).toContainText('Gen-Harness v0.1.50 — Gen nhớ và ghi Kho có mã PIN');
+  await expect(table.locator('tbody tr').first()).toContainText('GenOS v0.1.50 — Gen nhớ và ghi Kho có mã PIN');
   await expect(card).toContainText('Cần mã PIN');
   await expect(card.getByTestId('gen-kho-warning')).toHaveText(WARNING);
   expect((await khoCalls(page.request)).calls).toBe(0); // chưa Xác nhận ⇒ chưa có lời gọi ghi nào
@@ -131,7 +131,7 @@ test('Token thiếu quyền ghi Kho: khoá Xác nhận + nút "Mở thẻ Gen-hu
   await expect(write).toBeVisible();
   await expect(write).toContainText('Quyền ghi Kho (tuỳ chọn)');
   await expect(write.getByText('Chưa', { exact: true })).toHaveCount(2);
-  await expect(write).toContainText('Vào Gen-hub tick quyền ghi Kho (tạo và sửa bản ghi — tên trong Gen-hub: kho_create, kho_update) cho token của Gen-Harness rồi bấm Kiểm tra.');
+  await expect(write).toContainText('Vào Gen-hub tick quyền ghi Kho (tạo và sửa bản ghi — tên trong Gen-hub: kho_create, kho_update) cho token của GenOS rồi bấm Kiểm tra.');
   await expect(write).toContainText('Gen chỉ ghi khi Sếp bấm Xác nhận + nhập mã PIN trên thẻ đề xuất.');
 
   // Sếp tick quyền ghi ở Gen-hub (mock: hook) rồi bấm Kiểm tra (cần PIN) ⇒ "Có" ×2; thẻ đề xuất mở khoá.
@@ -181,17 +181,17 @@ test('Boss bước 2: chuông "Gen đề xuất ghi Kho · Phiên v0.1.50" → /
   await expect(item).toBeVisible();
   await item.click();
   // v0.1.55: chuông Gen dẫn vào Console /overview?gen=… (không về Mặt tiền); bỏ tham số khỏi địa chỉ.
-  await expect(page).toHaveURL(/\/overview$/);
+  await expect(page).toHaveURL(/\/intel\?tab=overview$/); // v0.1.78: /overview chuyển hướng sang Tình báo › Tổng quan
   const panel = page.getByRole('complementary', { name: GEN_PANEL });
   await expect(panel).toBeVisible();
-  await expect(panel).toContainText('Máy chủ Gen-Harness vừa lên v0.1.50.');
+  await expect(panel).toContainText('Máy chủ GenOS vừa lên v0.1.50.');
   const card = panel.getByRole('group', { name: `Đề xuất: ${CARD}` }).last();
   await expect(card).toBeVisible();
   // Tạo bản ghi ⇒ bảng chỉ có "Trường | Sẽ ghi" (cột "Hiện tại" chỉ có khi SỬA bản ghi).
   const table = card.getByTestId('gen-kho-table');
   await expect(table.locator('thead th')).toHaveText(['Trường', 'Sẽ ghi']);
   await expect(table.locator('tbody th')).toHaveText(['Chủ đề', 'Ngày', 'Đã chốt']);
-  await expect(table.locator('tbody tr').first()).toContainText('Gen-Harness lên bản v0.1.50');
+  await expect(table.locator('tbody tr').first()).toContainText('GenOS lên bản v0.1.50');
   await expect(card.getByTestId('gen-kho-warning')).toHaveText(WARNING);
   await expect(card.getByTestId('gen-kho-release-note')).toHaveText(
     'Phiên của bản v0.1.50: mỗi bản chỉ ghi vào Kho một lần cho cả tổ chức — Owner khác đã ghi thì thẻ này tự đóng; bấm Huỷ là huỷ cho mọi Owner.',

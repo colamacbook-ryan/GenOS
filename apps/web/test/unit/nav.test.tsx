@@ -12,80 +12,84 @@ import { useUiStore } from '../../src/lib/uiStore';
 import { buildNavigation } from '../mock-api';
 
 const NAV: NavDomain[] = buildNavigation();
-const business = NAV[0];
-const tech = NAV[1];
-const queueGroup = business.groups.find((g) => g.name === 'Hộp thư & Việc')!;
-const graph = tech.groups.find((g) => g.key === 'graph')!;
+const daily = NAV[0];
+const admin = NAV[1];
+const panorama = daily.groups.find((g) => g.key === 'panorama')!;
+
+// Nhóm thuần (không phải màn) — cây v0.1.78 không còn nhóm thuần, nhưng navModel vẫn hỗ trợ: giữ phủ bằng một cây dựng tay.
+const PURE: NavDomain = {
+  domain: 'x', label: 'X', crumb: 'X', icon: 'ph ph-gear', tone: 'ok', count: 2,
+  groups: [{ key: null, name: 'Nhóm', icon: 'ph ph-folder', children: [{ key: 'a', name: 'A', icon: 'ph ph-gear' }, { key: 'b', name: 'B', icon: 'ph ph-gear' }] }],
+};
+const pure = PURE.groups[0];
 
 describe('navModel', () => {
-  it('finds the active screen, its domain and parent group', () => {
+  it('finds the active screen, its domain and parent group (màn cũ là con ẩn của trang mới)', () => {
     const hit = findActive(NAV, 'workbench')!;
     expect(hit.domain.crumb).toBe('HẰNG NGÀY');
-    expect(hit.group.name).toBe('Hộp thư & Việc');
+    expect(hit.group.name).toBe('Cần quyết');
     expect(hit.isChild).toBe(true);
-    expect(findActive(NAV, 'system')!.isChild).toBe(false);
+    expect(hit.item.hidden).toBe(true);
+    expect(findActive(NAV, 'backup')!.isChild).toBe(false);
+    expect(findActive(NAV, 'backup')!.domain.crumb).toBe('QUẢN TRỊ');
     expect(findActive(NAV, 'nope')).toBeNull();
   });
 
-  it('lists every screen key in the tree, hidden ones included (21 design + 3 spec extras + Kết nối, Đội ngũ + Nhật ký lắng nghe)', () => {
-    expect(screenKeys(NAV).size).toBe(27);
+  it('lists every screen key in the tree, hidden ones included (6 + 7 mục thanh bên + 25 màn cũ)', () => {
+    expect(screenKeys(NAV).size).toBe(38);
     expect(screenKeys(NAV).has('profile')).toBe(true);
     expect(screenKeys(NAV).has('plugins')).toBe(true);
   });
 
-  it('v0.1.42: count = số màn không ẩn; Nâng cao thu gọn mặc định', () => {
-    expect(NAV.map((d) => d.count)).toEqual([14, 11]);
-    expect(buildNavigation(new Set(), true, { hasStaff: false }).map((d) => d.count)).toEqual([12, 11]);
-    expect(business.collapsed).toBe(false);
-    expect(tech.collapsed).toBe(true);
-    expect(visibleGroups(tech).map((g) => g.key ?? g.name)).toEqual(['Tầng dữ liệu', 'Agent & Model', 'graph', 'supply']);
+  it('count = số mục không ẩn; Quản trị thu gọn mặc định', () => {
+    expect(NAV.map((d) => d.count)).toEqual([6, 7]);
+    expect(buildNavigation(new Set(), true, { hasStaff: false }).map((d) => d.count)).toEqual([5, 7]);
+    expect(daily.collapsed).toBe(false);
+    expect(admin.collapsed).toBe(true);
+    expect(visibleGroups(admin).map((g) => g.key)).toEqual(['start', 'connections', 'access', 'backup', 'org', 'log', 'advanced']);
   });
 
-  it('v0.1.42 (F-26): firstScreenKey bỏ qua màn ẩn', () => {
-    expect(firstScreenKey(NAV)).toBe('overview');
-    expect(firstScreenKey(buildNavigation(new Set(['overview'])))).toBe('inbox');
+  it('firstScreenKey bỏ qua màn ẩn: Tình báo; thiếu Tình báo thì tới mục kế', () => {
+    expect(firstScreenKey(NAV)).toBe('intel');
+    expect(firstScreenKey(buildNavigation(new Set(['intel'])))).toBe('decide');
     expect(firstScreenKey([])).toBeNull();
     expect(firstScreenKey(undefined)).toBeNull();
   });
 
-  it('v0.1.42: domain thu gọn mở khi màn đang mở thuộc domain, hoặc khi người dùng bấm', () => {
-    expect(domainOpen(tech, 'overview', undefined)).toBe(false);
-    expect(domainOpen(tech, 'raw', undefined)).toBe(true);
-    expect(domainOpen(tech, 'notebook', undefined)).toBe(true);
-    expect(domainOpen(tech, 'overview', true)).toBe(true);
-    expect(domainOpen(business, 'raw', false)).toBe(true);
+  it('domain thu gọn mở khi màn đang mở thuộc domain, hoặc khi người dùng bấm', () => {
+    expect(domainOpen(admin, 'intel', undefined)).toBe(false);
+    expect(domainOpen(admin, 'backup', undefined)).toBe(true);
+    expect(domainOpen(admin, 'advanced', undefined)).toBe(true);
+    expect(domainOpen(admin, 'raw', undefined)).toBe(true); // màn cũ ẩn thuộc Nâng cao
+    expect(domainOpen(admin, 'intel', true)).toBe(true);
+    expect(domainOpen(daily, 'raw', false)).toBe(true);
   });
 
-  it('auto-expands the group that contains the active screen', () => {
-    expect(groupView(queueGroup, 'inbox', {}, true)).toMatchObject({ open: true, on: true, activeKid: true, self: false });
-    expect(groupView(queueGroup, 'overview', {}, true)).toMatchObject({ open: false, on: false });
+  it('màn cũ đang mở tô sáng mục cha (không mở con vì con ẩn)', () => {
+    expect(groupView(panorama, 'graph', {}, true)).toMatchObject({ on: true, activeKid: true, open: false, showCaret: false });
+    expect(groupView(panorama, 'panorama', {}, true)).toMatchObject({ on: true, self: true, open: false });
+    expect(groupView(panorama, 'intel', {}, true)).toMatchObject({ on: false });
   });
 
-  it('respects an explicit collapse even when the group contains the active screen', () => {
-    expect(groupView(queueGroup, 'inbox', { 'Hộp thư & Việc': false }, true).open).toBe(false);
+  it('mục là một trang thì bấm là mở trang đó', () => {
+    expect(groupAction(panorama, 'intel', {}, true)).toEqual({ type: 'navigate', key: 'panorama' });
+    expect(groupAction(panorama, 'intel', {}, false)).toEqual({ type: 'navigate', key: 'panorama' });
   });
 
-  it('never shows children in rail mode', () => {
-    expect(groupView(queueGroup, 'inbox', { 'Hộp thư & Việc': true }, false)).toMatchObject({ open: false, showCaret: false });
+  it('nhóm thuần: tự mở theo màn đang mở, tôn trọng lựa chọn của người dùng, thanh hẹp không bao giờ hiện con', () => {
+    expect(groupView(pure, 'a', {}, true)).toMatchObject({ open: true, on: true, activeKid: true, self: false });
+    expect(groupView(pure, 'z', {}, true)).toMatchObject({ open: false, on: false });
+    expect(groupView(pure, 'a', { Nhóm: false }, true).open).toBe(false);
+    expect(groupView(pure, 'a', { Nhóm: true }, false)).toMatchObject({ open: false, showCaret: false });
+    expect(groupAction(pure, 'z', {}, true)).toEqual({ type: 'toggle', group: 'Nhóm', open: true });
+    expect(groupAction(pure, 'a', {}, true)).toEqual({ type: 'toggle', group: 'Nhóm', open: false });
+    expect(groupAction(pure, 'z', {}, false)).toEqual({ type: 'navigate', key: 'a' });
   });
 
-  it('a pure group toggles in full mode, starting from its auto state', () => {
-    expect(groupAction(queueGroup, 'overview', {}, true)).toEqual({ type: 'toggle', group: 'Hộp thư & Việc', open: true });
-    expect(groupAction(queueGroup, 'inbox', {}, true)).toEqual({ type: 'toggle', group: 'Hộp thư & Việc', open: false });
-  });
-
-  it('a pure group opens its first child in rail mode', () => {
-    expect(groupAction(queueGroup, 'overview', {}, false)).toEqual({ type: 'navigate', key: 'inbox' });
-  });
-
-  it('an entry that is also a screen opens it and expands (Bản đồ quan hệ)', () => {
-    expect(groupAction(graph, 'overview', {}, true)).toEqual({ type: 'navigate', key: 'graph' });
-    expect(groupView(graph, 'graph', {}, true)).toMatchObject({ self: true, open: true });
-    expect(groupView(graph, 'notebook', {}, true)).toMatchObject({ self: false, activeKid: true, open: true });
-  });
-
-  it('v0.1.42: Đội ngũ không có caret khi Đánh giá/Chăm sóc ẩn (chưa có nhân viên)', () => {
-    const team = buildNavigation(new Set(), true, { hasStaff: false })[0].groups.find((g) => g.key === 'team')!;
+  it('Đội ngũ chưa có nhân viên: ẩn; có nhân viên: hiện, không có caret (tab chứ không phải mục con)', () => {
+    const noStaff = buildNavigation(new Set(), true, { hasStaff: false });
+    expect(visibleGroups(noStaff[0]).map((g) => g.key)).not.toContain('team');
+    const team = visibleGroups(daily).find((g) => g.key === 'team')!;
     expect(team.children!.every((c) => c.hidden)).toBe(true);
     expect(groupView(team, 'team', {}, true)).toMatchObject({ self: true, open: false, showCaret: false });
   });
@@ -96,7 +100,12 @@ function Where() {
   return <div data-testid="where">{l.pathname}</div>;
 }
 
-function renderSidebar(nav: NavDomain[], path: string, role: { code: string; name: string } = { code: 'owner', name: 'Owner — Sếp' }) {
+function renderSidebar(
+  nav: NavDomain[],
+  path: string,
+  activeKey: string | null = path.slice(1).split('/').pop() ?? null,
+  role: { code: string; name: string } = { code: 'owner', name: 'Owner — Sếp' },
+) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   qc.setQueryData(qk.navigation, nav);
   qc.setQueryData(qk.me, {
@@ -105,7 +114,6 @@ function renderSidebar(nav: NavDomain[], path: string, role: { code: string; nam
     org: { id: 'o', name: 'x', timezone: 'Asia/Ho_Chi_Minh', currency: 'VND' },
     addressing: { self: 'Anh', bot_calls_me: 'Sếp' }, pin_verified_until: null, permissions: {},
   });
-  const key = path.slice(1);
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={[path]}>
@@ -114,7 +122,7 @@ function renderSidebar(nav: NavDomain[], path: string, role: { code: string; nam
             path="*"
             element={
               <>
-                <Sidebar activeKey={key} />
+                <Sidebar activeKey={activeKey} />
                 <Where />
               </>
             }
@@ -130,75 +138,80 @@ describe('<Sidebar>', () => {
     useUiStore.setState({ sidebarMode: 'full', navOpen: {}, domainOpen: {} });
   });
 
-  it('v0.1.42: Owner — cây mới, ≤ 7 mục cấp 1 (6 + Nâng cao), Nâng cao thu gọn', () => {
-    renderSidebar(NAV, '/overview');
+  it('Sếp: 6 mục + Quản trị (thu gọn); mục đang mở có aria-current, có số đếm', () => {
+    renderSidebar(NAV, '/intel');
     const nav = screen.getByRole('navigation', { name: 'Danh mục màn hình' });
     expect(within(nav).getByText('Việc hằng ngày')).toBeInTheDocument();
-    expect(within(nav).getByText('14 màn')).toBeInTheDocument();
+    expect(within(nav).getByText('6 màn')).toBeInTheDocument();
     const level1 = Array.from(nav.querySelectorAll('[data-level1]'));
-    expect(level1.length).toBeLessThanOrEqual(7);
     expect(level1.map((el) => el.querySelector('.sb-item__name')?.textContent)).toEqual([
-      'Hôm nay', 'Hộp thư & Việc', 'Khách & Cơ hội', 'Kết nối', 'Đội ngũ', 'Cài đặt', 'Nâng cao',
+      'Tình báo', 'Cần quyết', 'Việc', 'Toàn cảnh', 'Tôi', 'Đội ngũ', 'Quản trị',
     ]);
-    const overview = within(nav).getByRole('link', { name: /Hôm nay/ });
-    expect(overview).toHaveAttribute('aria-current', 'page');
-    expect(within(overview).getByText('9')).toBeInTheDocument();
-    // Nâng cao: đóng, không hiện mục con.
-    const adv = within(nav).getByRole('button', { name: /Nâng cao/ });
-    expect(adv).toHaveAttribute('aria-expanded', 'false');
-    expect(within(nav).queryByText('Tầng dữ liệu')).not.toBeInTheDocument();
-    expect(within(nav).queryByText('Kho dữ liệu thô')).not.toBeInTheDocument();
-    // children of collapsed groups are not rendered
-    expect(within(nav).queryByText('Hộp thư')).not.toBeInTheDocument();
+    const intel = within(nav).getByRole('link', { name: /Tình báo/ });
+    expect(intel).toHaveAttribute('aria-current', 'page');
+    expect(intel).toHaveAttribute('href', '/intel');
+    expect(within(intel).getByText('9')).toBeInTheDocument();
+    expect(within(nav).getByRole('link', { name: /Toàn cảnh/ })).toHaveAttribute('href', '/panorama');
+    // Quản trị: đóng, không hiện trang con.
+    const adm = within(nav).getByRole('button', { name: /Quản trị/ });
+    expect(adm).toHaveAttribute('aria-expanded', 'false');
+    expect(within(nav).queryByText('Bắt đầu')).not.toBeInTheDocument();
+    // Màn cũ không bao giờ là mục thanh bên.
+    for (const old of ['Hộp thư', 'Bàn làm việc', 'Khách & Nhóm', 'Kho dữ liệu thô', 'Hồ sơ sống']) {
+      expect(within(nav).queryByText(old)).not.toBeInTheDocument();
+    }
     expect(screen.getByText('VA')).toBeInTheDocument();
     expect(screen.getByText('Owner · thấy toàn cảnh')).toBeInTheDocument();
   });
 
-  it('v0.1.42: bấm Nâng cao thì hiện, bấm Tầng dữ liệu thì thấy Kho dữ liệu thô', async () => {
+  it('bấm Quản trị: 7 trang con đúng thứ tự, mỗi trang ở /admin/…', async () => {
     const user = userEvent.setup();
-    renderSidebar(NAV, '/overview');
-    const adv = screen.getByRole('button', { name: /Nâng cao/ });
-    await user.click(adv);
-    expect(adv).toHaveAttribute('aria-expanded', 'true');
-    await user.click(screen.getByRole('button', { name: /Tầng dữ liệu/ }));
-    expect(screen.getByRole('link', { name: /Kho dữ liệu thô/ })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Bản đồ quan hệ/ })).toBeInTheDocument();
-    await user.click(adv);
-    expect(screen.queryByText('Kho dữ liệu thô')).not.toBeInTheDocument();
+    renderSidebar(NAV, '/intel');
+    const adm = screen.getByRole('button', { name: /Quản trị/ });
+    await user.click(adm);
+    expect(adm).toHaveAttribute('aria-expanded', 'true');
+    const nav = screen.getByRole('navigation', { name: 'Danh mục màn hình' });
+    const items = within(nav).getAllByRole('link').filter((a) => a.getAttribute('href')?.startsWith('/admin/'));
+    expect(items.map((a) => a.textContent?.trim())).toEqual([
+      'Bắt đầu', 'Kết nối', 'Người & quyền', 'Sao lưu & cập nhật', 'Tổ chức', 'Nhật ký', 'Nâng cao',
+    ]);
+    expect(items.map((a) => a.getAttribute('href'))).toEqual([
+      '/admin/start', '/admin/connections', '/admin/access', '/admin/backup', '/admin/org', '/admin/log', '/admin/advanced',
+    ]);
+    await user.click(adm);
+    expect(screen.queryByText('Bắt đầu')).not.toBeInTheDocument();
   });
 
-  it('v0.1.42: đang ở /raw thì Nâng cao tự mở; trạng thái mở không lưu', () => {
-    renderSidebar(NAV, '/raw');
-    expect(screen.getByRole('button', { name: /Nâng cao/ })).toHaveAttribute('aria-expanded', 'true');
-    expect(screen.getByRole('link', { name: /Kho dữ liệu thô/ })).toHaveAttribute('aria-current', 'page');
-    useUiStore.getState().setDomainOpen('tech', true);
+  it('đang ở trang Quản trị thì Quản trị tự mở và tô sáng đúng trang; màn cũ Nâng cao (raw) cũng mở Quản trị', () => {
+    renderSidebar(NAV, '/admin/backup', 'backup');
+    expect(screen.getByRole('button', { name: /Quản trị/ })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('link', { name: /Sao lưu & cập nhật/ })).toHaveAttribute('aria-current', 'page');
     expect(JSON.stringify(useUiStore.persist.getOptions().partialize!(useUiStore.getState()))).not.toContain('domainOpen');
   });
 
-  it('v0.1.42: node ẩn (Hồ sơ sống, Plugin) không hiện', async () => {
-    const user = userEvent.setup();
-    renderSidebar(NAV, '/directory');
-    expect(screen.getByRole('link', { name: /Khách & Nhóm/ })).toHaveAttribute('aria-current', 'page');
-    expect(screen.queryByText('Hồ sơ sống')).not.toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: /Nâng cao/ }));
-    expect(screen.queryByText('Plugin & Tiện ích')).not.toBeInTheDocument();
+  it('màn cũ đang mở (workbench) tô sáng mục cha Cần quyết', () => {
+    renderSidebar(NAV, '/decide', 'workbench');
+    const nav = screen.getByRole('navigation', { name: 'Danh mục màn hình' });
+    expect(within(nav).getByRole('link', { name: /Cần quyết/ })).not.toHaveAttribute('aria-current');
+    expect(nav.querySelector('[data-screen="decide"] [data-on]')).not.toBeNull();
   });
 
-  it('v0.1.42: chưa có nhân viên → không có Đánh giá con người / Chất lượng chăm sóc', () => {
-    renderSidebar(buildNavigation(new Set(), true, { hasStaff: false }), '/team');
-    expect(screen.getByRole('link', { name: /Đội ngũ/ })).toHaveAttribute('aria-current', 'page');
+  it('chưa có nhân viên → không có Đội ngũ; có nhân viên → có, không có mục con Đánh giá/Chăm sóc', () => {
+    renderSidebar(buildNavigation(new Set(), true, { hasStaff: false }), '/intel');
+    expect(screen.queryByRole('link', { name: /Đội ngũ/ })).not.toBeInTheDocument();
+  });
+
+  it('có nhân viên: Đội ngũ là một mục /team (Đánh giá, Chăm sóc là tab, không phải con thanh bên)', () => {
+    renderSidebar(NAV, '/team', 'team');
+    const team = screen.getByRole('link', { name: /Đội ngũ/ });
+    expect(team).toHaveAttribute('aria-current', 'page');
+    expect(team).toHaveAttribute('href', '/team');
     expect(screen.queryByText('Đánh giá con người')).not.toBeInTheDocument();
-    expect(screen.queryByText('Chất lượng chăm sóc')).not.toBeInTheDocument();
   });
 
-  it('có nhân viên: đang ở Đội ngũ thì thấy Đánh giá con người', () => {
-    renderSidebar(NAV, '/team');
-    expect(screen.getByRole('link', { name: /Đánh giá con người/ })).toBeInTheDocument();
-  });
-
-  it('v0.1.42: không còn mục "Hướng dẫn thiết lập" / "Mạng xã hội" trên thanh bên', async () => {
+  it('không còn mục "Hướng dẫn thiết lập" / "Mạng xã hội" trên thanh bên', async () => {
     const user = userEvent.setup();
-    renderSidebar(NAV, '/overview');
+    renderSidebar(NAV, '/intel');
     const nav = screen.getByRole('navigation', { name: 'Danh mục màn hình' });
     expect(within(nav).queryByText('Hướng dẫn thiết lập')).not.toBeInTheDocument();
     expect(within(nav).queryByText('Mạng xã hội')).not.toBeInTheDocument();
@@ -208,53 +221,34 @@ describe('<Sidebar>', () => {
   });
 
   it('role filtering: hides what the API leaves out', () => {
-    renderSidebar(buildNavigation(new Set(['people', 'care', 'system', 'team'])), '/overview');
+    renderSidebar(buildNavigation(new Set(['team', 'me', 'decide'])), '/intel');
     expect(screen.queryByText('Đội ngũ')).not.toBeInTheDocument();
-    expect(screen.queryByText('Cài đặt')).not.toBeInTheDocument();
-    expect(screen.getByText('Kết nối')).toBeInTheDocument();
+    expect(screen.queryByText('Tôi')).not.toBeInTheDocument();
+    expect(screen.queryByText('Cần quyết')).not.toBeInTheDocument();
+    expect(screen.getByText('Toàn cảnh')).toBeInTheDocument();
   });
 
-  it('auto-expands the group of the active child and marks it', () => {
-    renderSidebar(NAV, '/workbench');
-    const group = screen.getByRole('button', { name: /Hộp thư & Việc/ });
-    expect(group).toHaveAttribute('aria-expanded', 'true');
-    expect(screen.getByRole('link', { name: /Bàn làm việc/ })).toHaveAttribute('aria-current', 'page');
-  });
-
-  it('a pure group only toggles; it does not navigate', async () => {
+  it('an item that is also a page navigates', async () => {
     const user = userEvent.setup();
-    renderSidebar(NAV, '/overview');
-    const group = screen.getByRole('button', { name: /Khách & Cơ hội/ });
-    await user.click(group);
-    expect(group).toHaveAttribute('aria-expanded', 'true');
-    expect(screen.getByText('Bảng cơ hội')).toBeInTheDocument();
-    expect(screen.getByTestId('where')).toHaveTextContent('/overview');
-    await user.click(group);
-    expect(group).toHaveAttribute('aria-expanded', 'false');
-    expect(screen.queryByText('Bảng cơ hội')).not.toBeInTheDocument();
+    renderSidebar(NAV, '/intel');
+    await user.click(screen.getByRole('link', { name: /Toàn cảnh/ }));
+    expect(screen.getByTestId('where')).toHaveTextContent('/panorama');
   });
 
-  it('an item that is also a screen navigates', async () => {
-    const user = userEvent.setup();
-    renderSidebar(NAV, '/overview');
-    await user.click(screen.getByRole('link', { name: /Kết nối/ }));
-    expect(screen.getByTestId('where')).toHaveTextContent('/connections');
-  });
-
-  it('rail mode hides labels and domain names; Nâng cao is one icon; a group opens its first child', async () => {
+  it('thanh hẹp: ẩn nhãn và tên miền; Quản trị là một icon, mở ra thì từng trang là icon', async () => {
     useUiStore.setState({ sidebarMode: 'rail' });
     const user = userEvent.setup();
-    renderSidebar(NAV, '/overview');
+    renderSidebar(NAV, '/intel');
     expect(screen.queryByText('Việc hằng ngày')).not.toBeInTheDocument();
-    expect(screen.queryByText('GEN‑HARNESS')).not.toBeInTheDocument();
-    const adv = screen.getByRole('button', { name: 'Nâng cao' });
-    expect(screen.queryByRole('button', { name: 'Tầng dữ liệu' })).not.toBeInTheDocument();
-    await user.click(adv);
-    await user.click(screen.getByRole('button', { name: 'Tầng dữ liệu' }));
-    expect(screen.getByTestId('where')).toHaveTextContent('/raw');
+    expect(document.querySelector('.sb-logo__name')).toBeNull();
+    const adm = screen.getByRole('button', { name: 'Quản trị' });
+    expect(screen.queryByRole('link', { name: 'Sao lưu & cập nhật' })).not.toBeInTheDocument();
+    await user.click(adm);
+    await user.click(screen.getByRole('link', { name: 'Sao lưu & cập nhật' }));
+    expect(screen.getByTestId('where')).toHaveTextContent('/admin/backup');
   });
 
-  it('v0.1.42: /social tô sáng "Kết nối", /help tô sáng "Cài đặt" (navKey của route)', async () => {
+  it('/social tô sáng "Kết nối" (navKey của route); /help không tô sáng mục nào', async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
     qc.setQueryData(qk.navigation, NAV);
     function Shell() {
@@ -263,7 +257,7 @@ describe('<Sidebar>', () => {
     const router = createMemoryRouter(
       [
         { path: '/social', handle: { navKey: 'connections' }, element: <Shell /> },
-        { path: '/help', handle: { navKey: 'system' }, element: <Shell /> },
+        { path: '/help', element: <Shell /> },
       ],
       { initialEntries: ['/social'] },
     );
@@ -272,10 +266,11 @@ describe('<Sidebar>', () => {
         <RouterProvider router={router} />
       </QueryClientProvider>,
     );
+    expect(screen.getByRole('button', { name: /Quản trị/ })).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByRole('link', { name: /Kết nối/ })).toHaveAttribute('aria-current', 'page');
-    expect(screen.getByRole('link', { name: /Cài đặt/ })).not.toHaveAttribute('aria-current');
     await router.navigate('/help');
-    expect(await screen.findByRole('link', { name: /Cài đặt/, current: 'page' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /Quản trị/ })).toHaveAttribute('aria-expanded', 'false');
+    expect(document.querySelector('[aria-current="page"]')).toBeNull();
   });
 
   it('shows an error state with retry when navigation fails', () => {
@@ -302,7 +297,7 @@ describe('Hướng dẫn thiết lập — menu tài khoản (v0.1.42: không c�
 
   it('Owner: menu tài khoản có "Hướng dẫn thiết lập" cạnh Trợ giúp', async () => {
     const user = userEvent.setup();
-    renderSidebar(NAV, '/overview');
+    renderSidebar(NAV, '/intel');
     await user.click(screen.getByRole('button', { name: /Anh Nguyễn Văn A/ }));
     const items = screen.getAllByRole('menuitem').map((m) => m.textContent);
     const help = items.findIndex((t) => t?.includes('Trợ giúp'));
@@ -313,7 +308,7 @@ describe('Hướng dẫn thiết lập — menu tài khoản (v0.1.42: không c�
 
   it('không phải Owner: không có mục hướng dẫn ở thanh bên lẫn menu', async () => {
     const user = userEvent.setup();
-    renderSidebar(NAV, '/overview', { code: 'manager', name: 'Quản lý' });
+    renderSidebar(NAV, '/intel', 'intel', { code: 'manager', name: 'Quản lý' });
     expect(screen.queryByRole('link', { name: /Hướng dẫn thiết lập/ })).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /Anh Nguyễn Văn A/ }));
     expect(screen.queryByRole('menuitem', { name: /Hướng dẫn thiết lập/ })).not.toBeInTheDocument();

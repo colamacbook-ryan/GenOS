@@ -117,7 +117,7 @@ test.describe('v0.1.53 — lịch tự cập nhật đêm: nguyên nhân + cản
     await expect(row).toContainText('sudo loginctl enable-linger $USER');
     await expect(row).toContainText('genh auto-update enable');
     await row.getByRole('link', { name: /Xem cách bật lại/ }).click();
-    await expect(page).toHaveURL(/\/system\?tab=storage&focus=health/);
+    await expect(page).toHaveURL(/\/admin\/backup\?focus=health/);
     await expect(page.getByTestId('health-tip-nightly')).toBeVisible();
     await expect(page.getByTestId('health-tip-nightly').locator('code', { hasText: 'genh auto-update enable' })).toBeVisible();
   });

@@ -119,7 +119,19 @@ SCREEN_PERMISSION: dict[str, tuple[str, ...]] = {
     "plugins": ("system.read",),
     "system": ("system.read", "audit.read"),
     "connections": ("system.read",),     # v0.1.42: Kết nối (tách khỏi Cài đặt)
-    "team": ("roles.manage",),           # v0.1.42: Đội ngũ (người dùng, đánh giá, chăm sóc)
+    # v0.1.78 (G0): mục thanh bên mới — mỗi mục hiện khi vai trò thấy ít nhất một màn cũ nằm trong trang đó.
+    "intel": ("overview.read", "queue.read"),
+    "decide": ("action.draft", "action.approve"),
+    "work": ("queue.read",),
+    "panorama": ("profile.read", "opportunity.read"),
+    "me": ("roles.manage",),             # Tôi: chỉ Owner (hồ sơ riêng của Sếp)
+    "team": ("people_review.read", "care.read"),  # Đội ngũ = Đánh giá + Chăm sóc (v0.1.42 từng là người dùng Console)
+    "start": ("system.manage",),         # Bắt đầu: việc thiết lập — chỉ người quản lý hệ thống
+    "access": ("system.read",),          # Người & quyền: tab Quyền hạn (system.read); tab Người dùng cần roles.manage
+    "backup": ("system.read",),
+    "org": ("system.read",),
+    "log": ("audit.read",),
+    "advanced": ("system.read", "data.read"),
 }
 
 

@@ -127,7 +127,7 @@ test.describe('v0.1.49 — Bản tin Gen đọc lịch / mail / việc qua Gen-h
     await card.getByRole('button', { name: 'Lưu & kiểm tra' }).click();
     await enterPin(page);
     await expect(card).toContainText('Đã nối Kho');
-    await expect(card).toContainText('Còn thiếu quyền: đọc lịch, đọc mail — vào Gen-hub tick thêm cho token của Gen-Harness rồi bấm Kiểm tra lại.');
+    await expect(card).toContainText('Còn thiếu quyền: đọc lịch, đọc mail — vào Gen-hub tick thêm cho token của GenOS rồi bấm Kiểm tra lại.');
     await expect(scopes.getByText('Chưa', { exact: true })).toHaveCount(2);
     await expect(scopes.getByText('Có', { exact: true })).toHaveCount(2);
     await expect(card).toContainText('Đang nối'); // thiếu quyền đọc KHÔNG làm Kiểm tra đỏ

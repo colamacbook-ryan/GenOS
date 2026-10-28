@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { apiCall, enterPin, loginAsOwner, p3Hook, resetMock } from './support';
+import { apiCall, enterPin, expectPhoneNav, loginAsOwner, p3Hook, resetMock } from './support';
 
 /**
  * v0.1.59 (G3) — màn VIỆC (/owner/viec) trên máy chủ giả (tất định; mã PIN 246810; MCP giả, không Gen-hub / Kho thật):
@@ -30,8 +30,11 @@ test.describe('v0.1.59 · Việc', () => {
 
   test('máy tính: Cần Sếp quyết (nháp + đề xuất Gen) bên trái, Việc hôm nay + Gen đề xuất bên phải; nháp có lý do giữ + 2 dòng đầu', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
+    // v0.1.78: /owner/viec chuyển hướng sang Cần quyết (tab Chờ Sếp quyết).
     await page.goto('/owner/viec');
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Việc');
+    await expect(page).toHaveURL(/\/decide$/);
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Cần quyết');
+    await expect(page.getByRole('tab', { name: 'Chờ Sếp quyết' })).toHaveAttribute('aria-selected', 'true');
     const decide = page.getByTestId('work-decide');
     await expect(decide).toBeVisible();
     await expect(page.getByTestId('work-decide-count')).toBeVisible();
@@ -54,6 +57,9 @@ test.describe('v0.1.59 · Việc', () => {
   test('Xác nhận một đề xuất Gen cần mã PIN (kho_*) → hộp PIN → đề xuất biến mất', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto('/owner/viec');
+    const countText = async () => Number((await page.getByTestId('work-decide-count').innerText()).replace(/\D+/g, ''));
+    await expect(page.getByTestId('work-decide-count')).toBeVisible();
+    const before = await countText();
     const prop = page.locator('[data-testid=work-proposal-row][data-proposal-id=prop-2]');
     await expect(prop).toBeVisible();
     await expect(prop).toContainText('Cần mã PIN');
@@ -61,8 +67,8 @@ test.describe('v0.1.59 · Việc', () => {
     await enterPin(page);
     await expect(prop).toHaveCount(0);
     await expect(page.getByTestId('work-proposal-row')).toHaveCount(1);
-    // số chờ quyết ở thanh bên giảm theo
-    await expect(page.getByTestId('owner-nav-work')).toBeVisible();
+    // v0.1.78: nhãn đếm ở thanh bên của Mặt tiền đã bỏ — số chờ quyết ngay trên trang giảm theo.
+    await expect.poll(countText).toBe(before - 1);
   });
 
   test('Huỷ một đề xuất (không cần PIN) → biến mất', async ({ page }) => {
@@ -168,7 +174,7 @@ test.describe('v0.1.59 · Việc', () => {
     await group.getByRole('radio', { name: /^Gen đề xuất/ }).click();
     await expect(page.getByTestId('work-suggest')).toBeVisible();
     await noHorizontalScroll(page);
-    await expect(page.getByTestId('owner-tabbar').getByRole('link')).toHaveCount(5);
+    await expectPhoneNav(page); // v0.1.78: thanh dưới đã bỏ — ngăn kéo danh mục thay thế
   });
 
   test('rỗng: "Không có gì chờ Sếp duyệt." và "Hôm nay không có việc đến hạn." khi không còn nháp, đề xuất, việc, lời hứa quá hạn', async ({ page }) => {

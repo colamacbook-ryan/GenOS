@@ -44,7 +44,7 @@ const refresh = () => void queryClient.invalidateQueries({ queryKey: SOCIAL_KEY 
 export function SocialPage() {
   const me = useMe();
   useEffect(() => {
-    document.title = 'Tài khoản mạng xã hội · Gen-Harness';
+    document.title = 'Tài khoản mạng xã hội · GenOS';
   }, []);
   if (me.isPending) return <div className="screen"><SkeletonLines rows={4} /></div>;
   if (me.data?.role?.code !== 'owner') {
@@ -604,7 +604,7 @@ export function AddAccountDialog({
           </div>
           <div className="social-dos">
             <div>
-              <div className="setup-section__title">Gen-Harness SẼ</div>
+              <div className="setup-section__title">GenOS SẼ</div>
               <ul className="risk-list">
                 {p.will_do.map((r) => (
                   <li key={r}>{r}</li>
@@ -612,7 +612,7 @@ export function AddAccountDialog({
               </ul>
             </div>
             <div>
-              <div className="setup-section__title">Gen-Harness KHÔNG</div>
+              <div className="setup-section__title">GenOS KHÔNG</div>
               <ul className="risk-list">
                 {p.wont_do.map((r) => (
                   <li key={r}>{r}</li>

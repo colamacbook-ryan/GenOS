@@ -64,7 +64,7 @@ export function BossChecksPage() {
   });
 
   useEffect(() => {
-    document.title = 'Việc Sếp cần làm · Hướng dẫn thiết lập · Gen-Harness';
+    document.title = 'Việc Sếp cần làm · Hướng dẫn thiết lập · GenOS';
   }, []);
 
   const data = q.data;

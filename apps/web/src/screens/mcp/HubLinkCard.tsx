@@ -236,7 +236,7 @@ function HubLinkBody({ link, isOwner }: { link: HubLink; isOwner: boolean }) {
             placeholder={KHO_LABEL}
             maxLength={khoMax + 20}
             error={labelError}
-            hint={`Tên hiển thị của Kho trong Gen-Harness (thẻ đề xuất, câu Gen trả lời…), tối đa ${khoMax} ký tự. Để trống = "${KHO_LABEL}".`}
+            hint={`Tên hiển thị của Kho trong GenOS (thẻ đề xuất, câu Gen trả lời…), tối đa ${khoMax} ký tự. Để trống = "${KHO_LABEL}".`}
             after={<DefaultControls itemKey="kho_label" />}
           />
           <div className="jev-actions">

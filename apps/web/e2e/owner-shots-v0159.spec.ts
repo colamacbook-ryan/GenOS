@@ -71,12 +71,13 @@ async function sanity(page: Page, width: number, where: string): Promise<void> {
   expect(await page.locator('body').innerText(), where).not.toContain('[object Object]');
   const over = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(over, `${where}: không được cuộn ngang`).toBeLessThanOrEqual(0);
+  // v0.1.78: một shell — điện thoại có nút ☰ mở ngăn kéo (không còn thanh dưới), máy tính có thanh bên 7 mục cấp 1.
   if (width === 390) {
-    await expect(page.getByTestId('owner-tabbar'), where).toBeVisible();
-    await expect(page.getByTestId('owner-tabbar').getByRole('link'), where).toHaveCount(5);
+    await expect(page.getByTestId('owner-tabbar'), where).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Mở danh mục' }), where).toBeVisible();
   } else {
-    await expect(page.getByRole('navigation', { name: 'Mặt tiền' }), where).toBeVisible();
-    await expect(page.locator('[data-testid^="owner-nav-"]'), where).toHaveCount(6);
+    await expect(page.getByRole('navigation', { name: 'Danh mục màn hình' }), where).toBeVisible();
+    await expect(page.locator('[data-level1]'), where).toHaveCount(7);
   }
 }
 

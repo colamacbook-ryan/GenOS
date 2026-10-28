@@ -6,6 +6,7 @@
 import { GEN_SCREEN_BY_KEY, GEN_TARGET_BY_ID, splitTargetId, type TourOutcome, type TourStep, type UiAction } from '@gen-harness/contracts';
 import { api } from '../lib/api';
 import { navigateTo } from '../lib/navigation';
+import { resolveLegacy } from '../shell/legacyRedirects';
 import { useGenStore } from './genStore';
 
 export const WAIT_MS = 4000;
@@ -48,9 +49,13 @@ export function waitForTarget(id: string, timeoutMs = WAIT_MS, root: ParentNode 
   });
 }
 
-/** Khoá màn đang mở, theo đường dẫn (`/system?tab=brain` → `system`). */
+/**
+ * Khoá màn đang mở, theo đường dẫn (`/system?tab=brain` → `system`). v0.1.78: miền Quản trị nằm dưới `/admin/<khoá>`
+ * (`/admin/connections` → `connections`).
+ */
 export function currentScreenKey(pathname = window.location.pathname): string | null {
-  const seg = pathname.split('/').filter(Boolean)[0] ?? 'overview';
+  const segs = pathname.split('/').filter(Boolean);
+  const seg = (segs[0] === 'admin' ? segs[1] : segs[0]) ?? 'overview';
   return GEN_SCREEN_BY_KEY[seg] ? seg : null;
 }
 
@@ -65,19 +70,30 @@ export function screenHref(screen: string, params?: Record<string, string>): str
   return base + qs;
 }
 
-/** Đưa trình duyệt tới đúng màn + tham số (tab) để mục tiêu hiện ra; không làm gì nếu đã đúng. */
+/**
+ * Đưa trình duyệt tới đúng màn + tham số (tab) để mục tiêu hiện ra; không làm gì nếu đã đúng. v0.1.78: khoá màn cũ (con ẩn của
+ * trang mới) có đường cũ (`/overview`, `/system?tab=brain`) — đổi sang đích thật của bảng chuyển hướng TRƯỚC khi so với địa chỉ
+ * hiện tại, nếu không địa chỉ đang mở (`/intel?tab=overview`) không bao giờ "đúng" và Gen cứ điều hướng lại.
+ */
 function ensureLocation(targetId: string, screen?: string): void {
   const reg = GEN_TARGET_BY_ID[splitTargetId(targetId).base];
   const key = screen ?? reg?.screen;
   if (!key) return;
-  const path = GEN_SCREEN_BY_KEY[key]?.path ?? `/${key}`;
+  const raw = GEN_SCREEN_BY_KEY[key]?.path ?? `/${key}`;
+  // `system.tab.<tab>` (đích "chuyển sang tab" của Cài đặt cũ) không ghi params — tab nằm ngay trong id.
+  const tabTarget = /^system\.tab\.(\w+)$/.exec(splitTargetId(targetId).base);
+  const want = { ...(reg?.params ?? {}), ...(tabTarget ? { tab: tabTarget[1] } : {}) };
+  const wantQs = new URLSearchParams(want).toString();
+  const resolved = resolveLegacy(raw, wantQs ? `?${wantQs}` : '', '') ?? `${raw}${wantQs ? `?${wantQs}` : ''}`;
+  const [path, qs = ''] = resolved.split('?');
+  const needParams = Object.fromEntries(new URLSearchParams(qs));
   const here = new URLSearchParams(window.location.search);
-  const needParams = reg?.params ?? {};
   const samePath = window.location.pathname === path;
   const paramsOk = Object.entries(needParams).every(([k, v]) => here.get(k) === v);
   if (samePath && paramsOk) return;
   const merged = samePath ? Object.fromEntries(here) : {};
-  navigateTo(screenHref(key, { ...merged, ...needParams }));
+  const out = new URLSearchParams({ ...merged, ...needParams }).toString();
+  navigateTo(out ? `${path}?${out}` : path);
 }
 
 function ack(turnId: string | undefined, step: number, outcome: TourOutcome): void {

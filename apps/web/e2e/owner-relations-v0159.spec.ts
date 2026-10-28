@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { apiCall, loginAsOwner, p3Hook, resetMock } from './support';
+import { apiCall, expectPhoneNav, loginAsOwner, p3Hook, resetMock } from './support';
 
 /**
  * v0.1.59 (G4) — màn QUAN HỆ (/owner/quan-he) trên máy chủ giả (tất định; MCP giả). Bám docs/design/mat-tien-owner-v2.md mục 3.3:
@@ -10,6 +10,7 @@ import { apiCall, loginAsOwner, p3Hook, resetMock } from './support';
  * bridges = p-khoa, p-thang; matches = match-1, match-2 (mock market).
  */
 
+// v0.1.78: /owner/quan-he chuyển hướng sang Toàn cảnh › tab "Nóng / nguội" (giữ ?nguoi=, ?list=).
 const REL = '/owner/quan-he';
 const chip = (page: Page, list: string) => page.getByTestId(`rel-chip-${list}`);
 const panel = (page: Page) => page.getByTestId('profile-panel');
@@ -34,7 +35,9 @@ test.describe('v0.1.59 · Quan hệ (máy tính 1440)', () => {
 
   test('Cần chăm (mặc định): số lớn + lý do, bảng đủ cột, có người "Chưa phân loại"; nút lọc có số đếm', async ({ page }) => {
     await page.goto(REL);
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Quan hệ');
+    await expect(page).toHaveURL(/\/panorama\?tab=relations$/);
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Toàn cảnh');
+    await expect(page.getByRole('tab', { name: 'Nóng / nguội' })).toHaveAttribute('aria-selected', 'true');
     await expect(page.getByRole('group', { name: 'Chọn danh sách quan hệ' }).getByRole('button')).toHaveText([
       /^Cần chăm\s*4$/, /^Khách nóng\s*3$/, /^Cầu nối\s*2$/, /^Cung–cầu\s*\d+$/,
     ]);
@@ -143,7 +146,8 @@ test.describe('v0.1.59 · Quan hệ (máy tính 1440)', () => {
     await page.goto(REL);
     await tableRow(page, 'Bùi Đức Thắng').click();
     await page.getByTestId('profile-ask').click();
-    const dlg = page.getByRole('dialog', { name: 'Hỏi Gen' });
+    // v0.1.78: khung Hỏi Gen là dock bên phải của shell chung (không còn ngăn kéo `dialog` của Mặt tiền).
+    const dlg = page.getByRole('complementary', { name: /Gen — trợ lý quản trị/ });
     await expect(dlg).toBeVisible();
     await expect(dlg.getByLabel('Câu hỏi cho Gen')).toHaveValue('Soạn tin hỏi thăm Bùi Đức Thắng');
     expect(sent, 'chỉ điền sẵn ô nhập — không tự gửi cho Gen').toHaveLength(0);
@@ -268,7 +272,7 @@ test.describe('v0.1.59 · Quan hệ (điện thoại 390px)', () => {
     await expect(page.locator('table')).toHaveCount(0);
     await expect(page.getByTestId('kit-list-row')).toHaveCount(4);
     await expect(page.getByTestId('rel-side-card')).toHaveCount(0);
-    await expect(page.getByTestId('owner-tabbar').getByRole('link')).toHaveCount(5);
+    await expectPhoneNav(page); // v0.1.78: thanh dưới đã bỏ — ngăn kéo danh mục thay thế
     await noHorizontalScroll(page, 'Cần chăm 390');
     const row = page.getByTestId('kit-list-row').first();
     await expect(row).toContainText('Bùi Đức Thắng');
@@ -309,7 +313,8 @@ test.describe('v0.1.59 · Quan hệ (điện thoại 390px)', () => {
     await expect(sheet).toBeVisible();
     await expect(panel(page).getByTestId('profile-scores')).toBeVisible();
     await page.getByTestId('profile-ask').click();
-    const dlg = page.getByRole('dialog', { name: 'Hỏi Gen' });
+    // v0.1.78: khung Hỏi Gen là dock bên phải của shell chung (không còn ngăn kéo `dialog` của Mặt tiền).
+    const dlg = page.getByRole('complementary', { name: /Gen — trợ lý quản trị/ });
     await expect(dlg).toBeVisible();
     await expect(dlg.getByLabel('Câu hỏi cho Gen')).toHaveValue('Soạn tin hỏi thăm Nguyễn Văn Bảo');
   });

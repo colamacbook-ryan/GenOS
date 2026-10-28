@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import type { HealthIssue, SystemHealth } from '@gen-harness/contracts';
 import { NeedsBossStrip } from '../../src/screens/queue/NeedsBossStrip';
-import { HEALTH_KINDS } from '../../src/screens/system/queries';
+import { HEALTH_KINDS, qkSystem } from '../../src/screens/system/queries';
 import { healthRows, healthTips } from '../../src/screens/system/healthModel';
 import { qk } from '../../src/lib/queries';
 
@@ -19,7 +19,7 @@ const json = (status: number, body: unknown) =>
 
 const AUTOSTART: HealthIssue = {
   key: 'host.autostart', kind: 'host.autostart', severity: 'warn',
-  title: 'Máy chủ có thể không tự chạy lại Gen-Harness khi bật lại máy',
+  title: 'Máy chủ có thể không tự chạy lại GenOS khi bật lại máy',
   body: 'Docker chưa bật tự chạy khi mở máy — chạy một lần trên máy chủ: sudo systemctl enable docker · Chạy xong thì chạy genh status để cảnh báo tự hết',
   link: '/system?tab=storage', action: 'Xem cách bật', raised_at: '2026-10-02T01:00:00Z',
 };
@@ -61,7 +61,7 @@ describe('v0.1.37 — host.autostart', () => {
     const strip = await screen.findByTestId('needs-boss');
     const [row] = within(strip).getAllByTestId('needs-boss-row');
     expect(row).toHaveAttribute('data-severity', 'warn');
-    expect(row).toHaveTextContent('Máy chủ có thể không tự chạy lại Gen-Harness khi bật lại máy');
+    expect(row).toHaveTextContent('Máy chủ có thể không tự chạy lại GenOS khi bật lại máy');
     expect(row).toHaveTextContent('sudo systemctl enable docker');
     expect(row).toHaveTextContent('genh status');
     expect(within(row).getByRole('link', { name: /Xem cách bật/ })).toHaveAttribute('href', '/system?tab=storage');
@@ -110,5 +110,28 @@ describe('v0.1.37 — healthModel: Tự chạy lại khi bật máy', () => {
     for (const t of [sys, rootless, lingerOnly]) for (const st of t.steps) expect(st.text).not.toMatch(/đêm/);
     expect(healthTips(withAuto({ state: 'ok', linger: 'yes', linger_required: true, docker_enabled: 'yes', docker_mode: 'system', checked_at: null }))
       .find((t) => t.key === 'autostart')).toBeUndefined();
+  });
+});
+
+describe('v0.1.78 — dải "Cần Sếp xử lý" không rò sang vai chỉ đọc', () => {
+  it('Auditor (system.read, không system.manage): chip sức khoẻ ở header nạp sẵn /system/health vào cache, nhưng dải KHÔNG hiện', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json(404, { title: 'Không tìm thấy', status: 404 })));
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    qc.setQueryData(qk.me, {
+      id: 'u', email: 'auditor@genesis.local', display_name: 'Anh Kiểm', role: { code: 'auditor', name: 'auditor' },
+      org: { id: 'o', name: 'x', timezone: 'Asia/Ho_Chi_Minh', currency: 'VND' },
+      addressing: { self: 'Anh', bot_calls_me: 'Sếp' }, pin_verified_until: null,
+      permissions: { 'overview.read': 'all', 'system.read': 'all', 'system.manage': 'none' },
+    });
+    // Như HealthChip (header, system.read) đã làm: dữ liệu đã nằm trong cache cùng khoá truy vấn.
+    qc.setQueryData(qkSystem.health, health([AUTOSTART]));
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter><NeedsBossStrip /></MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByTestId('needs-boss')).toBeNull();
+    expect(screen.queryByText(/không tự chạy lại/)).toBeNull();
   });
 });

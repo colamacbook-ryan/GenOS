@@ -238,7 +238,7 @@ export function channelErrorText(code: string, name: string, type?: Channel['typ
     case NETWORK_UNAVAILABLE:
       return `Mất kết nối mạng với ${name}. Gen đang tự thử nối lại bằng phiên đã lưu — không cần quét lại QR; có mạng là tự nhận tin trở lại.`;
     case 'WA_NETWORK':
-      return `Bộ nhận tin không nối được tới máy chủ ${name}. Kiểm tra mạng của máy chạy Gen-Harness (DNS, tường lửa, Docker ra Internet tới web.whatsapp.com) rồi bấm "Quét lại QR".`;
+      return `Bộ nhận tin không nối được tới máy chủ ${name}. Kiểm tra mạng của máy chạy GenOS (DNS, tường lửa, Docker ra Internet tới web.whatsapp.com) rồi bấm "Quét lại QR".`;
     case 'PAIRING_REJECTED':
       return `${name} từ chối lần ghép này (điện thoại có thể đã báo "không liên kết được thiết bị"). ${SAFE_WAIT}`;
     case 'QR_EXPIRED':
@@ -246,7 +246,7 @@ export function channelErrorText(code: string, name: string, type?: Channel['typ
         ? `Mã QR đã hết hạn mà chưa ghép được. ${RESCAN} Nếu điện thoại báo "không liên kết được thiết bị", đợi mã mới hiện rồi quét lại ngay; vẫn không được thì thử lại sau ít phút.`
         : `Mã QR đã hết hạn mà chưa quét. ${RESCAN} Mở ${name} trên điện thoại trước, rồi quét mã ngay khi nó hiện.`;
     case 'FORBIDDEN':
-      return `${name} từ chối kết nối từ địa chỉ mạng này (403). Thử lại sau, hoặc đổi mạng cho máy chạy Gen-Harness.`;
+      return `${name} từ chối kết nối từ địa chỉ mạng này (403). Thử lại sau, hoặc đổi mạng cho máy chạy GenOS.`;
     case 'LOGGED_OUT_REMOTELY':
       return `Thiết bị đã bị gỡ khỏi ${name} trên điện thoại. ${RESCAN}`;
     case 'CREDENTIAL_REJECTED':
@@ -258,7 +258,7 @@ export function channelErrorText(code: string, name: string, type?: Channel['typ
     case 'MULTIDEVICE_MISMATCH':
       return `Tài khoản ${name} chưa bật chế độ nhiều thiết bị. Cập nhật ${name} trên điện thoại rồi bấm "Quét lại QR".`;
     case 'RECONNECT_FAILED':
-      return `Mất kết nối với ${name} và nối lại nhiều lần không được. Kiểm tra mạng của máy chạy Gen-Harness rồi ${resumable ? 'bấm "Nối lại bằng phiên đã lưu"' : 'bấm "Quét lại QR"'}.`;
+      return `Mất kết nối với ${name} và nối lại nhiều lần không được. Kiểm tra mạng của máy chạy GenOS rồi ${resumable ? 'bấm "Nối lại bằng phiên đã lưu"' : 'bấm "Quét lại QR"'}.`;
     case 'CHANNEL_UNAVAILABLE':
       return `Bộ nhận tin chưa mở được kênh ${name} (thư viện ${name} trong bản này không khởi tạo được). Nhờ người quản trị kiểm tra bộ nhận tin rồi bấm "Quét lại QR".`;
     case 'NO_LOGIN_INFO':

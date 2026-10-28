@@ -22,7 +22,7 @@ test.describe('v0.1.40 — Bản sao ngoài máy', () => {
     await expect(row).toHaveCount(1);
     await expect(row).toHaveAttribute('data-severity', 'warn');
     await row.getByRole('link', { name: 'Chọn nơi lưu / sao lưu ngay' }).click();
-    await expect(page).toHaveURL(/\/system\?tab=storage&focus=offsite$/);
+    await expect(page).toHaveURL(/\/admin\/backup\?focus=offsite$/);
 
     const card = page.getByRole('region', { name: 'Bản sao ngoài máy' });
     await expect(card).toBeVisible();

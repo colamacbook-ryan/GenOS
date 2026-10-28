@@ -1,6 +1,6 @@
 import { expect, test, type Browser, type Page, type Response } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
-import type { NavDomain } from '@gen-harness/contracts';
+import { screenPath, type NavDomain } from '@gen-harness/contracts';
 import { firstScreenKey } from '../src/shell/navModel';
 
 /**
@@ -183,8 +183,10 @@ test.describe.serial('CI — e2e thật rút gọn: giao/gán người & trợ l
   test('(b) Deal & Vụ việc › Vụ việc → Gán người xử lý → người dùng thật', async () => {
     const c = (await call('POST', '/cases', { title: 'Khiếu nại giao thiếu thép cuộn (e2e CI)', priority: 'P2',
       subject: { type: 'person', id: ids.lan } })) as { id: string; code: string };
+    // v0.1.78: /deals chuyển sang Toàn cảnh › tab "Deal & Vụ việc"; trong đó còn tab con "Vụ việc" (exact: tránh khớp cả tab ngoài).
     await page.goto('/deals');
-    await page.getByRole('tab', { name: 'Vụ việc' }).click();
+    await expect(page).toHaveURL(/\/panorama\?tab=deals$/);
+    await page.getByRole('tab', { name: 'Vụ việc', exact: true }).click();
     const row = page.getByRole('row').filter({ hasText: c.code });
     await expect(row).toBeVisible({ timeout: 20_000 });
     await row.getByRole('button', { name: 'Đổi' }).click();
@@ -255,7 +257,8 @@ test.describe.serial('CI — e2e thật rút gọn: giao/gán người & trợ l
       window.history.pushState({}, '', '/api');
       window.dispatchEvent(new PopStateEvent('popstate'));
     });
-    await expect(page).toHaveURL(/\/api$/);
+    // v0.1.78: `/api` (API & Model) chuyển hướng sang Quản trị › Nâng cao › tab API & Model.
+    await expect(page).toHaveURL(/\/admin\/advanced\?tab=api$/);
     await page.getByRole('button', { name: /Thêm nhà cung cấp/ }).first().click();
     const dlg = page.getByRole('dialog', { name: 'Thêm nhà cung cấp' });
     await expect(dlg).toBeVisible();
@@ -304,7 +307,8 @@ test.describe.serial('CI — e2e thật rút gọn: giao/gán người & trợ l
     const email = `moi.${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}@genesis.vn`;
     const newPassword = `mat-khau-moi-${Date.now().toString(36)}-2026`;
 
-    await page.goto('/team');
+    // v0.1.78: "Mời người dùng" nằm ở Quản trị › Người & quyền (trước đây Đội ngũ › Người dùng).
+    await page.goto('/admin/access');
     await page.getByRole('button', { name: /Mời người dùng/ }).first().click();
     const form = page.getByRole('dialog', { name: 'Mời người dùng' });
     await expect(form).toBeVisible();
@@ -355,7 +359,7 @@ test.describe.serial('CI — e2e thật rút gọn: giao/gán người & trợ l
       expect(navRes.ok(), await navRes.text()).toBe(true);
       const key = firstScreenKey((await navRes.json()) as NavDomain[]);
       expect(key, 'vai trò Vận hành phải có ít nhất một màn').toBeTruthy();
-      await expect.poll(() => new URL(sp.url()).pathname, { timeout: 20_000 }).toBe(`/${key}`);
+      await expect.poll(() => new URL(sp.url()).pathname, { timeout: 20_000 }).toBe(screenPath(key!));
       const path = new URL(sp.url()).pathname;
       expect(path).not.toMatch(/^\/(login|account|change-password)/);
       await expect(sp.getByText('[object Object]')).toHaveCount(0);

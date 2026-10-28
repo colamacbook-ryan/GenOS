@@ -61,12 +61,14 @@ interface VisualCase {
    */
   pixel: boolean;
 }
+// v0.1.78: raw/rules/clean/identity từng so pixel với thiết kế Console cũ (thanh bên 244px, header 58px). Shell mới (thanh bên 216px, header 44px,
+// dải tab của trang, nhãn "đường lọc cũ" của G9) làm vùng cắt không còn tương ứng ⇒ chuyển thành kiểm khói; ảnh vẫn lưu để xem bằng mắt.
 const CASES: VisualCase[] = [
-  { key: 'raw', clicks: ['Tầng dữ liệu', 'Kho dữ liệu thô'], until: '.screen-desc', pixel: true },
-  { key: 'rules', clicks: ['Tầng dữ liệu', 'Quy tắc sàng lọc'], until: '.rule-card >> nth=0', pixel: true },
-  { key: 'clean', clicks: ['Tầng dữ liệu', 'Kho sạch'], until: '.screen-desc', pixel: true },
-  { key: 'identity', clicks: ['Tầng dữ liệu', 'Hợp nhất danh tính'], until: '.id-stats', pixel: true },
-  { key: 'system', clicks: ['Điều khiển hệ thống'], until: '[role="tablist"]', pixel: false },
+  { key: 'raw', clicks: ['Tầng dữ liệu', 'Kho dữ liệu thô'], until: '.screen-desc', pixel: false },
+  { key: 'rules', clicks: ['Tầng dữ liệu', 'Quy tắc sàng lọc'], until: '.rule-card >> nth=0', pixel: false },
+  { key: 'clean', clicks: ['Tầng dữ liệu', 'Kho sạch'], until: '.screen-desc', pixel: false },
+  { key: 'identity', clicks: ['Tầng dữ liệu', 'Hợp nhất danh tính'], until: '.id-stats', pixel: false },
+  { key: 'system', clicks: ['Điều khiển hệ thống'], until: '.hub__panel', pixel: false },
 ];
 
 function crop(png: PNG, x: number, y: number, w: number, h: number): PNG {
@@ -145,28 +147,16 @@ test.describe('data screens', () => {
     await expect(rows.first()).toContainText('Đã vào kho sạch', { timeout: 8000 }).catch(() => undefined);
   });
 
-  test('rules: toggle, weights must total 100%, test card', async ({ page }) => {
+  test('rules: đường lọc cũ — chỉ đọc, nút disabled kèm lý do (v0.1.78 G9)', async ({ page }) => {
     await page.goto('/rules');
+    await expect(page.getByTestId('legacy-filter-notice')).toContainText('Tình báo không dựa vào');
     const r06 = page.getByRole('article', { name: /R-06/ });
     await expect(r06).toContainText('8.204 lượt / 24h');
-    await r06.getByRole('switch').click();
-    await expect(page.getByText(/Đã tắt R-06|R-06.*tắt/i).first()).toBeVisible();
-
-    const heat = page.getByLabel('Độ nóng của tín hiệu');
-    await heat.focus();
-    await page.keyboard.press('ArrowRight');
-    await expect(page.getByText('Tổng trọng số phải bằng 100% — hiện 101% (thừa 1%).')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Lưu trọng số' })).toBeDisabled();
-    const potential = page.getByLabel('Tiềm năng giá trị');
-    await potential.focus();
-    await page.keyboard.press('ArrowLeft');
-    await expect(page.getByText('Tổng 100% — sẵn sàng lưu.')).toBeVisible();
-    await page.getByRole('button', { name: 'Lưu trọng số' }).click();
-    await expect(page.getByText('Tổng 100% — sẵn sàng lưu.')).toHaveCount(0);
-
+    await expect(r06.getByRole('switch')).toBeDisabled();
+    await expect(page.getByRole('button', { name: /Thêm quy tắc/ })).toBeDisabled();
+    await expect(page.getByRole('button', { name: /Chạy thử trên 100 bản ghi/ })).toBeDisabled();
+    await expect(page.getByLabel('Độ nóng của tín hiệu')).toBeDisabled();
     await expect(page.getByText('trên ngưỡng 0,60, được ghi vào kho sạch')).toBeVisible();
-    await page.getByRole('button', { name: /Chạy thử trên 100 bản ghi/ }).click();
-    await expect(page.getByRole('dialog')).toContainText('100');
   });
 
   test('clean: memory panel follows the selected row', async ({ page }) => {
@@ -314,7 +304,7 @@ test('auditor is read-only', async ({ page }) => {
   await loginAs(page, AUDITOR.email);
   await page.goto('/rules');
   await expect(page.getByRole('article', { name: /R-01/ })).toBeVisible();
-  await expect(page.getByRole('button', { name: /Thêm quy tắc/ })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /Thêm quy tắc/ })).toBeDisabled();
   await expect(page.getByRole('article', { name: /R-01/ }).getByRole('switch')).toBeDisabled();
   await page.goto('/identity');
   await expect(page.getByRole('article').first()).toBeVisible();
@@ -382,7 +372,7 @@ test('setup: Nguồn AI + Xong ở trình thiết lập, bước 5–7 ở Hư�
   await expect(zalo).toContainText('Đang kết nối', { timeout: 8000 });
   await expect(next).toBeEnabled();
   await next.click();
-  await expect(page).toHaveURL(/\/guide$/);
+  await expect(page).toHaveURL(/\/admin\/start$/);
 
   // Bước 6 — QD 17/10: every synced group starts "Lắng nghe im lặng" (lưu hết, không bao giờ trả lời); Sếp đổi từng nhóm.
   await page.goto('/guide/6');
@@ -393,7 +383,7 @@ test('setup: Nguồn AI + Xong ở trình thiết lập, bước 5–7 ở Hư�
   await mode.selectOption('tagged_only');
   await expect(next).toBeEnabled();
   await next.click();
-  await expect(page).toHaveURL(/\/guide$/);
+  await expect(page).toHaveURL(/\/admin\/start$/);
 
   // Bước 7 — presets + weights.
   await page.goto('/guide/7');
@@ -411,7 +401,7 @@ test('setup: Nguồn AI + Xong ở trình thiết lập, bước 5–7 ở Hư�
   await expect(page.getByText('Trọng số chấm điểm · tổng 100%')).toBeVisible();
   await expect(next).toBeEnabled();
   await next.click();
-  await expect(page).toHaveURL(/\/guide$/);
+  await expect(page).toHaveURL(/\/admin\/start$/);
 
   // Hoàn tất đã ghi: 1–4, 5–7 (vừa làm ở Hướng dẫn) và 12 xong; 8–11 chưa làm ⇒ "để sau" (dùng mặc định) — làm tiếp ở Hướng dẫn.
   const state = await apiCall(page, 'GET', '/setup/state');

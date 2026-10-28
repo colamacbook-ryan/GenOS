@@ -55,7 +55,8 @@ beforeEach(() => {
   useGenStore.setState({ openByUser: {}, conversationId: null, messages: [], busy: false, spotlight: null });
   setNavigator((to) => navigations.push(to));
   stubApi();
-  window.history.pushState({}, '', '/overview');
+  // v0.1.78: /overview là link cũ — địa chỉ thật của Tổng quan là Tình báo › tab Tổng quan.
+  window.history.pushState({}, '', '/intel?tab=overview');
 });
 afterEach(() => {
   cleanup();
@@ -80,6 +81,8 @@ describe('Gen director helpers', () => {
   it('maps screens and collects visible targets', () => {
     expect(currentScreenKey('/system')).toBe('system');
     expect(currentScreenKey('/guide/5')).toBe('guide');
+    expect(currentScreenKey('/admin/connections')).toBe('connections'); // v0.1.78: Quản trị nằm dưới /admin/<khoá>
+    expect(currentScreenKey('/intel')).toBe('intel');
     expect(currentScreenKey('/khong-co')).toBeNull();
     expect(screenHref('system', { tab: 'brain' })).toBe('/system?tab=brain');
     const host = document.createElement('div');
@@ -154,7 +157,7 @@ describe('GenPanel', () => {
     await userEvent.type(screen.getByLabelText('Câu hỏi cho Gen'), 'Hôm nay có gì gấp?{Enter}');
     await waitFor(() => expect(calls.some((c) => c.method === 'POST' && c.url.endsWith('/gen/turns'))).toBe(true));
     const post = calls.find((c) => c.method === 'POST')!;
-    expect(post.body).toMatchObject({ text: 'Hôm nay có gì gấp?', conversation_id: null, context: { screen_key: 'overview', visible_targets: ['overview.kpis'] } });
+    expect(post.body).toMatchObject({ text: 'Hôm nay có gì gấp?', conversation_id: null, context: { screen_key: 'intel', visible_targets: ['overview.kpis'] } });
     expect(screen.getByText('Hôm nay có gì gấp?')).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText(/Gen đang nghĩ/)).toBeInTheDocument());
     ws({ turn_id: 't1', conversation_id: 'c1', seq: 0, step: { kind: 'tool', name: 'overview.summary', args: {} } });
@@ -217,7 +220,8 @@ describe('Spotlight', () => {
     wrap(<Spotlight />);
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const p = executeUiAction({ type: 'highlight', target: 'system.brain.jev', message: 'Thẻ Jev' });
-    expect(navigations).toEqual(['/system?tab=brain']);
+    // v0.1.78: /system?tab=brain là link cũ — Gen đi thẳng tới đích thật (Quản trị › Nâng cao › Bộ não AI), không qua chuyển hướng.
+    expect(navigations).toEqual(['/admin/advanced?tab=brain']);
     await act(async () => {
       vi.advanceTimersByTime(4100);
       await p;
@@ -228,7 +232,7 @@ describe('Spotlight', () => {
   });
 
   it('runs a tour step by step with Next/Back and acks each step', async () => {
-    window.history.pushState({}, '', '/system?tab=brain');
+    window.history.pushState({}, '', '/admin/advanced?tab=brain');
     page(['system.tab.brain', 'system.brain.jev', 'system.brain.jev.test']);
     wrap(<Spotlight />);
     await act(() =>

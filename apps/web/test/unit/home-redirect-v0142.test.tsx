@@ -3,7 +3,8 @@
  * không còn cứng "/overview" (Agent NV từng gặp ổ khoá ngay khi đăng nhập). Giữ ?gen=; danh mục rỗng/lỗi có trạng thái
  * riêng. Đổi mật khẩu bắt buộc xong và thiết lập đã xong cũng về "/".
  *
- * v0.1.55 (G5): vai Owner ⇒ "/" chuyển tới "/owner" (Mặt tiền), vẫn giữ ?gen=; nhân viên (mọi vai khác) như cũ.
+ * v0.1.78 (G0): MỘT shell — mọi vai (Sếp, Quản lý, Vận hành, Nhân viên) vào mục đầu tiên không ẩn: Tình báo `/intel`,
+ * vẫn giữ ?gen=. Không còn nhánh riêng cho Owner/Mặt tiền.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
@@ -29,7 +30,7 @@ function Where() {
   return <div data-testid="where">{`${l.pathname}${l.search}`}</div>;
 }
 
-const TARGETS: RouteObject[] = ['inbox', 'overview', 'account', 'owner'].map((k) => ({ path: `/${k}`, element: <Where /> }));
+const TARGETS: RouteObject[] = ['intel', 'decide', 'work', 'panorama', 'account', 'admin/start'].map((k) => ({ path: `/${k}`, element: <Where /> }));
 
 function renderAt(path: string, extra: RouteObject[] = [], qc: QueryClient = queryClient) {
   const router = createMemoryRouter([{ path: '/', element: <HomeRedirect /> }, ...TARGETS, ...extra], { initialEntries: [path] });
@@ -78,51 +79,50 @@ afterEach(() => {
 });
 
 describe('HomeRedirect', () => {
-  it('Agent NV (không có overview.read): "/" → /inbox, không gặp ổ khoá', async () => {
+  it('Agent NV (không có overview.read): "/" → /intel (Tình báo hiện nhờ queue.read), không gặp ổ khoá', async () => {
     const nav = buildNavigation(hiddenScreens('agent_staff'));
-    expect(nav[0].groups.some((g) => g.key === 'overview')).toBe(false);
+    expect(nav[0].groups.some((g) => g.key === 'intel')).toBe(true);
+    expect(nav[0].groups.find((g) => g.key === 'intel')!.children!.some((c) => c.key === 'overview')).toBe(false);
     stubNav(nav);
     const router = renderAt('/');
-    expect(await screen.findByTestId('where')).toHaveTextContent('/inbox');
-    expect(router.state.location.pathname).toBe('/inbox');
+    expect(await screen.findByTestId('where')).toHaveTextContent('/intel');
+    expect(router.state.location.pathname).toBe('/intel');
     expect(screen.queryByText(/không có quyền|không xem được/i)).not.toBeInTheDocument();
   });
 
-  it('Owner: "/" → /owner (Mặt tiền), không còn /overview', async () => {
+  it('Owner: "/" → /intel (Tình báo › Hôm nay), không còn /owner hay /overview', async () => {
     stubNav(buildNavigation(), undefined, 'owner');
     const router = renderAt('/');
-    expect(await screen.findByTestId('where')).toHaveTextContent('/owner');
-    expect(router.state.location.pathname).toBe('/owner');
+    expect(await screen.findByTestId('where')).toHaveTextContent('/intel');
+    expect(router.state.location.pathname).toBe('/intel');
   });
 
   it('Owner: giữ ?gen= (Bản tin Gen từ chuông) và ?gen=coach (thẻ Hôm nay của Sếp)', async () => {
     stubNav(buildNavigation(), undefined, 'owner');
     renderAt('/?gen=0192aaaa-bbbb-4ccc-8ddd-eeeeffff0000');
-    expect(await screen.findByTestId('where')).toHaveTextContent('/owner?gen=0192aaaa-bbbb-4ccc-8ddd-eeeeffff0000');
+    expect(await screen.findByTestId('where')).toHaveTextContent('/intel?gen=0192aaaa-bbbb-4ccc-8ddd-eeeeffff0000');
     cleanup();
     renderAt('/?gen=coach');
-    expect(await screen.findByTestId('where')).toHaveTextContent('/owner?gen=coach');
+    expect(await screen.findByTestId('where')).toHaveTextContent('/intel?gen=coach');
   });
 
-  it('Owner vẫn về /owner dù danh mục lỗi (không cần /navigation)', async () => {
+  it('danh mục lỗi ⇒ ErrorState (một shell: trang chủ cần /navigation cho mọi vai, kể cả Owner)', async () => {
     stubNav('error', undefined, 'owner');
-    const router = renderAt('/', [], new QueryClient({ defaultOptions: { queries: { retry: false } } }));
-    expect(await screen.findByTestId('where')).toHaveTextContent('/owner');
-    expect(router.state.location.pathname).toBe('/owner');
-    expect(screen.queryByText('Không tải được danh mục')).not.toBeInTheDocument();
+    renderAt('/', [], new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+    expect(await screen.findByText('Không tải được danh mục')).toBeInTheDocument();
   });
 
-  it.each(['manager', 'operator', 'auditor'])('nhân viên (%s): "/" → /overview như cũ, không bị đưa tới /owner', async (role) => {
+  it.each(['manager', 'operator', 'auditor'])('vai %s: "/" → /intel', async (role) => {
     stubNav(buildNavigation(), undefined, role);
     const router = renderAt('/');
-    expect(await screen.findByTestId('where')).toHaveTextContent('/overview');
-    expect(router.state.location.pathname).toBe('/overview');
+    expect(await screen.findByTestId('where')).toHaveTextContent('/intel');
+    expect(router.state.location.pathname).toBe('/intel');
   });
 
-  it('nhân viên giữ ?gen= (Bản tin Gen từ chuông) như cũ', async () => {
+  it('vai khác Owner cũng giữ ?gen= (Bản tin Gen từ chuông)', async () => {
     stubNav(buildNavigation(), undefined, 'manager');
     renderAt('/?gen=0192aaaa-bbbb-4ccc-8ddd-eeeeffff0000');
-    expect(await screen.findByTestId('where')).toHaveTextContent('/overview?gen=0192aaaa-bbbb-4ccc-8ddd-eeeeffff0000');
+    expect(await screen.findByTestId('where')).toHaveTextContent('/intel?gen=0192aaaa-bbbb-4ccc-8ddd-eeeeffff0000');
   });
 
   it('chưa biết vai (đang tải /auth/me): khung chờ, không chuyển vội', async () => {
@@ -132,11 +132,11 @@ describe('HomeRedirect', () => {
     expect(router.state.location.pathname).toBe('/');
   });
 
-  it('bỏ qua màn ẩn: chỉ còn nhóm có con ẩn thì đi tiếp nhóm sau', async () => {
-    const nav = buildNavigation(new Set(['overview', 'inbox', 'workbench', 'tasks']));
+  it('bỏ qua màn ẩn: chỉ còn mục có con ẩn thì đi tiếp mục sau', async () => {
+    const nav = buildNavigation(new Set(['intel', 'decide', 'work']));
     stubNav(nav);
-    renderAt('/', [{ path: '/directory', element: <Where /> }]);
-    expect(await screen.findByTestId('where')).toHaveTextContent('/directory');
+    renderAt('/');
+    expect(await screen.findByTestId('where')).toHaveTextContent('/panorama');
   });
 
   it('danh mục rỗng → EmptyState + link Tài khoản của tôi', async () => {
@@ -165,22 +165,22 @@ describe('HomeRedirect', () => {
 });
 
 describe('Về "/" sau đổi mật khẩu bắt buộc và sau thiết lập', () => {
-  it('ForcePasswordPage khi đã đổi xong → "/" → Mặt tiền (Owner)', async () => {
+  it('ForcePasswordPage khi đã đổi xong → "/" → Tình báo', async () => {
     stubNav(buildNavigation(), (url) => (url.endsWith('/auth/me') ? ME : undefined));
     const router = renderAt('/change-password', [{ path: '/change-password', element: <ForcePasswordPage /> }]);
-    expect(await screen.findByTestId('where')).toHaveTextContent('/owner');
-    expect(router.state.location.pathname).toBe('/owner');
+    expect(await screen.findByTestId('where')).toHaveTextContent('/intel');
+    expect(router.state.location.pathname).toBe('/intel');
   });
 
   // v0.1.59 (g5-thiet-lap): thiết lập đã xong ⇒ /setup về /owner (trừ ?buoc=nguon-ai). Vai khác Owner bị OwnerShell chuyển tiếp về "/" →
   // màn đầu tiên của vai trò (e2e/owner.spec.ts "operator/manager/auditor: mở /owner bị chuyển"); ở đây chỉ kiểm bước chuyển của SetupPage.
-  it('SetupPage khi đã hoàn tất → /owner (Mặt tiền); vai khác Owner được OwnerShell đưa về "/" → màn đầu tiên của vai trò', async () => {
+  it('SetupPage khi đã hoàn tất → /owner (nay là đường cũ, router chuyển tiếp sang /intel — legacy-redirects-v0178.test.ts)', async () => {
     const nav = buildNavigation(hiddenScreens('agent_staff'));
     const finished = { finished: true, current_step: 12, steps: [], org: null };
     stubNav(nav, (url) => (url.includes('/setup/state') ? finished : undefined));
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
     qc.setQueryData(qk.setupState, finished);
-    const router = renderAt('/setup', [{ path: '/setup', element: <SetupPage /> }], qc);
+    const router = renderAt('/setup', [{ path: '/setup', element: <SetupPage /> }, { path: '/owner', element: <Where /> }], qc);
     expect(await screen.findByTestId('where')).toHaveTextContent('/owner');
     expect(router.state.location.pathname).toBe('/owner');
   });

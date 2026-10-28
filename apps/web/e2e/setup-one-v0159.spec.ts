@@ -43,7 +43,7 @@ test.describe('Thiết lập một màn (v0.1.59)', () => {
     await expect(page.getByRole('heading', { name: 'Tạo tài khoản Sếp' })).toBeVisible();
     await expect(page).toHaveURL(/buoc=tai-khoan/);
     // logo cùng kiểu Mặt tiền: "Gen-Harness", không viết hoa toàn bộ (checklist "Owner 3 giây hiểu", v0.1.60)
-    await expect(page.getByTestId('setup-brand')).toHaveText('Gen-Harness');
+    await expect(page.getByTestId('setup-brand')).toHaveText('GenOS');
     expect(await page.getByTestId('setup-brand').evaluate((el) => getComputedStyle(el.lastElementChild!).textTransform)).toBe('none');
     await expect(stepBar(page).getByRole('listitem')).toHaveText(['1Bước 1: Tài khoản', '2Bước 2: Nguồn AI', '3Bước 3: Xong']);
     await expect(stepBar(page).getByRole('listitem').first()).toHaveAttribute('aria-current', 'step');
@@ -107,8 +107,10 @@ test.describe('Thiết lập một màn (v0.1.59)', () => {
     await page.getByRole('button', { name: /Vào Mặt tiền/ }).click();
     await expectOwnerFront(page);
 
+    // v0.1.78: /owner/them → Quản trị › Bắt đầu › tab "Việc nên làm tiếp".
     // Mặt tiền → Cài đặt: khối Nguồn AI nói chưa nối, nút "Đổi nguồn AI" → /setup?buoc=nguon-ai (đã xong thiết lập vẫn mở được).
     await page.goto('/owner/them');
+    await expect(page).toHaveURL(/\/admin\/start\?tab=more$/);
     await expect(page.getByTestId('owner-more-ai-status')).toContainText('Chưa nối nguồn AI');
     await page.getByRole('link', { name: /Đổi nguồn AI/ }).click();
     await expect(page).toHaveURL(new RegExp(AI_SOURCE_PATH.replace('?', '\\?') + '$'));

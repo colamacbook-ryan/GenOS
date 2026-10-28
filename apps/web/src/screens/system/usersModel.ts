@@ -47,7 +47,7 @@ export function isLocalAddress(url: string | null | undefined): boolean {
  */
 export function inviteMessage(r: Pick<TempPasswordResult, 'user' | 'temp_password'>, loginUrl: string | null): string {
   return [
-    `Chào ${r.user.display_name}, mời bạn vào Gen-Harness:`,
+    `Chào ${r.user.display_name}, mời bạn vào GenOS:`,
     ...(loginUrl ? [`Địa chỉ: ${loginUrl}`] : []),
     `Email: ${r.user.email}`,
     `Mật khẩu tạm: ${r.temp_password}`,

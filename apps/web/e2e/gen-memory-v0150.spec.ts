@@ -32,7 +32,7 @@ test('Gen đề xuất nhớ → Xác nhận → Cài đặt › Bộ não AI th
   await expect(card).toContainText('Đã ghi nhớ');
   await expect(page.getByRole('dialog', { name: 'Mã PIN xác nhận thao tác' })).toHaveCount(0);
   await card.getByRole('button', { name: 'Xem ở Cài đặt' }).click();
-  await expect(page).toHaveURL(/\/system\?tab=brain#gen-memory$/);
+  await expect(page).toHaveURL(/\/admin\/advanced\?tab=brain#gen-memory$/);
 
   // Cài đặt › Bộ não AI: thẻ "Gen nhớ" có đúng ghi chú vừa xác nhận.
   const mem = page.getByRole('region', { name: 'Gen nhớ' });

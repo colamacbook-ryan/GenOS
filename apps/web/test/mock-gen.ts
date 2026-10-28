@@ -79,7 +79,7 @@ export type BriefingHubMode = 'ok' | 'missing' | 'breaker' | 'error' | 'off';
 export const BRIEFING_HUB_MODES: readonly BriefingHubMode[] = ['ok', 'missing', 'breaker', 'error', 'off'];
 
 /** Đúng câu máy chủ (`briefing.HUB_HINT_SCOPE` với mục mail). */
-export const HUB_HINT_MAIL = 'Bản tin chưa có mail cần trả lời: vào Gen-hub tick thêm quyền đọc mail cho token của Gen-Harness, rồi bấm Kiểm tra ở Kết nối › Gen-hub.';
+export const HUB_HINT_MAIL = 'Bản tin chưa có mail cần trả lời: vào Gen-hub tick thêm quyền đọc mail cho token của GenOS, rồi bấm Kiểm tra ở Kết nối › Gen-hub.';
 /** Nút dưới lời nhắc (như `briefing.HUB_BUTTON` / `HUB_SPOT_SCOPE`): cuộn tới + làm sáng thẻ Gen-hub ở Kết nối. */
 export const HUB_BUTTON = 'Mở thẻ Gen-hub';
 export const HUB_SPOT_SCOPE = 'Thẻ Gen-hub: sau khi tick thêm quyền đọc trong Gen-hub, bấm Kiểm tra ở đây.';
@@ -580,8 +580,8 @@ export function createMock(opts: MockGenOptions) {
           fields: {
             bang: 'Phiên',
             record: {
-              'Chủ đề': `Gen-Harness lên bản ${version}`, Ngày: today,
-              'Đã chốt': `Máy chủ Gen-Harness đã nâng lên ${version}. Ghi chú phát hành: https://github.com/genesis/gen-harness/releases/tag/${version}`,
+              'Chủ đề': `GenOS lên bản ${version}`, Ngày: today,
+              'Đã chốt': `Máy chủ GenOS đã nâng lên ${version}. Ghi chú phát hành: https://github.com/genesis/gen-harness/releases/tag/${version}`,
             },
           },
           summary: 'Tạo bản ghi mới ở bảng Phiên của Kho dữ liệu — ghi thẳng qua Gen-hub khi Sếp xác nhận và nhập mã PIN.',
@@ -590,10 +590,10 @@ export function createMock(opts: MockGenOptions) {
         };
         proposals.set(proposal.id, proposal);
         const conv: Conversation = { id: randomUUID(), title: `Ghi Phiên ${version} vào Kho`, created_at: iso, last_at: iso, kind: 'chat', messages: [] };
-        const say = `Máy chủ Gen-Harness vừa lên ${version}. Em đề xuất ghi một Phiên vào Kho dữ liệu để lưu mốc này — Sếp xem lại, sửa nếu cần rồi bấm Xác nhận và nhập mã PIN thì em mới ghi (qua Gen-hub).`;
+        const say = `Máy chủ GenOS vừa lên ${version}. Em đề xuất ghi một Phiên vào Kho dữ liệu để lưu mốc này — Sếp xem lại, sửa nếu cần rồi bấm Xác nhận và nhập mã PIN thì em mới ghi (qua Gen-hub).`;
         conv.messages.push({ id: randomUUID(), role: 'assistant', turn_id: randomUUID(), content: { steps: [{ kind: 'say', text: say }, { kind: 'proposal', proposal }] }, created_at: iso });
         conversations.set(conv.id, conv);
-        opts.notifyOwners?.('gen.kho_proposal', `Gen đề xuất ghi Kho · Phiên ${version}`, `Gen-Harness đã lên ${version}. Xem thẻ đề xuất, Xác nhận và nhập mã PIN để ghi Phiên vào Kho dữ liệu.`, `/overview?gen=${conv.id}`);
+        opts.notifyOwners?.('gen.kho_proposal', `Gen đề xuất ghi Kho · Phiên ${version}`, `GenOS đã lên ${version}. Xem thẻ đề xuất, Xác nhận và nhập mã PIN để ghi Phiên vào Kho dữ liệu.`, `/overview?gen=${conv.id}`);
         return { conversation_id: conv.id, proposal_id: proposal.id };
       },
       /** Worker nhắc việc tới giờ: chuông cho Owner, mỗi nhắc một lần. */

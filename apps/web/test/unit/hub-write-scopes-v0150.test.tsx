@@ -126,7 +126,7 @@ describe('mcpModel — quyền ghi Kho (hàm thuần)', () => {
   });
 
   it('writeScopesMessage: thiếu ⇒ hướng dẫn tick kho_create, kho_update; đủ ⇒ câu đủ quyền; chưa biết ⇒ null', () => {
-    expect(WRITE_MISSING_TEXT).toBe('Vào Gen-hub tick quyền ghi Kho (tạo và sửa bản ghi — tên trong Gen-hub: kho_create, kho_update) cho token của Gen-Harness rồi bấm Kiểm tra.');
+    expect(WRITE_MISSING_TEXT).toBe('Vào Gen-hub tick quyền ghi Kho (tạo và sửa bản ghi — tên trong Gen-hub: kho_create, kho_update) cho token của GenOS rồi bấm Kiểm tra.');
     expect(writeScopesMessage(['ghi Kho (kho_create, kho_update)'], { kho: false })).toEqual({ tone: 'warn', text: WRITE_MISSING_TEXT });
     expect(writeScopesMessage(undefined, { kho: false })).toEqual({ tone: 'warn', text: WRITE_MISSING_TEXT });
     expect(writeScopesMessage([], { kho: true })).toEqual({ tone: 'ok', text: WRITE_ENOUGH_TEXT });
@@ -238,7 +238,7 @@ describe('Thẻ Gen-hub — Quyền ghi Kho (tuỳ chọn)', () => {
     const first = renderCard(<HubLinkCard />);
     const box = await screen.findByTestId('hub-write-scopes');
     expect(within(box).getAllByText('Chưa')).toHaveLength(2);
-    expect(within(box).getByText('Vào Gen-hub tick quyền ghi Kho (tạo và sửa bản ghi — tên trong Gen-hub: kho_create, kho_update) cho token của Gen-Harness rồi bấm Kiểm tra.')).toBeInTheDocument();
+    expect(within(box).getByText('Vào Gen-hub tick quyền ghi Kho (tạo và sửa bản ghi — tên trong Gen-hub: kho_create, kho_update) cho token của GenOS rồi bấm Kiểm tra.')).toBeInTheDocument();
     first.unmount();
     vi.unstubAllGlobals();
 
@@ -256,7 +256,7 @@ describe('Thẻ Gen-hub — Quyền ghi Kho (tuỳ chọn)', () => {
     expect(await screen.findByText(/Đã nối Kho · 240 ms/)).toBeInTheDocument();
     expect(screen.getByText(/Đã nối Kho/).closest('.apm-test-result')).toHaveClass('apm-test-result--ok');
     const box = screen.getByTestId('hub-write-scopes');
-    expect(await within(box).findByText('Vào Gen-hub tick quyền ghi Kho (tạo và sửa bản ghi — tên trong Gen-hub: kho_create, kho_update) cho token của Gen-Harness rồi bấm Kiểm tra.')).toBeInTheDocument();
+    expect(await within(box).findByText('Vào Gen-hub tick quyền ghi Kho (tạo và sửa bản ghi — tên trong Gen-hub: kho_create, kho_update) cho token của GenOS rồi bấm Kiểm tra.')).toBeInTheDocument();
     expect(within(box).getAllByText('Chưa')).toHaveLength(2);
     // Phần đọc không bị ảnh hưởng.
     expect(within(screen.getByTestId('hub-scopes')).getAllByText('Có')).toHaveLength(4);

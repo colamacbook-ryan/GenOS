@@ -20,9 +20,9 @@ async function setAccess(page: Page, data: Record<string, unknown>) {
   expect(res.status()).toBeLessThan(400);
 }
 
-/** Mời một người ở Đội ngũ › Người dùng (cần PIN) → hộp "mật khẩu tạm". */
+/** Mời một người ở Quản trị › Người & quyền (cần PIN) → hộp "mật khẩu tạm". */
 async function invite(page: Page, email: string) {
-  await page.goto('/team');
+  await page.goto('/admin/access');
   await page.getByRole('button', { name: /Mời người dùng/ }).first().click();
   const form = page.getByRole('dialog', { name: 'Mời người dùng' });
   await form.getByLabel('Tên hiển thị').fill('Lan Vận Hành');
@@ -85,7 +85,7 @@ test.describe('Truy cập từ xa (v0.1.46)', () => {
     await expect(rows.first()).toContainText('Bấm để xem lệnh chọn cách truy cập (chạy trên máy chủ)');
     await expect(rows.first()).not.toContainText('Bấm để chọn');
     await rows.first().getByRole('link', { name: 'Chọn cách truy cập' }).click();
-    await expect(page).toHaveURL(/\/system\?tab=storage&focus=access$/);
+    await expect(page).toHaveURL(/\/admin\/backup\?focus=access$/);
     const card = page.getByRole('region', { name: 'Truy cập từ xa' });
     await expect(card).toBeVisible();
     await expect(card).toBeInViewport();
@@ -113,7 +113,7 @@ test.describe('Truy cập từ xa (v0.1.46)', () => {
       await expect(row).toContainText('Cổng Console đang mở cho cả mạng — nhờ Owner chọn cách truy cập từ xa.');
       await expect(row).not.toContainText('Bấm để');
       await row.getByRole('link', { name: 'Nhờ Owner xử lý' }).click();
-      await expect(page).toHaveURL(/\/system\?tab=storage&focus=access$/);
+      await expect(page).toHaveURL(/\/admin\/backup\?focus=access$/);
       const card = page.getByRole('region', { name: 'Truy cập từ xa' });
       await expect(card).toBeVisible();
       await expect(card).toContainText('https://192.168.1.20:8443/login');

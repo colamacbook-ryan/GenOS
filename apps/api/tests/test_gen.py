@@ -164,17 +164,17 @@ def test_validator_blocks_users_targets_without_roles_manage() -> None:
     mgr = dict(rbac.DEFAULT_MATRIX[rbac.MANAGER])
     mgr["system.read"] = "all"  # thấy màn Hệ thống nhưng không có roles.manage
     assert mgr.get("roles.manage", rbac.NONE) == rbac.NONE
-    # v0.1.42 (F-7): người dùng chuyển sang Đội ngũ (màn `team`); id target giữ nguyên.
+    # v0.1.78 (G0): người dùng ở Quản trị › Người & quyền (màn `access`); id target giữ nguyên.
     for tid in ("system.users.list", "system.users.invite"):
         t = gen_registry.resolve_target(tid)
-        assert t is not None and t.screen == "team" and t.params is None and t.permission == "roles.manage", tid
-        # Đội ngũ cần roles.manage: thiếu quyền thì bị chặn (ở màn hoặc ở target).
-        r = Validator(mgr, set(), "team").check(envelope.Highlight(type="highlight", target=tid, message="m"))
-        assert not r.ok and ("roles.manage" in (r.reason or "") or "'team'" in (r.reason or "")), tid
+        assert t is not None and t.screen == "access" and t.params is None and t.permission == "roles.manage", tid
+        # Người & quyền cần roles.manage: thiếu quyền thì bị chặn (ở màn hoặc ở target).
+        r = Validator(mgr, set(), "access").check(envelope.Highlight(type="highlight", target=tid, message="m"))
+        assert not r.ok and ("roles.manage" in (r.reason or "") or "'access'" in (r.reason or "")), tid
     assert gen_registry.resolve_target("system.tab.users") is None
     v = Validator(mgr, set(), "system")
     assert v.check(envelope.Highlight(type="highlight", target="system.brain.jev", message="m")).ok
-    ov = Validator(dict(rbac.DEFAULT_MATRIX[rbac.OWNER]), set(), "team")
+    ov = Validator(dict(rbac.DEFAULT_MATRIX[rbac.OWNER]), set(), "access")
     assert ov.check(envelope.Highlight(type="highlight", target="system.users.list", message="m")).ok
 
 
