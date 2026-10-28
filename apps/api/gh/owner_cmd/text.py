@@ -18,6 +18,25 @@ def line(s: str, limit: int = 160) -> str:
     return s if len(s) <= limit else s[:limit - 1] + "…"
 
 
+_TAIL_JUNK = re.compile(r"[\s,;:\-–—(\[{“\"«]+$")
+
+
+def cut_title(s: str, limit: int) -> str:
+    """Rút gọn TIÊU ĐỀ không làm mất dấu đóng (v0.1.78, G6): quá `limit` thì cắt ở ranh giới từ,
+    bỏ phần ngoặc đang mở dở
+    («(STK ...456)» không bao giờ thành «(STK ......»), rồi thêm «…». Còn vừa `limit` thì giữ nguyên."""
+    s = " ".join(str(s).split())
+    if len(s) <= limit:
+        return s
+    cut = s[:limit - 1]
+    if " " in cut and not s[limit - 1].isspace():          # đang cắt giữa từ ⇒ lùi về khoảng trắng gần nhất
+        cut = cut.rsplit(" ", 1)[0]
+    for op, cl in (("(", ")"), ("[", "]"), ("“", "”"), ("«", "»")):
+        if cut.count(op) > cut.count(cl):                  # ngoặc/trích còn mở ⇒ bỏ từ chỗ mở
+            cut = cut[:cut.rindex(op)]
+    return _TAIL_JUNK.sub("", cut) + "…"
+
+
 _SCHEME_RE = re.compile(r":/{2}")
 _HOST_DOT_RE = re.compile(r"(?<=\w)\.(?=[^\W\d_])")
 _MENTION_RE = re.compile(r"@(?=\w)")

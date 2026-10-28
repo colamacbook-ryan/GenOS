@@ -33,6 +33,7 @@ from gh.biz.intel import levels, mutes
 from gh.biz.intel.pipes import coverage, watchdog
 from gh.owner_channel import reports
 from gh.owner_channel.identity import CHANNELS, owner_ids
+from gh.owner_cmd import text as otext
 from gh.telegram import backup
 
 log = logging.getLogger("gh.intel.delivery")
@@ -40,6 +41,7 @@ log = logging.getLogger("gh.intel.delivery")
 JOB = "intel.digest_zalo"
 MAX_LINES, MAX_CHARS, MAX_ITEMS, QUOTE_MAX = 10, reports.TEXT_MAX, 6, 80
 ACTION_MAX = 100
+TITLE_MAX = 120
 HINT = "Trả lời: «1 ok» · «2 sai» · «3 không cần báo» · «em sót: …»"
 QUIET_DAY = "Hôm nay yên, không có gì cần Sếp ra tay."
 URGENT_HEAD = "Điểm gấp trong ngày"
@@ -162,8 +164,33 @@ async def set_quiet_hours(db: AsyncSession, org_id: uuid.UUID, start: str, end: 
 
 # ─── dựng chữ ────────────────────────────────────────────────────────────────
 
+async def _subject_names(db: AsyncSession, org_id: uuid.UUID, signal_ids: list[str]) -> dict[str, str]:
+    """Tên người (`core.persons.display_name`) của tín hiệu có `subject_type='person'` — để tiêu đề nói RÕ ai (G6, v0.1.78).
+    Chỉ gọi cho tín hiệu `chat_ok` (bản tin/🔴 chat đã lọc sẵn). Không tra được ⇒ không có khoá (giữ tiêu đề cũ)."""
+    if not signal_ids:
+        return {}
+    rows = (await db.execute(text("""SELECT a.id, p.display_name FROM biz.alerts a JOIN core.persons p ON p.id = a.subject_id AND p.org_id = a.org_id
+                                     WHERE a.org_id = :o AND a.id = ANY(CAST(:ids AS uuid[])) AND a.subject_type = 'person' AND a.privacy = 'chat_ok'"""),
+                            {"o": org_id, "ids": signal_ids})).all()
+    return {str(r.id): _WS.sub(" ", str(r.display_name)).strip()[:40] for r in rows if r.display_name and str(r.display_name).strip()}
+
+
+def with_name(title: str, name: str | None) -> str:
+    """Đưa tên người vào tiêu đề nếu tiêu đề chưa có tên đó: «Anh Nam: Khách có thể bỏ đi»."""
+    if not name or name.casefold() in title.casefold():
+        return title
+    return f"{name}: {title}"
+
+
+def why_line(summary: str | None, facts: list[str]) -> str | None:
+    """"Vì sao" CHỈ từ dữ liệu thật: `summary`, rồi lý do đã lưu (`reasons` → chữ Việt). Không có ⇒ None (bỏ dòng; CẤM chuỗi chung chung)."""
+    if summary and summary.strip():
+        return _one_line(summary, 160)
+    return _one_line("; ".join(facts[:3]), 160) if facts else None
+
+
 def _item_line(it: digest_mod.DigestItem) -> str:
-    head = f"{it.n}. {MARK.get(it.level, '⚪')} {_one_line(it.title, 90)}"
+    head = f"{it.n}. {MARK.get(it.level, '⚪')} {otext.cut_title(it.title, TITLE_MAX)}"
     if it.line_facts:
         head += " " + _one_line(" · ".join(it.line_facts), 60)
     if it.quote:
@@ -269,6 +296,9 @@ async def deliver_digest(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> 
         d.system_question = None
         if not d.items:
             return "nothing"
+    names = await _subject_names(db, org_id, [it.signal_id for it in d.items])
+    for it in d.items:
+        it.title = with_name(it.title, names.get(it.signal_id))
     cov = await coverage.line(db, org_id, now)
     rec = [] if off else await watchdog.recovered_lines(db, org_id, since=await _since(db, org_id, now))
     hidden = 0 if off else await _hidden_console(db, org_id)
@@ -305,7 +335,7 @@ async def push_alerts(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> int
     # chưa kịp xếp sẽ mất hẳn (P4 v0.1.77, có từ v0.1.76). `merge` + `pushed_at` ⇒ chính dòng này đã đẩy; khoá dedupe giữ đúng một tin mỗi lần
     # đẩy. Trần MERGE_CATCHUP_H: bản cũ để lại dòng mất tin lâu rồi thì không gửi muộn ồ ạt sau nâng cấp.
     rows = (await db.execute(text("""
-        SELECT a.id, a.title, a.summary, a.suggested_action, a.evidence, a.pushed_at, a.privacy, a.reasons FROM biz.alerts a
+        SELECT a.id, a.title, a.summary, a.suggested_action, a.evidence, a.pushed_at, a.privacy, a.reasons, a.would_push_at FROM biz.alerts a
         WHERE a.org_id = :o AND a.pushed_at IS NOT NULL
           AND (a.delivery = 'push_now' OR (a.delivery = 'merge' AND a.pushed_at > CAST(:now AS timestamptz) - make_interval(hours => :ch)))
           AND a.status IN ('open', 'acknowledged') AND a.kind NOT IN ('system', 'legacy')
@@ -320,10 +350,11 @@ async def push_alerts(db: AsyncSession, org_id: uuid.UUID, now: datetime) -> int
             body = f"🔴 Có 1 vụ khẩn cần xem trên Console (mã PIN). #{code}"
             refs = [{"n": 1, "signal_id": None, "ask_id": None, "ask_code": None, "cluster_ids": None, "code": code, "console_only": True}]
         else:
-            why = _one_line(r.summary or "Vụ này cần Sếp xem ngay.", 160)
+            why = why_line(r.summary, digest_mod._facts_line(r))
+            name = (await _subject_names(db, org_id, [str(r.id)])).get(str(r.id))
             quote = digest_mod._quote(r.evidence)
             remind = "Nhắc lại — hôm nay là ngày hẹn chuyển tiền: " if "txn_day_reminder" in (r.reasons or []) else ""
-            lines = [f"🔴 {remind}{_one_line(r.title, 110)}" + (f" «{_one_line(quote, QUOTE_MAX)}»" if quote else "") + f" #{code}", f"Vì sao: {why}",
+            lines = [f"🔴 {remind}{otext.cut_title(with_name(r.title, name), 110)}" + (f" «{_one_line(quote, QUOTE_MAX)}»" if quote else "") + f" #{code}", *([f"Vì sao: {why}"] if why else []),
                      f"Đề xuất: {_one_line(r.suggested_action or 'Sếp xem chi tiết trên Console.', 160)}", "Trả lời: «1 ok» · «1 sai» · «1 không cần báo»"]
             body = display_mask("\n".join(lines))
             refs = [{"n": 1, "signal_id": str(r.id), "ask_id": None, "ask_code": None, "cluster_ids": None, "code": code}]

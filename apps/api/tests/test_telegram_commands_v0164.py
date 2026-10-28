@@ -121,15 +121,15 @@ async def test_hom_nay_empty(owner_api: Api, bot: FakeBot, redis: Any, monkeypat
     assert "Không có việc gì cần Sếp xử lý" in reply
 
 
-async def test_viec_lists_todos(owner_api: Api, bot: FakeBot, redis: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_bat_dau_lists_todos(owner_api: Api, bot: FakeBot, redis: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     ctx = await ctx_for(owner_api, bot, redis)
 
     async def todos(c: Any) -> list[dict[str, Any]]:
         return [{"key": f"k{i}", "title": f"Việc số {i} xem https://x.vn"} for i in range(12)]
 
-    monkeypatch.setattr(commands, "_todos", todos)
-    reply, buttons = await commands.handle(cmd("viec"), ctx)
-    assert buttons == [] and reply.startswith("Việc Sếp cần làm (12):")
+    monkeypatch.setattr(commands.oc, "todos", todos)      # v0.1.78 (G6): danh sách thiết lập ở /bat_dau (core.todos)
+    reply, buttons = await commands.handle(cmd("bat_dau"), ctx)
+    assert buttons == [] and reply.startswith("Bắt đầu / Kiểm tra kết nối (12):")
     assert reply.count("• ") == commands.MAX_LIST and "… và 4 việc nữa" in reply and "https://x" not in reply
 
 
