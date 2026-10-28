@@ -5,7 +5,6 @@ import { Button, Dialog, EmptyState, Icon, Skeleton, Switch, Tag, type Tone } fr
 import { api } from '../../lib/api';
 import { qk2, useRules, useWeights } from '../../lib/dataQueries';
 import { fmtInt } from '../../lib/format';
-import { useCan } from '../../lib/permissions';
 import { queryClient } from '../../lib/queryClient';
 import { toast } from '../../lib/toast';
 import { errorText } from '../../lib/errorText';
@@ -23,6 +22,7 @@ import {
   weightsMessage,
   weightsValid,
 } from './dataModel';
+import { LegacyFilterNotice, LEGACY_READONLY_REASON } from './LegacyFilterNotice';
 import { PipelineStrip } from './PipelineStrip';
 import { RuleEditorDialog } from './RuleEditorDialog';
 import { WeightSliders } from './WeightSliders';
@@ -33,21 +33,36 @@ function kindTagTone(kind: string): Tone {
 
 export function RulesScreen() {
   const meta = SCREEN_BY_KEY.rules;
-  const canManage = useCan('data.manage');
+  // v0.1.78 (G9): đường lọc cũ — chỉ đọc cho mọi vai trò. Đổi hằng này khi Sếp quyết định giữ lại.
+  const canManage = false;
   const rules = useRules();
   const [editing, setEditing] = useState<{ rule: Rule | null } | null>(null);
   const [batchOpen, setBatchOpen] = useState(false);
 
   const actions = (
     <>
-      <Button variant="secondary" icon="ph ph-flask" className="btn-30" data-gen-target="rules.batch" onClick={() => setBatchOpen(true)}>
+      <Button
+        variant="secondary"
+        icon="ph ph-flask"
+        className="btn-30"
+        data-gen-target="rules.batch"
+        disabled
+        title={LEGACY_READONLY_REASON}
+        onClick={() => setBatchOpen(true)}
+      >
         Chạy thử trên 100 bản ghi
       </Button>
-      {canManage ? (
-        <Button variant="primary" icon="ph ph-plus" className="btn-30" data-gen-target="rules.add" onClick={() => setEditing({ rule: null })}>
-          Thêm quy tắc
-        </Button>
-      ) : null}
+      <Button
+        variant="primary"
+        icon="ph ph-plus"
+        className="btn-30"
+        data-gen-target="rules.add"
+        disabled
+        title={LEGACY_READONLY_REASON}
+        onClick={() => setEditing({ rule: null })}
+      >
+        Thêm quy tắc
+      </Button>
     </>
   );
 
@@ -56,6 +71,7 @@ export function RulesScreen() {
       <PipelineStrip screen="rules" />
       <div className="screen">
         <ScreenHead title={meta.title} description={meta.description} maxWidth={760} actions={actions} />
+        <LegacyFilterNotice screen="rules" />
         <div className="rules-grid">
           <div className="rule-list" aria-label="Danh sách quy tắc" aria-busy={rules.isFetching || undefined} data-gen-target="rules.list">
             {rules.isPending ? (
@@ -70,9 +86,7 @@ export function RulesScreen() {
                   icon="ph ph-funnel"
                   title="Chưa có quy tắc sàng lọc nào"
                   description={
-                    canManage
-                      ? 'Thêm quy tắc đầu tiên để hệ thống biết gán nhãn gì cho dữ liệu thô.'
-                      : 'Chủ sở hữu chưa định nghĩa quy tắc nào.'
+                    'Đường lọc cũ chưa có quy tắc nào. Tình báo không cần quy tắc này để chạy.'
                   }
                 />
               </div>
@@ -92,7 +106,7 @@ export function RulesScreen() {
         open={!!editing}
         onClose={() => setEditing(null)}
         rule={editing?.rule ?? null}
-        readOnly={!canManage}
+        readOnly
       />
       <TestBatchDialog open={batchOpen} onClose={() => setBatchOpen(false)} />
     </>
@@ -127,12 +141,14 @@ function RuleCard({ rule, canManage, onEdit }: { rule: Rule; canManage: boolean;
         <Tag tone={kindTagTone(rule.kind)}>{rule.kind_label}</Tag>
         <span className="rule-card__spacer" />
         <span className="rule-card__hits">{hitsLabel(rule)}</span>
-        <Switch
-          checked={rule.enabled}
-          label={`${rule.enabled ? 'Tắt' : 'Bật'} quy tắc ${rule.code}`}
-          disabled={!canManage || toggle.isPending}
-          onChange={(v) => toggle.mutate(v)}
-        />
+        <span title={canManage ? undefined : LEGACY_READONLY_REASON}>
+          <Switch
+            checked={rule.enabled}
+            label={`${rule.enabled ? 'Tắt' : 'Bật'} quy tắc ${rule.code}`}
+            disabled={!canManage || toggle.isPending}
+            onChange={(v) => toggle.mutate(v)}
+          />
+        </span>
       </div>
       <div className="rule-card__body">
         <span className="rule-card__if">NẾU</span>
@@ -205,7 +221,7 @@ function WeightsCard({ canManage }: { canManage: boolean }) {
   };
 
   return (
-    <Panel flush genTarget="rules.weights" title="Trọng số chấm điểm" kicker="Dùng chung cho mọi đối tượng" label="Trọng số chấm điểm">
+    <Panel flush genTarget="rules.weights" title="Trọng số chấm điểm" kicker={canManage ? 'Dùng chung cho mọi đối tượng' : 'Dùng chung cho mọi đối tượng · chỉ đọc (đường lọc cũ)'} label="Trọng số chấm điểm">
       {weights.isPending ? (
         <SkeletonLines rows={6} padding="13px 16px 15px" gap={11} />
       ) : weights.isError ? (
