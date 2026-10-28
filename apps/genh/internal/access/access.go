@@ -30,6 +30,8 @@ const (
 	KeyBind = "GH_BIND_ADDR"
 	KeySite = "GH_SITE_ADDRESS"
 	KeyURL  = "GH_PUBLIC_URL"
+	// KeyPort là cổng HOST của proxy (compose: ${GH_PORT:-8443}:8443). Thiếu = 8443.
+	KeyPort = "GH_PORT"
 )
 
 // DefaultPort là cổng HTTPS mặc định của proxy (machine.DefaultPort).
@@ -61,6 +63,10 @@ type State struct {
 	BindAddr    string
 	SiteAddress string
 	PublicURL   string
+	// Port là GH_PORT (cổng host của proxy). 0 = không đổi: Read báo tệp chưa có
+	// khoá; Write giữ nguyên dòng GH_PORT đang có (các lệnh genh remote dựng State
+	// mới không được làm rơi cổng Owner đã chọn).
+	Port int
 }
 
 // Label là nhãn tiếng Việt của chế độ (hiển thị trong genh status/remote).
@@ -156,6 +162,9 @@ func validateState(st State) error {
 			return err
 		}
 	}
+	if st.Port < 0 || st.Port > 65535 {
+		return fmt.Errorf("GH_PORT %d không hợp lệ (1-65535)", st.Port)
+	}
 	if !validPublicURL(st.PublicURL) {
 		return fmt.Errorf("GH_PUBLIC_URL %q không hợp lệ", st.PublicURL)
 	}
@@ -182,7 +191,7 @@ func parseKey(line string) (key, val string, ok bool) {
 }
 
 func isManaged(k string) bool {
-	return k == KeyMode || k == KeyBind || k == KeySite || k == KeyURL
+	return k == KeyMode || k == KeyBind || k == KeySite || k == KeyURL || k == KeyPort
 }
 
 func readLines(path string) ([]string, error) {
@@ -222,6 +231,10 @@ func Read(composePath string) (State, error) {
 			st.SiteAddress = v
 		case KeyURL:
 			st.PublicURL = v
+		case KeyPort:
+			if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 65535 {
+				st.Port = n
+			}
 		}
 	}
 	return st, nil
@@ -242,7 +255,16 @@ func Write(composePath string, st State) error {
 	if st.SiteAddress != "" {
 		want[KeySite] = st.SiteAddress
 	}
-	order := []string{KeyMode, KeyBind, KeySite, KeyURL}
+	if st.Port > 0 {
+		want[KeyPort] = strconv.Itoa(st.Port)
+	} else {
+		for _, l := range lines { // Port=0: giữ GH_PORT hiện có
+			if k, v, ok := parseKey(l); ok && k == KeyPort {
+				want[KeyPort] = v
+			}
+		}
+	}
+	order := []string{KeyMode, KeyBind, KeySite, KeyURL, KeyPort}
 	seen := map[string]bool{}
 	var out []string
 	for _, l := range lines {
@@ -362,6 +384,48 @@ func EnsureFresh(composePath string) (State, bool, error) {
 		return State{}, false, err
 	}
 	return ns, true, nil
+}
+
+// ReadPort trả GH_PORT trong .env cạnh composePath; 0 nếu chưa có/không hợp lệ.
+func ReadPort(composePath string) int {
+	st, err := Read(composePath)
+	if err != nil {
+		return 0
+	}
+	return st.Port
+}
+
+// SetPort ghi GH_PORT (cổng host của proxy) vào .env và dựng lại GH_PUBLIC_URL theo
+// cổng mới cho các chế độ có cổng (local/lan/lan_legacy). Cổng trùng cổng đang
+// hiệu lực (kể cả mặc định khi .env chưa có GH_PORT) thì không ghi gì. Phải gọi
+// SAU Ensure (cần GH_BIND_ADDR). Trả changed=true nếu đã ghi.
+func SetPort(composePath string, port int) (bool, error) {
+	if port <= 0 || port > 65535 {
+		return false, fmt.Errorf("cổng %d không hợp lệ (1-65535)", port)
+	}
+	st, err := Read(composePath)
+	if err != nil {
+		return false, err
+	}
+	if st.BindAddr == "" {
+		return false, fmt.Errorf(".env chưa có GH_BIND_ADDR — gọi Ensure trước SetPort")
+	}
+	cur := st.Port
+	if cur == 0 {
+		cur = DefaultPort
+	}
+	if cur == port {
+		return false, nil
+	}
+	st.Port = port
+	switch st.Mode {
+	case ModeLocal, ModeLANLegacy, ModeLAN:
+		st.PublicURL = PublicURL(st.Mode, st.SiteAddress, port)
+	}
+	if err := Write(composePath, st); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // Snapshot là bản chụp nguyên văn .env để khôi phục khi đổi cách truy cập
