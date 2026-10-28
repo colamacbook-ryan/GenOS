@@ -35,7 +35,7 @@ async function askAndConfirm(page: Page, question: string, title: string): Promi
 }
 
 async function expectWorkbenchDraft(page: Page, title: string, text: string): Promise<string> {
-  await expect(page).toHaveURL(/\/workbench\?id=draft-gen-[0-9a-f-]+$/);
+  await expect(page).toHaveURL(/\/decide\?tab=drafts&id=draft-gen-[0-9a-f-]+$/);
   const id = decodeURIComponent(new URL(page.url()).searchParams.get('id') ?? '');
   expect(id).toMatch(/^draft-gen-/);
   // Dòng nháp được chọn đúng tiêu đề; khung chi tiết hiện đúng nháp đó.

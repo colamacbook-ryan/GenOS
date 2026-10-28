@@ -164,7 +164,7 @@ test('/overview?gen=coach mở khung Gen, thẻ hiện (đã bỏ tham số kh�
   await page.addInitScript(([key, id]) => window.localStorage.setItem(key, JSON.stringify({ [id]: true })), ['gh-coach-collapsed', me.id]);
   await page.goto('/overview?gen=coach');
   // v0.1.55: chuông/liên kết `?gen=coach` dẫn vào Console /overview (không về Mặt tiền); bỏ tham số khỏi địa chỉ.
-  await expect(page).toHaveURL(/\/overview$/);
+  await expect(page).toHaveURL(/\/intel\?tab=overview$/); // v0.1.78: /overview chuyển hướng sang Tình báo › Tổng quan
   await expect(panel(page)).toBeVisible();
   await expect(card(page)).toBeVisible();
   await expect(card(page).getByRole('group', { name: 'Việc cần làm ngay' })).toBeVisible();
@@ -289,7 +289,7 @@ test('chuông gen.coach: thông báo mới bật chấm đỏ; bấm chuông m�
   await expect(panel(page)).toBeVisible();
   await expect(card(page)).toBeVisible();
   // v0.1.55: chuông/liên kết `?gen=coach` dẫn vào Console /overview (không về Mặt tiền); bỏ tham số khỏi địa chỉ.
-  await expect(page).toHaveURL(/\/overview$/);
+  await expect(page).toHaveURL(/\/intel\?tab=overview$/); // v0.1.78: /overview chuyển hướng sang Tình báo › Tổng quan
   await expect(page.getByTestId('gen-coach-dot')).toHaveCount(0);
 });
 
@@ -408,7 +408,7 @@ test('"Sếp biết chưa?" có mẹo telegram_briefing: "Thử ngay" làm sáng
   await expect(tip).toBeVisible();
   await expect(tip).toContainText('Bản tin Telegram 07:30 và 17:30');
   await tip.getByRole('button', { name: 'Thử ngay' }).click();
-  await expect(page).toHaveURL(/\/connections/);
+  await expect(page).toHaveURL(/\/admin\/connections/);
   const target = page.locator('[data-gen-target="system.channels.telegram"]');
   await expect(target).toBeVisible();
   const spot = page.getByTestId('gen-spotlight');

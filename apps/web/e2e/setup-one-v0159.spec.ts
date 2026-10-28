@@ -107,8 +107,10 @@ test.describe('Thiết lập một màn (v0.1.59)', () => {
     await page.getByRole('button', { name: /Vào Mặt tiền/ }).click();
     await expectOwnerFront(page);
 
+    // v0.1.78: /owner/them → Quản trị › Bắt đầu › tab "Việc nên làm tiếp".
     // Mặt tiền → Cài đặt: khối Nguồn AI nói chưa nối, nút "Đổi nguồn AI" → /setup?buoc=nguon-ai (đã xong thiết lập vẫn mở được).
     await page.goto('/owner/them');
+    await expect(page).toHaveURL(/\/admin\/start\?tab=more$/);
     await expect(page.getByTestId('owner-more-ai-status')).toContainText('Chưa nối nguồn AI');
     await page.getByRole('link', { name: /Đổi nguồn AI/ }).click();
     await expect(page).toHaveURL(new RegExp(AI_SOURCE_PATH.replace('?', '\\?') + '$'));

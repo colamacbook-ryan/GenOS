@@ -170,7 +170,11 @@ export function hiddenScreens(role: RoleCode): Set<string> {
   // Q4 (docs/PLAN.md): Auditor VẪN thấy màn "Đánh giá con người" trong danh mục (nhánh log — nhật ký ai đã
   // xem), dù phạm vi chung `people_review.read` của Auditor là 'none' như Manager. Đây là ngoại lệ nội dung
   // (che điểm/chứng cứ ở tầng route), không phải ẩn hẳn màn như Manager — khác `care` (Q4 không nói tới `care`).
-  if (role === 'auditor') hidden.delete('people');
+  // v0.1.78: "Đánh giá con người" là tab của trang Đội ngũ (`team`) ⇒ giữ cả trang cho Auditor (tab Chăm sóc vẫn ẩn).
+  if (role === 'auditor') {
+    hidden.delete('people');
+    hidden.delete('team');
+  }
   return hidden;
 }
 /** Which realtime events a connection may receive (docs/api/phase-2.md § WebSocket). */
@@ -1230,7 +1234,8 @@ function createMockState(opts: MockOptions = {}, broadcast: (type: string, data:
     // v0.1.20: như gh/auth/deps.py current_user — mật khẩu tạm thì mọi route khác /auth/* và /account trả 403.
     if (user.mustChange) return problem(res, 403, 'PASSWORD_CHANGE_REQUIRED', 'Cần đặt mật khẩu mới trước khi tiếp tục');
 
-    if (path === '/navigation' && method === 'GET') return reply(200, buildNavigation(user.hidden, opts.badges ?? true, { hasStaff: opts.staff ?? true }));
+    // Như API thật: cây tính theo quyền HIỆN TẠI của vai trò (kể cả khi test đổi ô ma trận bằng hook `grant`), không theo ảnh chụp lúc tạo tài khoản.
+    if (path === '/navigation' && method === 'GET') return reply(200, buildNavigation(hiddenScreens(user.role.code as RoleCode), opts.badges ?? true, { hasStaff: opts.staff ?? true }));
     // v0.1.22 (Đợt B1–B3) — như gh/auth/users.py + gh/system_api/org.py.
     if (path === '/system/about' && method === 'GET') {
       // v0.1.36 (F-46): như gh/system_api/org.py — version = genh_version ?? image_version (giữ tương thích).

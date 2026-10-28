@@ -11,7 +11,7 @@
  * với bản xuất cho API `apps/api/gh/gen/registry.json` (chạy `GEN_WRITE=1 npx vitest run gen-targets` để ghi lại).
  */
 import { KHO_LABEL } from './gen';
-import { SCREENS } from './screens';
+import { SCREENS, screenPath } from './screens';
 
 export interface GenTarget {
   id: string;
@@ -54,7 +54,7 @@ const EXTRA_SCREENS: GenScreen[] = [
 const GEN_EXCLUDED_SCREENS = new Set(['plugins']);
 
 export const GEN_SCREENS: GenScreen[] = [
-  ...SCREENS.filter((s) => !GEN_EXCLUDED_SCREENS.has(s.key)).map((s) => ({ key: s.key, path: `/${s.key}`, title: s.title })),
+  ...SCREENS.filter((s) => !GEN_EXCLUDED_SCREENS.has(s.key)).map((s) => ({ key: s.key, path: screenPath(s.key), title: s.title })),
   ...EXTRA_SCREENS,
 ];
 

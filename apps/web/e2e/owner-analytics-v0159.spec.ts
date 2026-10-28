@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { loginAsOwner, p3Hook, resetMock } from './support';
+import { expectPhoneNav, loginAsOwner, p3Hook, resetMock } from './support';
 
 /**
  * v0.1.59 (G3) — màn PHÂN TÍCH (/owner/phan-tich) trên máy chủ giả (tất định):
@@ -30,7 +30,10 @@ test.describe('v0.1.59 · Phân tích', () => {
   test('mode full → bảng "Bảng số liệu" đủ 9 chỉ số, 4 cột; 4 tile; câu "So với 7 ngày trước đó · Cập nhật HH:MM"', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto('/owner/phan-tich');
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Phân tích');
+    // v0.1.78: /owner/phan-tich chuyển hướng sang Toàn cảnh › tab Xu hướng.
+    await expect(page).toHaveURL(/\/panorama\?tab=trends$/);
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Toàn cảnh');
+    await expect(page.getByRole('tab', { name: 'Xu hướng' })).toHaveAttribute('aria-selected', 'true');
     const table = page.getByRole('table', { name: 'Bảng số liệu' });
     await expect(table).toBeVisible();
     await expect(table.getByRole('columnheader')).toHaveText(['Chỉ số', 'Kỳ này', 'Kỳ trước', 'Thay đổi']);
@@ -137,7 +140,7 @@ test.describe('v0.1.59 · Phân tích', () => {
     // bảng xếp chồng: 9 dòng, không <table>
     await expect(page.getByTestId('an-table').locator('[data-testid=kit-list-row]')).toHaveCount(9);
     await expect(page.getByRole('table')).toHaveCount(0);
-    await expect(page.getByTestId('owner-tabbar').getByRole('link')).toHaveCount(5);
+    await expectPhoneNav(page); // v0.1.78: thanh dưới đã bỏ — ngăn kéo danh mục thay thế
     // vùng chạm: nút chọn kỳ ≥ 44px
     expect((await page.getByRole('radio', { name: '30 ngày' }).boundingBox())!.height).toBeGreaterThanOrEqual(44);
     await noHorizontalScroll(page);

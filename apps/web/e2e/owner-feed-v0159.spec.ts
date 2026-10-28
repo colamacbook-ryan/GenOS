@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { apiCall, enterPin, loginAsOwner, p3Hook, resetMock } from './support';
+import { apiCall, enterPin, expectPhoneNav, loginAsOwner, p3Hook, resetMock } from './support';
 
 /**
  * v0.1.59 (G4) — màn THÔNG TIN (/owner/thong-tin) trên máy chủ giả (tất định; MCP giả; mã PIN 246810). Bám docs/design/mat-tien-owner-v2.md mục 3.2:
@@ -39,7 +39,10 @@ test.describe('v0.1.59 · Thông tin (máy tính 1440)', () => {
 
   test('danh sách theo mức: Khẩn đứng đầu, nút lọc có số đếm, chân "Gen đã lọc N tin rác/trùng", không chữ kỹ thuật', async ({ page }) => {
     await page.goto(FEED);
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Thông tin');
+    // v0.1.78: /owner/thong-tin chuyển hướng sang Tình báo › tab Tín hiệu.
+    await expect(page).toHaveURL(/\/intel\?tab=signals$/);
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Tình báo');
+    await expect(page.getByRole('tab', { name: 'Tín hiệu' })).toHaveAttribute('aria-selected', 'true');
     await expect(rows(page).first()).toBeVisible();
     // Dòng đầu là tin Khẩn: huy hiệu mức + nhãn việc + người · nhóm · kênh
     const first = rows(page).first();
@@ -213,7 +216,7 @@ test.describe('v0.1.59 · Thông tin (máy tính 1440)', () => {
     await expect(page.getByTestId('feed-detail-name')).toHaveText('Phạm Quốc Minh');
     // "Mở hồ sơ" → Quan hệ chọn sẵn người đó
     await page.getByTestId('feed-open-profile').click();
-    await expect(page).toHaveURL(/\/owner\/quan-he\?nguoi=p-minh$/);
+    await expect(page).toHaveURL(/\/panorama\?tab=relations&nguoi=p-minh$/);
     await expect(page.getByTestId('profile-panel')).toHaveAttribute('data-person', 'p-minh');
     await expect(page.getByTestId('profile-panel')).toContainText('Phạm Quốc Minh');
   });
@@ -284,7 +287,7 @@ test.describe('v0.1.59 · Thông tin (máy tính 1440)', () => {
     const err = page.getByTestId('owner-error');
     await expect(err).toBeVisible();
     await expect(err).toContainText('Chi tiết kỹ thuật');
-    await expect(page.getByRole('navigation', { name: 'Mặt tiền' })).toBeVisible();
+    await expect(page.getByRole('navigation', { name: 'Danh mục màn hình' })).toBeVisible(); // v0.1.78: thanh bên chung
     await noObjectText(page);
     await p3Hook(page.request, 'owner', 'scenario', { mode: 'data' });
   });
@@ -314,7 +317,7 @@ test.describe('v0.1.59 · Thông tin (điện thoại 390px)', () => {
     await page.goto(FEED);
     await expect(rows(page).first()).toBeVisible();
     await expect(page.getByTestId('feed-pane')).toHaveCount(0); // không có cột phải
-    await expect(page.getByTestId('owner-tabbar').getByRole('link')).toHaveCount(5);
+    await expectPhoneNav(page); // v0.1.78: thanh dưới đã bỏ — ngăn kéo danh mục thay thế
     await noHorizontalScroll(page, 'danh sách 390');
     // vùng chạm của dòng ≥ 44px
     for (const row of (await rows(page).all()).slice(0, 4)) expect((await row.boundingBox())!.height).toBeGreaterThanOrEqual(44);

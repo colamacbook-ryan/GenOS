@@ -25,7 +25,7 @@ describe('bảng chuyển hướng', () => {
     expect(t('/owner/phan-tich')).toBe('/panorama?tab=trends');
     expect(t('/owner/viec')).toBe('/decide');
     expect(t('/owner/gen')).toBe('/intel');
-    expect(t('/owner/them')).toBe('/admin/start');
+    expect(t('/owner/them')).toBe('/admin/start?tab=more');
     expect(t('/owner/khong-co')).toBe('/intel');
     expect(t('/overview')).toBe('/intel?tab=overview');
     expect(t('/inbox')).toBe('/intel/inbox');

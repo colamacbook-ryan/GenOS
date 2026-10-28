@@ -33,7 +33,9 @@ export function NeedsBossStrip() {
   const health = useSystemHealth(canManage);
   const step4 = Array.isArray(followUp.data) ? followUp.data.find((s) => s.n === 4) : undefined;
   const noModel = !!step4 && !step4.done;
-  const issues = Array.isArray(health.data?.issues) ? sortIssues(health.data.issues) : [];
+  // v0.1.78: chip sức khoẻ ở header (vai có `system.read`) dùng CHUNG khoá truy vấn — dữ liệu nằm sẵn trong cache dù `enabled: false`
+  // ở đây, nên phải tự chặn theo quyền: Auditor (chỉ đọc) không được thấy dải có nút hành động.
+  const issues = canManage && Array.isArray(health.data?.issues) ? sortIssues(health.data.issues) : [];
   // v0.1.68 (F039): phần tử `overview.needs_boss` (đích "Làm thử" của bài học N07) LUÔN có mặt — lúc khoẻ chỉ còn một dòng báo
   // yên tâm. Chỉ nói "không có việc" khi cả hai nguồn đã tải xong và thành công (lỗi tải ≠ khoẻ).
   const calm = !noModel && issues.length === 0 && canManage && followUp.isSuccess && health.isSuccess;

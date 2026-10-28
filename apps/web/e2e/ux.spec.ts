@@ -76,7 +76,7 @@ test.describe('UX v0.1.28', () => {
     await expect(page.locator('.prov-row', { hasText: 'Model sai' })).toHaveCount(0);
     await next.click();
     // Lưu xong quay về Mặt tiền (bước 4 đã xong ở máy chủ).
-    await expect(page).toHaveURL(/\/owner$/);
+    await expect(page).toHaveURL(/\/intel$/);
 
     // Thiết lập một màn: bước 4 xong ⇒ /setup tới thẳng bước Xong; "Vào Mặt tiền" ghi Hoàn tất, bước 5–11 chưa làm ⇒ "để sau" (mặc định).
     await page.goto('/setup');
@@ -84,7 +84,7 @@ test.describe('UX v0.1.28', () => {
     await expect(page.getByTestId('setup-done-ai')).toContainText('Đã chạy');
     await expect(page.getByText('Mọi thứ đã sẵn sàng')).toHaveCount(0);
     await page.getByRole('button', { name: /Vào Mặt tiền/ }).click();
-    await expect(page).toHaveURL(/\/owner$/);
+    await expect(page).toHaveURL(/\/intel$/);
     const state = (await apiCall(page, 'GET', '/setup/state')) as { finished: boolean; steps: Array<{ n: number; status: string }> };
     expect(state.finished).toBe(true);
     expect(state.steps.filter((x) => x.status === 'skipped').map((x) => x.n)).toEqual([5, 6, 7, 8, 9, 10, 11]);
@@ -98,9 +98,10 @@ test.describe('UX v0.1.28', () => {
     await expect(page.getByText('Cần giúp về tài khoản')).toBeVisible();
     await expect(page.getByText('genh update')).toHaveCount(0);
     await expect(page.getByRole('link', { name: /Mở Hướng dẫn thiết lập/ })).toHaveCount(0);
+    // v0.1.78: /guide → Quản trị › Bắt đầu, chỉ cho vai quản lý hệ thống (system.manage): Vận hành thấy câu giải thích thân thiện, không lỗi.
     await page.goto('/guide');
-    await expect(page.getByRole('heading', { level: 2, name: 'Hướng dẫn thiết lập' })).toBeVisible();
-    await expect(page.getByText('Việc kết nối do Owner làm')).toBeVisible();
+    await expect(page).toHaveURL(/\/admin\/start$/);
+    await expect(page.getByText('Vai trò của bạn không có quyền xem màn này')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Thử lại' })).toHaveCount(0);
     // v0.1.39: trang "Việc Sếp cần làm" cũng chỉ giải thích, không báo lỗi.
     await page.goto('/guide/viec-sep');

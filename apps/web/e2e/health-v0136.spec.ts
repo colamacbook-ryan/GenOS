@@ -25,19 +25,20 @@ test.describe('v0.1.36 — Cần Sếp xử lý & Sức khoẻ hệ thống', ()
     await expect(rows.nth(1)).toContainText('Cập nhật lên bản mới chưa thành công');
     for (const r of await rows.all()) await expect(r).toHaveAttribute('data-severity', 'bad');
     // Dải đứng ĐẦU trang: phần tử đầu tiên của màn Tổng quan.
-    await expect(page.locator('.screen > :first-child')).toHaveAttribute('data-testid', 'needs-boss');
+    // v0.1.78: Tổng quan nằm trong tab của Tình báo — `.screen` của chính màn Tổng quan là cái đầu tiên trong panel.
+    await expect(page.locator('.hub__panel .screen').first().locator('> :first-child')).toHaveAttribute('data-testid', 'needs-boss');
     await expect(rows.nth(0).getByRole('link', { name: 'Đăng nhập lại' })).toBeVisible();
     await expect(rows.nth(1).getByRole('link', { name: 'Xem & thử lại' })).toBeVisible();
     await expect(page.getByText('[object Object]')).toHaveCount(0);
     await strip.getByRole('link', { name: 'Đăng nhập lại' }).click();
-    // v0.1.42 (F-7): /system?tab=channels → /connections.
-    await expect(page).toHaveURL(/\/connections$/);
+    // v0.1.42 (F-7): /system?tab=channels → /connections; v0.1.78: → /admin/connections.
+    await expect(page).toHaveURL(/\/admin\/connections$/);
     await expect(page.getByRole('article', { name: 'Kênh Zalo' })).toBeVisible();
     await expect(page.getByText('[object Object]')).toHaveCount(0);
 
     await page.goto('/overview');
     await page.getByRole('region', { name: 'Cần Sếp xử lý' }).getByRole('link', { name: 'Xem & thử lại' }).click();
-    await expect(page).toHaveURL(/\/system\?tab=storage$/);
+    await expect(page).toHaveURL(/\/admin\/backup$/);
     await expect(page.getByRole('region', { name: 'Sức khoẻ hệ thống' })).toBeVisible();
     await expect(page.getByText('[object Object]')).toHaveCount(0);
   });
@@ -134,7 +135,7 @@ test.describe('v0.1.36 — Cần Sếp xử lý & Sức khoẻ hệ thống', ()
     await expect(strip).toContainText('Ổ đĩa sắp hết chỗ');
     await expect(strip).toContainText('Còn 3,0 GB trống, cần tối thiểu 5,0 GB');
     await strip.getByRole('link', { name: 'Xem cách giải phóng' }).click();
-    await expect(page).toHaveURL(/\/system\?tab=storage$/);
+    await expect(page).toHaveURL(/\/admin\/backup$/);
     const tip = page.getByRole('region', { name: 'Sức khoẻ hệ thống' }).getByTestId('health-tip-disk');
     await expect(tip).toContainText('Cách giải phóng chỗ trống');
     await expect(tip.getByText('docker system prune')).toBeVisible();
@@ -152,7 +153,7 @@ test.describe('v0.1.36 — Cần Sếp xử lý & Sức khoẻ hệ thống', ()
     await expect(strip).toContainText('Mở mục Sao lưu và bấm Sao lưu ngay');
     await expect(strip.getByRole('link', { name: 'Sao lưu ngay' })).toHaveCount(0);
     await strip.getByRole('link', { name: 'Mở mục Sao lưu' }).click();
-    await expect(page).toHaveURL(/\/system\?tab=storage&focus=backup$/);
+    await expect(page).toHaveURL(/\/admin\/backup\?focus=backup$/);
     const now = page.getByRole('region', { name: 'Sao lưu & khôi phục' }).getByRole('button', { name: 'Sao lưu ngay' });
     await expect(now).toBeVisible();
     await expect(now).toBeInViewport();
@@ -216,7 +217,7 @@ test.describe('v0.1.36 — Cần Sếp xử lý & Sức khoẻ hệ thống', ()
     await expect(dlg.locator('.nt-item').first()).toContainText('Kênh Zalo đã ngắt kết nối');
     await expect(dlg.locator('.nt-item').first().locator('[data-icon]').first()).toHaveAttribute('data-icon', /plugs/);
     await dlg.getByRole('button', { name: /Kênh Zalo đã ngắt kết nối/ }).click();
-    await expect(page).toHaveURL(/\/connections$/);
+    await expect(page).toHaveURL(/\/admin\/connections$/);
   });
 
   test('Trợ giúp hiện phiên bản máy chủ và phiên bản công cụ cài đặt (genh), không lặp dòng "phiên bản"', async ({ page }) => {

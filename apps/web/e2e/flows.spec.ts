@@ -10,7 +10,7 @@ test.describe('auth', () => {
   test('401 sends to /login?next=, login returns there, Đăng xuất goes back to /login', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto('/inbox');
-    await expect(page).toHaveURL(/\/login\?next=%2Finbox/);
+    await expect(page).toHaveURL(/\/login\?next=%2Finbox/); // link cũ: next= giữ đúng đường đã mở; đăng nhập xong mới chuyển hướng
     await page.screenshot({ path: join(shots, 'login-1440.png') });
 
     await page.getByLabel('Email').fill(OWNER.email);
@@ -20,9 +20,11 @@ test.describe('auth', () => {
 
     await page.getByLabel('Mật khẩu', { exact: true }).fill(OWNER.password);
     await page.keyboard.press('Enter');
-    await expect(page).toHaveURL(/\/inbox$/);
+    // v0.1.78: /inbox chuyển hướng sang Tình báo › Hộp thư (/intel/inbox).
+    await expect(page).toHaveURL(/\/intel\/inbox$/);
     await expect(page.getByRole('heading', { name: 'Hộp thư', level: 2 })).toBeVisible();
-    await expect(page.locator('.hd-group')).toHaveText('Hộp thư & Việc');
+    await expect(page.locator('.hd-title')).toHaveText('Tình báo');
+    await expect(page.getByRole('tab', { name: 'Hộp thư', exact: true })).toHaveAttribute('aria-selected', 'true');
     await expect(page.getByRole('tab', { name: /Tất cả/ })).toBeVisible();
 
     await page.getByRole('button', { name: /Anh Nguyễn Văn A/ }).click();
@@ -35,9 +37,10 @@ test.describe('auth', () => {
     await page.getByLabel('Email').fill('operator@genesis.local');
     await page.getByLabel('Mật khẩu', { exact: true }).fill(OWNER.password);
     await page.getByRole('button', { name: 'Đăng nhập' }).click();
-    await expect(page).toHaveURL(/\/overview$/);
+    // v0.1.78: mọi vai vào mục đầu tiên của cây — Tình báo (/intel).
+    await expect(page).toHaveURL(/\/intel$/);
     await expect(page.getByRole('link', { name: /Plugin & Tiện ích/ })).toHaveCount(0);
-    await expect(page.getByRole('link', { name: /Cài đặt/ })).toHaveCount(0);
+    await expect(page.getByRole('link', { name: /Quản trị/ })).toHaveCount(0);
     await expect(page.getByRole('link', { name: /Kết nối/ })).toHaveCount(0);
     await page.goto('/system');
     await expect(page.getByText('Vai trò của bạn không có quyền xem màn này')).toBeVisible();
@@ -48,16 +51,15 @@ test.describe('auth', () => {
     await page.getByLabel('Email').fill(OWNER.email);
     await page.getByLabel('Mật khẩu', { exact: true }).fill(OWNER.password);
     await page.keyboard.press('Enter');
-    // v0.1.55 (G5): Owner đăng nhập vào Mặt tiền /owner; thanh bên thu gọn là của Console (Cài đặt nâng cao).
-    await expect(page).toHaveURL(/\/owner$/);
-    await page.goto('/overview');
+    // v0.1.78: Owner đăng nhập vào Tình báo (/intel) — một shell, thanh bên thu gọn dùng chung.
+    await expect(page).toHaveURL(/\/intel$/);
     await page.getByRole('button', { name: /Anh Nguyễn Văn A/ }).click();
     await page.getByRole('menuitem', { name: 'Thu gọn thanh bên' }).click();
     await expect(page.locator('.app')).toHaveAttribute('data-sidebar', 'rail');
-    // v0.1.42: rail — "Nâng cao" là một icon, bấm thì hiện các nhóm của nó.
-    await page.getByRole('button', { name: 'Nâng cao' }).click();
-    await page.getByRole('button', { name: 'Tầng dữ liệu' }).click();
-    await expect(page).toHaveURL(/\/raw$/);
+    // v0.1.78: rail — "Quản trị" là một icon, bấm thì hiện các trang con (Nâng cao…).
+    await page.getByRole('button', { name: 'Quản trị', exact: true }).click();
+    await page.getByRole('link', { name: 'Nâng cao' }).click();
+    await expect(page).toHaveURL(/\/admin\/advanced$/);
     await page.reload();
     await expect(page.locator('.app')).toHaveAttribute('data-sidebar', 'rail');
   });
@@ -127,7 +129,7 @@ test.describe('cụm Hàng đợi & Hành động', () => {
 
     const pendingKpi = page.getByText('Tỉ lệ chờ duyệt').locator('..').locator('..');
     await pendingKpi.click();
-    await expect(page).toHaveURL(/\/workbench\?status=pending/);
+    await expect(page).toHaveURL(/\/decide\?tab=drafts&status=pending/);
   });
 
   test('Hộp thư: tab lọc đúng số đếm; giao người khác; im lặng có chủ đích', async ({ page }) => {
@@ -389,7 +391,7 @@ test.describe('cụm Cơ hội & Thị trường', () => {
     const body = (await res.json()) as { draft: { id: string } };
     expect(body.draft.id).toBeTruthy();
 
-    await expect(page).toHaveURL(new RegExp(`/workbench\\?id=${body.draft.id}`));
+    await expect(page).toHaveURL(new RegExp(`/decide\\?tab=drafts&id=${body.draft.id}`));
   });
 
   test('Kho hội thoại: tìm đúng người qua facet, hành động hàng loạt', async ({ page }) => {
@@ -428,7 +430,7 @@ test.describe('cụm Cơ hội & Thị trường', () => {
     await dealPatch;
     await expect(dealRow.getByRole('button', { name: 'Đã chốt' })).toHaveAttribute('aria-pressed', 'true');
 
-    await page.getByRole('tab', { name: 'Vụ việc' }).click();
+    await page.getByRole('tab', { name: 'Vụ việc', exact: true }).click(); // exact: không khớp tab ngoài "Deal & Vụ việc"
     await expect(page).toHaveURL(/dtab=cases/);
     const caseRow = page.locator('tr', { hasText: 'CAS-0017' });
     await expect(caseRow).toBeVisible();
@@ -468,7 +470,7 @@ test.describe('cụm Con người & Chất lượng', () => {
     // Auditor — nhánh log: màn vẫn vào được (còn trong danh mục), CHỈ "đã có đánh giá" + nhật ký ai đã xem.
     await loginAs(page, AUDITOR.email);
     await page.goto('/people');
-    await expect(page.getByRole('link', { name: /Đánh giá con người/ })).toBeVisible();
+    await expect(page.getByRole('navigation', { name: 'Danh mục màn hình' }).getByRole('link', { name: /Đội ngũ/ })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Đánh giá con người', level: 2 })).toBeVisible();
     await expect(page.getByText('Đã có đánh giá').first()).toBeVisible();
     await expect(page.getByText('54', { exact: true })).toHaveCount(0);
@@ -485,8 +487,9 @@ test.describe('cụm Con người & Chất lượng', () => {
     // `loginAs` chỉ đổi cookie phiên qua API — điều hướng (goto) để app tải lại danh mục/nav theo vai trò mới.
     await loginAs(page, MANAGER.email);
     await page.goto('/people');
-    await expect(page.getByText('Vai trò của bạn không có quyền xem màn này')).toBeVisible();
-    await expect(page.getByRole('link', { name: /Đánh giá con người/ })).toHaveCount(0);
+    // v0.1.78: /people → Đội ngũ › Đánh giá nhân viên; Manager không có tab đó (chỉ Chất lượng chăm sóc), không thấy dữ liệu đánh giá.
+    await expect(page.getByRole('tab', { name: 'Đánh giá nhân viên' })).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: 'Đánh giá con người', level: 2 })).toHaveCount(0);
   });
 
   test('sửa điểm tay giữ lịch sử (Owner)', async ({ page }) => {
@@ -555,7 +558,7 @@ test.describe('cụm Con người & Chất lượng', () => {
     const wonScn = page.locator('.care-scn-row', { hasText: 'DEA-0201' });
     await expect(wonScn).toContainText('Thắng');
     await wonScn.getByRole('link', { name: /xem deal/ }).click();
-    await expect(page).toHaveURL(/\/deals$/);
+    await expect(page).toHaveURL(/\/panorama\?tab=deals$/);
     await expect(page.getByRole('heading', { name: 'Deal & Vụ việc', level: 2 })).toBeVisible();
   });
 });
@@ -861,13 +864,13 @@ test.describe('giai đoạn 4.5/4.6: Điều khiển hệ thống', () => {
     await expect(page.getByText('Đã tạo 1 tài khoản')).toBeVisible();
     await expect(page.getByText('hong@genesis.vn')).toBeVisible();
     await page.getByRole('button', { name: /Đã lưu, sang bước sau/ }).click();
-    await expect(page).toHaveURL(/\/guide$/);
+    await expect(page).toHaveURL(/\/admin\/start$/); // v0.1.78: /guide chuyển sang Quản trị › Bắt đầu
 
     await page.goto('/guide/11');
     await expect(page.getByRole('heading', { name: 'Sao lưu' })).toBeVisible();
     await expect(page.getByLabel('Giờ chạy (HH:MM)')).toHaveValue('02:00');
     await page.getByRole('button', { name: /Tiếp tục/ }).click();
-    await expect(page).toHaveURL(/\/guide$/);
+    await expect(page).toHaveURL(/\/admin\/start$/); // v0.1.78: /guide chuyển sang Quản trị › Bắt đầu
 
     const state = (await apiCall(page, 'GET', '/setup/state')) as { steps: Array<{ n: number; status: string }> };
     expect(state.steps.filter((s) => s.status === 'done').map((s) => s.n)).toEqual(expect.arrayContaining([10, 11]));

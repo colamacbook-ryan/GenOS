@@ -13,7 +13,7 @@ import { GenPanel } from '../gen/GenPanel';
 import { Spotlight } from '../gen/Spotlight';
 import { useGenStore } from '../gen/genStore';
 import { useOpenGenFromUrl } from '../owner/useOpenGenFromUrl';
-import { closeAskGen, useAskGenStore } from '../owner/AskGenScreen';
+import { AskGenDrawer, closeAskGen, useAskGenStore } from '../owner/AskGenScreen';
 
 function useCrumbs(activeKey: string | null): Crumbs | null {
   const matches = useMatches();
@@ -75,7 +75,9 @@ export function AppShell() {
   const meId = me.data?.id ?? null;
   useEffect(() => {
     if (!askOpen) return;
-    if (genOn && meId) useGenStore.getState().setOpen(meId, true);
+    // Gen tắt: không mở dock — ngăn "Gen đang tắt" (AskGenDrawer bên dưới) giải thích và dẫn tới Bộ não AI, như Mặt tiền cũ.
+    if (!genOn) return;
+    if (meId) useGenStore.getState().setOpen(meId, true);
     closeAskGen();
   }, [askOpen, genOn, meId]);
   // v0.1.19: mật khẩu tạm (genh reset-password) → mọi màn Console chuyển về "Đặt mật khẩu mới".
@@ -108,6 +110,7 @@ export function AppShell() {
       </main>
       {genOpen && me.data ? <GenPanel userId={me.data.id} /> : null}
       {genOn ? <Spotlight /> : null}
+      {!genOn && meId ? <AskGenDrawer userId={meId} genOn={false} /> : null}
     </div>
   );
 }

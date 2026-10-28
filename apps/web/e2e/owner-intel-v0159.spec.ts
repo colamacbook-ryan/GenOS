@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { enterPin, loginAsOwner, p3Hook, resetMock } from './support';
+import { enterPin, expectPhoneNav, loginAsOwner, p3Hook, resetMock } from './support';
 
 /**
  * v0.1.59 (G3) — màn TÌNH BÁO (/owner) trên máy chủ giả (tất định; mã PIN 246810; KHÔNG gọi Gen-hub / Kho thật):
@@ -50,8 +50,11 @@ test.describe('v0.1.59 · Tình báo', () => {
     await expect(sheet).toBeHidden();
     await expect(page.getByTestId('intel-decide-count')).toHaveText(String(before - 1));
     await expect(decide.getByText(title, { exact: true })).toHaveCount(0);
-    // thanh điều hướng "Việc" cũng khớp (cùng nguồn today.nav.decide)
-    await expect(page.getByTestId('owner-nav-work')).toContainText(String(before - 1));
+    // v0.1.78: thanh dưới/nhãn đếm của Mặt tiền đã bỏ — trang Cần quyết (Chờ Sếp quyết) cũng không còn nháp vừa duyệt (cùng nguồn).
+    await page.goto('/decide');
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Cần quyết');
+    await expect(page.locator('.hub__panel [aria-busy="true"]')).toHaveCount(0);
+    await expect(page.locator('.hub__panel')).not.toContainText(title);
     expect(await page.locator('body').innerText()).not.toContain('[object Object]');
   });
 
@@ -106,7 +109,7 @@ test.describe('v0.1.59 · Tình báo', () => {
     await expect(page.getByTestId('intel-decide-count')).toBeVisible();
     await expect(page.getByTestId('intel-care-row').first()).toBeVisible();
     await noHorizontalScroll(page);
-    await expect(page.getByTestId('owner-tabbar').getByRole('link')).toHaveCount(5);
+    await expectPhoneNav(page); // v0.1.78: thanh dưới đã bỏ — ngăn kéo danh mục thay thế
     const order = await page.evaluate(() => {
       const y = (id: string) => (document.querySelector(`[data-testid="${id}"]`) as HTMLElement | null)?.getBoundingClientRect().top ?? -1;
       return ['intel-summary', 'intel-decide', 'intel-tile-messages', 'intel-key', 'intel-feed', 'intel-care'].map(y);

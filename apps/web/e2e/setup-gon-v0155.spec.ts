@@ -61,7 +61,7 @@ test('Thiết lập gọn: bước 10 mở từ Hướng dẫn hiện thẳng fo
   await expect(page.getByRole('button', { name: /Tiếp tục/ })).toBeDisabled();
   await expect(page.getByText('chưa muốn mời thì bấm "Quay lại"')).toBeVisible();
   await page.getByRole('button', { name: 'Quay lại' }).click();
-  await expect(page).toHaveURL(/\/guide$/);
+  await expect(page).toHaveURL(/\/admin\/start$/);
 
   await page.goto('/guide/11');
   await expect(page.getByRole('heading', { name: 'Sao lưu' })).toBeVisible();
@@ -93,7 +93,7 @@ test('Thiết lập gọn: bước 8–9 mở ở Hướng dẫn — mẫu có s
   await next.click();
   await expect(page.getByText(/Đã tạo agent/)).toBeVisible();
   await next.click();
-  await expect(page).toHaveURL(/\/guide$/);
+  await expect(page).toHaveURL(/\/admin\/start$/);
 
   await page.goto('/guide/9');
   await expect(page.getByRole('heading', { name: 'Tự trị & ranh giới' })).toBeVisible();
@@ -102,7 +102,7 @@ test('Thiết lập gọn: bước 8–9 mở ở Hướng dẫn — mẫu có s
   await expect(page.getByRole('checkbox')).toHaveCount(0);
   await expect(next).toBeEnabled();
   await next.click();
-  await expect(page).toHaveURL(/\/guide$/);
+  await expect(page).toHaveURL(/\/admin\/start$/);
 
   const s8 = sent.filter((s) => s.path === '/setup/steps/8');
   expect(s8).toHaveLength(1);
@@ -128,6 +128,6 @@ test('Thiết lập gọn: bước 7 mở ở Hướng dẫn chỉ hỏi "Sếp 
   const next = page.getByRole('button', { name: /Tiếp tục/ });
   await expect(next).toBeEnabled();
   await next.click();
-  await expect(page).toHaveURL(/\/guide$/);
+  await expect(page).toHaveURL(/\/admin\/start$/);
   expect(sent.map((s) => s.body)).toEqual([expect.objectContaining({ interval_seconds: 900, count_threshold: 500, min_confidence: 0.6 })]);
 });

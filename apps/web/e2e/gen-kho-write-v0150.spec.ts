@@ -181,7 +181,7 @@ test('Boss bước 2: chuông "Gen đề xuất ghi Kho · Phiên v0.1.50" → /
   await expect(item).toBeVisible();
   await item.click();
   // v0.1.55: chuông Gen dẫn vào Console /overview?gen=… (không về Mặt tiền); bỏ tham số khỏi địa chỉ.
-  await expect(page).toHaveURL(/\/overview$/);
+  await expect(page).toHaveURL(/\/intel\?tab=overview$/); // v0.1.78: /overview chuyển hướng sang Tình báo › Tổng quan
   const panel = page.getByRole('complementary', { name: GEN_PANEL });
   await expect(panel).toBeVisible();
   await expect(panel).toContainText('Máy chủ GenOS vừa lên v0.1.50.');

@@ -86,31 +86,31 @@
       "title": "Chất lượng chăm sóc"
     },
     "start": {
-      "path": "/start",
+      "path": "/admin/start",
       "title": "Bắt đầu"
     },
     "connections": {
-      "path": "/connections",
+      "path": "/admin/connections",
       "title": "Kết nối"
     },
     "access": {
-      "path": "/access",
+      "path": "/admin/access",
       "title": "Người & quyền"
     },
     "backup": {
-      "path": "/backup",
+      "path": "/admin/backup",
       "title": "Sao lưu & cập nhật"
     },
     "org": {
-      "path": "/org",
+      "path": "/admin/org",
       "title": "Tổ chức"
     },
     "log": {
-      "path": "/log",
+      "path": "/admin/log",
       "title": "Nhật ký"
     },
     "advanced": {
-      "path": "/advanced",
+      "path": "/admin/advanced",
       "title": "Nâng cao"
     },
     "raw": {

@@ -217,7 +217,7 @@ describe('Khung Gen — Bản tin có mục Gen-hub', () => {
     const box = screen.getByTestId('briefing-hub-sections');
     expect(within(box).getByText('Lịch hôm nay')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Mở thẻ Gen-hub' }));
-    expect(navigations.some((p) => p.startsWith('/connections'))).toBe(true);
+    expect(navigations.some((p) => p.startsWith('/admin/connections'))).toBe(true);
     expect(useGenStore.getState().spotlight).toMatchObject({ target: 'mcp.hub_link' });
   });
 

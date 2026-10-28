@@ -28,7 +28,7 @@ export const LEGACY_REDIRECTS: Readonly<Record<string, LegacyTarget>> = {
   '/owner/phan-tich': { to: '/panorama', tab: 'trends' },
   '/owner/viec': { to: '/decide' },
   '/owner/gen': { to: '/intel' },
-  '/owner/them': { to: '/admin/start' },
+  '/owner/them': { to: '/admin/start', tab: 'more' },
   // ── Console theo khoá màn (v0.1.42): Việc hằng ngày ──
   '/overview': { to: '/intel', tab: 'overview' },
   '/inbox': { to: '/intel/inbox', keepTab: true },

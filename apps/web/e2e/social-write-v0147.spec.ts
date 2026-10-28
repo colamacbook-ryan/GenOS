@@ -138,7 +138,7 @@ test('cổng khoá → trang cảnh báo → "Tôi hiểu rủi ro và đồng �
   await expect(page.getByRole('button', { name: 'Rút lại đồng ý' })).toBeVisible();
 
   await page.getByRole('button', { name: 'Quay lại' }).click();
-  await expect(page).toHaveURL(/\/overview$/);
+  await expect(page).toHaveURL(/\/intel\?tab=overview$/);
   const back = (await openGen(page)).getByRole('group', { name: CARD }).last();
   const confirm = back.getByRole('button', { name: 'Xác nhận và gửi' });
   await expect(confirm).toBeEnabled();

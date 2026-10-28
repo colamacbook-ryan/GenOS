@@ -32,8 +32,9 @@ test.describe('v0.1.39 · nghiệm thu sau gộp', () => {
   // v0.1.42 (F-7): Hướng dẫn thiết lập vào Cài đặt + menu tài khoản, Facebook vào Kết nối — không còn mục riêng.
   test('Owner: lối vào Hướng dẫn thiết lập ở Cài đặt, Facebook ở Kết nối; Hỏi Gen "mở trang mạng xã hội" → /social', async ({ page }) => {
     await loginAsOwner(page);
+    // v0.1.78: lối vào Hướng dẫn thiết lập là Quản trị › Bắt đầu trên thanh bên (/system → Sao lưu & cập nhật, miền Quản trị đang mở).
     await page.goto('/system');
-    await expect(page.getByRole('link', { name: /Hướng dẫn thiết lập/ })).toHaveAttribute('href', '/guide');
+    await expect(nav(page).getByRole('link', { name: /^Bắt đầu/ })).toHaveAttribute('href', '/admin/start');
     await page.goto('/connections');
     await expect(page.locator('[data-gen-target="system.channels.facebook"]').getByRole('link', { name: 'Mở Facebook' })).toHaveAttribute('href', '/social');
     await page.goto('/overview');
@@ -68,7 +69,7 @@ test.describe('v0.1.39 · nghiệm thu sau gộp', () => {
     await expect(page.locator('.guide-card .guide-card__num')).toHaveText(['01', '02', '03', '04', '05', '06', '07', '08', '09']);
     const invite = page.locator('[data-gen-target="guide.item:10"]');
     await expect(invite).toContainText('Mời người trong đội');
-    await expect(invite.locator('a[href="/team"]')).toHaveCount(1);
+    await expect(invite.locator('a[href="/admin/access"]')).toHaveCount(1);
     await expect(page.locator('[data-gen-target="guide.item:13"]')).toContainText('Kết nối Facebook');
     await expect(page.locator('[data-gen-target="guide.item.do:13"]')).toHaveAttribute('href', '/social');
     await expect(page.locator('[data-gen-target="guide.item:14"]')).toContainText('Nối Gen-hub');

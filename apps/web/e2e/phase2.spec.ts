@@ -61,12 +61,14 @@ interface VisualCase {
    */
   pixel: boolean;
 }
+// v0.1.78: raw/rules/clean/identity từng so pixel với thiết kế Console cũ (thanh bên 244px, header 58px). Shell mới (thanh bên 216px, header 44px,
+// dải tab của trang, nhãn "đường lọc cũ" của G9) làm vùng cắt không còn tương ứng ⇒ chuyển thành kiểm khói; ảnh vẫn lưu để xem bằng mắt.
 const CASES: VisualCase[] = [
-  { key: 'raw', clicks: ['Tầng dữ liệu', 'Kho dữ liệu thô'], until: '.screen-desc', pixel: true },
-  { key: 'rules', clicks: ['Tầng dữ liệu', 'Quy tắc sàng lọc'], until: '.rule-card >> nth=0', pixel: true },
-  { key: 'clean', clicks: ['Tầng dữ liệu', 'Kho sạch'], until: '.screen-desc', pixel: true },
-  { key: 'identity', clicks: ['Tầng dữ liệu', 'Hợp nhất danh tính'], until: '.id-stats', pixel: true },
-  { key: 'system', clicks: ['Điều khiển hệ thống'], until: '[role="tablist"]', pixel: false },
+  { key: 'raw', clicks: ['Tầng dữ liệu', 'Kho dữ liệu thô'], until: '.screen-desc', pixel: false },
+  { key: 'rules', clicks: ['Tầng dữ liệu', 'Quy tắc sàng lọc'], until: '.rule-card >> nth=0', pixel: false },
+  { key: 'clean', clicks: ['Tầng dữ liệu', 'Kho sạch'], until: '.screen-desc', pixel: false },
+  { key: 'identity', clicks: ['Tầng dữ liệu', 'Hợp nhất danh tính'], until: '.id-stats', pixel: false },
+  { key: 'system', clicks: ['Điều khiển hệ thống'], until: '.hub__panel', pixel: false },
 ];
 
 function crop(png: PNG, x: number, y: number, w: number, h: number): PNG {
@@ -370,7 +372,7 @@ test('setup: Nguồn AI + Xong ở trình thiết lập, bước 5–7 ở Hư�
   await expect(zalo).toContainText('Đang kết nối', { timeout: 8000 });
   await expect(next).toBeEnabled();
   await next.click();
-  await expect(page).toHaveURL(/\/guide$/);
+  await expect(page).toHaveURL(/\/admin\/start$/);
 
   // Bước 6 — QD 17/10: every synced group starts "Lắng nghe im lặng" (lưu hết, không bao giờ trả lời); Sếp đổi từng nhóm.
   await page.goto('/guide/6');
@@ -381,7 +383,7 @@ test('setup: Nguồn AI + Xong ở trình thiết lập, bước 5–7 ở Hư�
   await mode.selectOption('tagged_only');
   await expect(next).toBeEnabled();
   await next.click();
-  await expect(page).toHaveURL(/\/guide$/);
+  await expect(page).toHaveURL(/\/admin\/start$/);
 
   // Bước 7 — presets + weights.
   await page.goto('/guide/7');
@@ -399,7 +401,7 @@ test('setup: Nguồn AI + Xong ở trình thiết lập, bước 5–7 ở Hư�
   await expect(page.getByText('Trọng số chấm điểm · tổng 100%')).toBeVisible();
   await expect(next).toBeEnabled();
   await next.click();
-  await expect(page).toHaveURL(/\/guide$/);
+  await expect(page).toHaveURL(/\/admin\/start$/);
 
   // Hoàn tất đã ghi: 1–4, 5–7 (vừa làm ở Hướng dẫn) và 12 xong; 8–11 chưa làm ⇒ "để sau" (dùng mặc định) — làm tiếp ở Hướng dẫn.
   const state = await apiCall(page, 'GET', '/setup/state');

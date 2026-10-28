@@ -135,7 +135,7 @@ test.describe('v0.1.37 — cập nhật bị dừng giữa chừng', () => {
     await expect(rows.first()).toContainText('genh status');
     // Nút dẫn tới thẻ Sức khoẻ — hướng dẫn từng bước, lệnh dạng mã chép được (thân chuông bị cắt 2 dòng).
     await rows.first().getByRole('link', { name: /Xem cách bật/ }).click();
-    await expect(page).toHaveURL(/\/system\?tab=storage/);
+    await expect(page).toHaveURL(/\/admin\/backup/);
     await expect(page.getByTestId('health-tip-autostart')).toBeVisible();
     await expect(page.getByTestId('health-tip-autostart').locator('code', { hasText: 'sudo systemctl enable docker' })).toBeVisible();
     await expect(page.getByText('[object Object]')).toHaveCount(0);
@@ -156,7 +156,7 @@ test.describe('v0.1.37 — cập nhật bị dừng giữa chừng', () => {
     await bell.click();
     const dlg = page.getByRole('dialog', { name: 'Thông báo' });
     await dlg.getByRole('button', { name: /có thể không tự chạy lại GenOS/ }).click();
-    await expect(page).toHaveURL(/\/system\?tab=storage$/);
+    await expect(page).toHaveURL(/\/admin\/backup$/);
     const tip = page.getByTestId('health-tip-autostart');
     await expect(tip.locator('code', { hasText: 'sudo systemctl enable docker' })).toBeVisible();
     await expect(tip.locator('code', { hasText: 'sudo loginctl enable-linger $USER' })).toBeVisible();
