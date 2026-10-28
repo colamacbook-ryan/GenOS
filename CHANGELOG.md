@@ -11,6 +11,7 @@ Việc sửa nóng không đổi số bản (PR #46, #48, #53, #55, #58, #59) gh
 - **Một giao diện thay hai:** bỏ Mặt tiền `/owner`; menu mới Tình báo · Cần quyết · Việc · Toàn cảnh · Tôi · Đội ngũ · Quản trị (Bắt đầu, Kết nối, Người & quyền, Sao lưu & cập nhật, Tổ chức, Nhật ký, Nâng cao). Trang chủ là Tình báo. Mọi link cũ tự chuyển sang chỗ mới. Màn dữ liệu, Bản đồ quan hệ, Hồ sơ sống, Đánh giá con người nay có lối vào từ menu.
 - **Chip sức khoẻ ở đầu trang:** sự cố hệ thống (Zalo im, hết model…) gom về một chỗ.
 - **Chữ trên Zalo/Telegram:** hết lỗi cắt «(STK ......»; «Vì sao» lấy lý do thật (không còn câu chung chung); tiêu đề có tên người; `/viec` trả việc Sếp cần làm thật, danh sách thiết lập chuyển sang `/bat_dau`; câu trợ giúp đúng luật «OK».
+- **Tên GenOS** trên logo, tiêu đề trang và câu chữ web (thay Gen-Harness).
 - **Nâng cao › Dữ liệu:** bảng Kho thô vừa khung; Quy tắc sàng lọc và Kho sạch gắn nhãn «đường lọc cũ», chỉ đọc. Không migration.
 - Chi tiết + việc Boss phải làm: [docs/releases/v0.1.78.md](docs/releases/v0.1.78.md).
 
