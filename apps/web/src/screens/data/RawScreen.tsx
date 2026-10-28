@@ -212,17 +212,17 @@ export function RawScreen() {
         <div className="split-316">
           <div className="table-card">
             <div className="gh-table-scroll">
-              <table className="gh-table w920" aria-label="Bản ghi thô" aria-busy={list.isFetching || undefined}>
+              <table className="gh-table w780" aria-label="Bản ghi thô" aria-busy={list.isFetching || undefined}>
                 <thead>
                   <tr>
-                    <th style={{ width: 88 }}>Lúc</th>
-                    <th style={{ width: 46 }}>Kênh</th>
-                    <th style={{ width: 106 }}>ID nhóm</th>
-                    <th style={{ width: 100 }}>ID người</th>
-                    <th style={{ minWidth: 300 }}>Nội dung thô</th>
-                    <th style={{ width: 124 }}>Phân loại</th>
-                    <th style={{ width: 70 }}>Tin cậy</th>
-                    <th style={{ width: 112 }}>Trạng thái</th>
+                    <th style={{ width: 80 }}>Lúc</th>
+                    <th style={{ width: 40 }}>Kênh</th>
+                    <th style={{ width: 92 }}>ID nhóm</th>
+                    <th style={{ width: 88 }}>ID người</th>
+                    <th style={{ minWidth: 200 }}>Nội dung thô</th>
+                    <th style={{ width: 100 }}>Phân loại</th>
+                    <th style={{ width: 64 }}>Tin cậy</th>
+                    <th style={{ width: 104 }}>Trạng thái</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -309,7 +309,7 @@ function RawRow({ row, tz, fresh }: { row: RawItem; tz: string; fresh: boolean }
       </td>
       <td className="td-id">{row.group?.code ?? '—'}</td>
       <td className="td-id">{row.person?.code ?? '—'}</td>
-      <td className="td-text min300">
+      <td className="td-text min200">
         <div className="clamp2">{row.text}</div>
       </td>
       <td>{row.label ? <span className="mono-tag" style={row.label === NOISE_CODE ? { color: N5 } : undefined}>{eventTypeLabel(row.label)}</span> : <span className="td-id">—</span>}</td>

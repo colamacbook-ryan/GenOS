@@ -145,28 +145,16 @@ test.describe('data screens', () => {
     await expect(rows.first()).toContainText('Đã vào kho sạch', { timeout: 8000 }).catch(() => undefined);
   });
 
-  test('rules: toggle, weights must total 100%, test card', async ({ page }) => {
+  test('rules: đường lọc cũ — chỉ đọc, nút disabled kèm lý do (v0.1.78 G9)', async ({ page }) => {
     await page.goto('/rules');
+    await expect(page.getByTestId('legacy-filter-notice')).toContainText('Tình báo không dựa vào');
     const r06 = page.getByRole('article', { name: /R-06/ });
     await expect(r06).toContainText('8.204 lượt / 24h');
-    await r06.getByRole('switch').click();
-    await expect(page.getByText(/Đã tắt R-06|R-06.*tắt/i).first()).toBeVisible();
-
-    const heat = page.getByLabel('Độ nóng của tín hiệu');
-    await heat.focus();
-    await page.keyboard.press('ArrowRight');
-    await expect(page.getByText('Tổng trọng số phải bằng 100% — hiện 101% (thừa 1%).')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Lưu trọng số' })).toBeDisabled();
-    const potential = page.getByLabel('Tiềm năng giá trị');
-    await potential.focus();
-    await page.keyboard.press('ArrowLeft');
-    await expect(page.getByText('Tổng 100% — sẵn sàng lưu.')).toBeVisible();
-    await page.getByRole('button', { name: 'Lưu trọng số' }).click();
-    await expect(page.getByText('Tổng 100% — sẵn sàng lưu.')).toHaveCount(0);
-
+    await expect(r06.getByRole('switch')).toBeDisabled();
+    await expect(page.getByRole('button', { name: /Thêm quy tắc/ })).toBeDisabled();
+    await expect(page.getByRole('button', { name: /Chạy thử trên 100 bản ghi/ })).toBeDisabled();
+    await expect(page.getByLabel('Độ nóng của tín hiệu')).toBeDisabled();
     await expect(page.getByText('trên ngưỡng 0,60, được ghi vào kho sạch')).toBeVisible();
-    await page.getByRole('button', { name: /Chạy thử trên 100 bản ghi/ }).click();
-    await expect(page.getByRole('dialog')).toContainText('100');
   });
 
   test('clean: memory panel follows the selected row', async ({ page }) => {
@@ -314,7 +302,7 @@ test('auditor is read-only', async ({ page }) => {
   await loginAs(page, AUDITOR.email);
   await page.goto('/rules');
   await expect(page.getByRole('article', { name: /R-01/ })).toBeVisible();
-  await expect(page.getByRole('button', { name: /Thêm quy tắc/ })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /Thêm quy tắc/ })).toBeDisabled();
   await expect(page.getByRole('article', { name: /R-01/ }).getByRole('switch')).toBeDisabled();
   await page.goto('/identity');
   await expect(page.getByRole('article').first()).toBeVisible();

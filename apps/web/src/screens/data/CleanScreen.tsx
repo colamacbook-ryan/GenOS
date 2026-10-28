@@ -20,6 +20,7 @@ import { useUrlState } from '../../lib/uiStore';
 import { errorText } from '../../lib/errorText';
 import { CardError, InlineError, Panel, ScreenHead, SkeletonLines } from '../common';
 import { ACC3, N4, N5, N8, channelIcon, channelTone, cleanTone, paramTone, sectionAge, sectionTone, subjectOf } from './dataModel';
+import { LegacyFilterNotice, LEGACY_READONLY_REASON } from './LegacyFilterNotice';
 import { PipelineStrip } from './PipelineStrip';
 
 export function CleanScreen() {
@@ -61,6 +62,7 @@ export function CleanScreen() {
       <PipelineStrip screen="clean" />
       <div className="screen">
         <ScreenHead title={meta.title} description={meta.description} maxWidth={760} />
+        <LegacyFilterNotice screen="clean" />
         <div className="split-380">
           <section className="table-card" aria-label="Bản ghi sạch theo ID">
             <div className="gh-card__header">
@@ -292,7 +294,14 @@ export function MemoryCard({ row, loading, tz }: { row: CleanItem | null; loadin
               Lịch sử nén
             </Button>
             {canWrite ? (
-              <Button variant="ghost" icon="ph ph-pencil-simple" className="btn-27" onClick={() => setPinOpen(true)}>
+              <Button
+                variant="ghost"
+                icon="ph ph-pencil-simple"
+                className="btn-27"
+                disabled
+                title={LEGACY_READONLY_REASON}
+                onClick={() => setPinOpen(true)}
+              >
                 Sếp ghim thêm
               </Button>
             ) : null}
