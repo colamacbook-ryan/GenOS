@@ -216,7 +216,7 @@ describe('HelpPage', () => {
     stubApi((_m, url) => (url.endsWith('/system/about') ? { status: 200, body: { version: 'v0.1.28', org_name: 'Genesis Trading', timezone: 'Asia/Ho_Chi_Minh', role: { code: 'operator', name: 'Operator' } } } : undefined), opMe);
     wrap(<HelpPage />);
     expect(await screen.findByText('Cần giúp về tài khoản')).toBeInTheDocument();
-    expect(screen.getByText(/nhờ Owner vào Đội ngũ › Người dùng › Đặt lại mật khẩu/)).toBeInTheDocument();
+    expect(screen.getByText(/nhờ Owner vào Quản trị › Người & quyền › Đặt lại mật khẩu/)).toBeInTheDocument();
     expect(screen.queryByText('genh update')).toBeNull();
     expect(screen.queryByText('Hỏi Gen')).toBeNull();
     expect(screen.queryByRole('link', { name: /Mở Hướng dẫn thiết lập/ })).toBeNull();

@@ -156,7 +156,7 @@ export function HelpPage() {
         ) : (
           <Card title="Cần giúp về tài khoản" kicker="Owner là người quản lý tài khoản của mọi người">
             <ul className="help-examples">
-              <li>Quên mật khẩu: nhờ Owner vào Đội ngũ › Người dùng › Đặt lại mật khẩu, rồi đăng nhập bằng mật khẩu tạm Owner gửi.</li>
+              <li>Quên mật khẩu: nhờ Owner vào Quản trị › Người & quyền › Đặt lại mật khẩu, rồi đăng nhập bằng mật khẩu tạm Owner gửi.</li>
               <li>Cần xem thêm màn hoặc làm thêm việc: nhờ Owner mở quyền cho vai trò của bạn.</li>
               <li>Đổi mật khẩu, đổi mã PIN của chính mình: menu tài khoản ở góc dưới bên trái › Tài khoản của tôi.</li>
               <li>

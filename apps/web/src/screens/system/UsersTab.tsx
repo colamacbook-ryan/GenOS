@@ -17,7 +17,7 @@ import { INVITE_ROLES, USERS_KEY, userStatus } from './usersModel';
 
 type Pending = { kind: 'deactivate' | 'reset'; user: ManagedUser };
 
-/** Đội ngũ › Người dùng (v0.1.42; trước ở Điều khiển hệ thống, v0.1.22, Đợt B1): mời, đổi vai trò, khoá/mở khoá, đặt lại mật khẩu. */
+/** Quản trị › Người & quyền (v0.1.42; trước ở Điều khiển hệ thống, v0.1.22, Đợt B1): mời, đổi vai trò, khoá/mở khoá, đặt lại mật khẩu. */
 export function UsersTab() {
   const canManage = useCan('roles.manage');
   if (!canManage) {

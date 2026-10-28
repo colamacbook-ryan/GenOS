@@ -20,7 +20,7 @@ async function setAccess(page: Page, data: Record<string, unknown>) {
   expect(res.status()).toBeLessThan(400);
 }
 
-/** Mời một người ở Đội ngũ › Người dùng (cần PIN) → hộp "mật khẩu tạm". */
+/** Mời một người ở Quản trị › Người & quyền (cần PIN) → hộp "mật khẩu tạm". */
 async function invite(page: Page, email: string) {
   await page.goto('/team');
   await page.getByRole('button', { name: /Mời người dùng/ }).first().click();

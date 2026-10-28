@@ -112,15 +112,15 @@ export const GUIDE: GuideItem[] = [
     why: 'Cho quản lý, nhân viên cùng dùng Console với quyền hạn riêng — mỗi người chỉ thấy phần được giao.',
     prepare: ['Tên và email của từng người.'],
     steps: [
-      'Bấm "Làm bước này". Chưa cần mời ai thì bấm "Để sau" — mời lúc nào cũng được ở Đội ngũ › Người dùng.',
+      'Bấm "Làm bước này". Chưa cần mời ai thì bấm "Để sau" — mời lúc nào cũng được ở Quản trị › Người & quyền.',
       'Muốn mời ngay: bấm "Mời ngay", rồi "Thêm người", điền "Tên hiển thị", "Email" và chọn "Vai trò" (Quản lý, Vận hành, Nhân viên phụ trách, Kiểm soát).',
       'Thêm đủ người rồi bấm "Tiếp tục".',
       'Hệ thống hiện mật khẩu tạm của từng người — chép lại và tự gửi cho họ qua Zalo/email riêng (chưa có gửi thư tự động).',
-      'Nhân viên ở máy khác hoặc dùng điện thoại cần Truy cập từ xa: Sếp chạy genh remote tailscale (khuyên dùng) trên máy chủ trước khi gửi. Lời nhắn kèm địa chỉ đăng nhập có ở Đội ngũ › Người dùng (nút "Mời người dùng" hoặc "Đặt lại mật khẩu") — hộp đó cảnh báo đỏ nếu địa chỉ chỉ mở được trên máy chủ.',
+      'Nhân viên ở máy khác hoặc dùng điện thoại cần Truy cập từ xa: Sếp chạy genh remote tailscale (khuyên dùng) trên máy chủ trước khi gửi. Lời nhắn kèm địa chỉ đăng nhập có ở Quản trị › Người & quyền (nút "Mời người dùng" hoặc "Đặt lại mật khẩu") — hộp đó cảnh báo đỏ nếu địa chỉ chỉ mở được trên máy chủ.',
       'Bấm "Đã lưu, sang bước sau".',
     ],
     doneWhen: 'Có thêm ít nhất một tài khoản ngoài Sếp.',
-    console: { label: 'Đội ngũ › Người dùng', to: '/team' },
+    console: { label: 'Quản trị › Người & quyền', to: '/admin/access' },
   },
   {
     n: 11,
