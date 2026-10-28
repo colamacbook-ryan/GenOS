@@ -74,6 +74,11 @@ func (s dataStep) Run(ctx context.Context, env *Env, rep Reporter) error {
 	} else {
 		_, _, accessErr = access.Ensure(composePath, false)
 	}
+	// Lỗi cài `--port N` không có tác dụng: compose bind ${GH_PORT:-8443} nhưng genh
+	// chưa từng ghi GH_PORT. Ghi cùng .env, TRƯỚC `up` đầu tiên.
+	if accessErr == nil && env != nil && env.Port > 0 {
+		_, accessErr = access.SetPort(composePath, env.Port)
+	}
 	if accessErr != nil {
 		se := &StepError{
 			Code: ErrCodeSecretsWriteFailed,

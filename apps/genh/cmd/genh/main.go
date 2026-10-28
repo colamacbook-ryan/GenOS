@@ -392,7 +392,7 @@ func resolveOpsEnv(port int, installDir string) (*ops.Env, bool) {
 		_, _ = fmt.Fprintf(os.Stderr, "genh: không xác định được thư mục cài đặt: %v\n", err)
 		return nil, false
 	}
-	return &ops.Env{InstallDir: dir, Port: ops.ResolvePort(port)}, true
+	return &ops.Env{InstallDir: dir, Port: ops.ResolvePortFor(dir, port)}, true
 }
 
 // reportOpErr in một lỗi vận hành theo đúng định dạng "chuyện gì · vì sao ·
@@ -2062,7 +2062,19 @@ func runInstall(args []string) int {
 		return 1
 	}
 
-	env := &install.Env{InstallDir: dir, Port: *port, AutoApprove: *yes}
+	// Cờ --port không truyền mà .env đã có GH_PORT (cài dở rồi chạy lại) ⇒ giữ cổng đã chọn.
+	chosenPort := *port
+	portExplicit := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "port" {
+			portExplicit = true
+		}
+	})
+	if !portExplicit {
+		chosenPort = ops.PortFromEnvFile(dir)
+	}
+
+	env := &install.Env{InstallDir: dir, Port: chosenPort, AutoApprove: *yes}
 	runner := install.NewRunner(env, install.Registry())
 
 	ctx, stop := signalContext()
@@ -2091,9 +2103,9 @@ func runInstall(args []string) int {
 	//
 	// v0.1.53 (F-93): --no-auto-update ghi dấu "Sếp đã chủ động tắt" (genh không tự bật
 	// lại lịch đêm); cài không cờ xoá dấu đó rồi bật.
-	applyAutoUpdateChoice(dir, *port, *noAutoUpdate)
+	applyAutoUpdateChoice(dir, chosenPort, *noAutoUpdate)
 	_ = ops.ClearOwnerPause(dir)
-	publishHostInfo(dir, *port)
+	publishHostInfo(dir, chosenPort)
 
 	return 0
 }
